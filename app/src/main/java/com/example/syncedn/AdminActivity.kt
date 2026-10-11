@@ -1,6 +1,6 @@
 package com.example.syncedn
 
-import android.content.Context
+import android.annotation.SuppressLint
 import android.content.Intent
 import android.content.res.ColorStateList
 import android.graphics.Bitmap
@@ -55,6 +55,7 @@ import androidx.core.view.WindowInsetsCompat
  * This separate version always opens the Admin/Leader dashboard.
  * Admin publishing, assignments and team management operate only on this phone.
  */
+@SuppressLint("SetTextI18n", "UseKtx")
 class AdminActivity : AppCompatActivity() {
     private var page = "start"
     private var displayName = "Yanyan"
@@ -610,6 +611,8 @@ class AdminActivity : AppCompatActivity() {
             style = Paint.Style.STROKE; strokeCap = Paint.Cap.ROUND
         }
 
+        private val arcBounds = android.graphics.RectF(2.5f, 2.5f, 29.5f, 29.5f)
+
         init {
             importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
         }
@@ -617,7 +620,7 @@ class AdminActivity : AppCompatActivity() {
             super.onDraw(canvas)
             val checkpoint = canvas.save(); canvas.scale(width / 32f, height / 32f)
             ink.color = Color.rgb(35, 187, 125); ink.alpha = 255; ink.strokeWidth = 3.5f
-            canvas.drawArc(android.graphics.RectF(2.5f, 2.5f, 29.5f, 29.5f), 180f, 180f, false, ink)
+            canvas.drawArc(arcBounds, 180f, 180f, false, ink)
             ink.strokeWidth = 1.5f
             repeat(9) { step ->
                 val angle = Math.toRadians((12 + step * 18).toDouble())
@@ -844,7 +847,7 @@ class AdminActivity : AppCompatActivity() {
                 add(text(fullName,14,Color.BLACK,true));space(8)
                 add(text(displayName,12).apply {background=bg(Color.rgb(217,217,217),14);setPadding(dp(10),0,dp(10),0);maxLines=1;ellipsize=android.text.TextUtils.TruncateAt.END},-1,24)
                 space(10)
-                add(text("Profile",13,Color.BLACK,true,true,id=UI.openProfileButton).apply {
+                add(text("Profile",13,Color.BLACK,bold=true,centered=true,id=UI.openProfileButton).apply {
                     background=bg(Color.rgb(217,217,217),4);isClickable=true;isFocusable=true
                 },-1,32)
             }
@@ -955,7 +958,7 @@ class AdminActivity : AppCompatActivity() {
         camera.addView(Symbol(this,"camera",Color.BLACK),FrameLayout.LayoutParams(dp(16),dp(16),Gravity.CENTER))
         avatar.addView(camera,FrameLayout.LayoutParams(dp(24),dp(24),Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply {leftMargin=dp(48);bottomMargin=dp(2)})
         col.add(avatar,-1,82);col.space(10)
-        col.add(text(fullName,14,Color.BLACK,true,true));col.space(3)
+        col.add(text(fullName,14,Color.BLACK,bold=true,centered=true));col.space(3)
         col.add(text("Ministry Member",12,Color.GRAY,centered=true));col.space(26)
         col.section(11).apply {
             add(text("Profile",15,Color.BLACK,true));space(12)
@@ -1157,8 +1160,8 @@ class AdminActivity : AppCompatActivity() {
                 val color = when (status) { "Available" -> Color.rgb(40, 135, 15); "Unavailable" -> Color.RED; else -> Color.GRAY }
                 add(panel().apply {
                     setPadding(dp(5), dp(12), dp(5), dp(12))
-                    add(text(roster.count { it.third == status }.toString(), 22, color, true, true))
-                    space(4); add(text(status, 10, color, true, true))
+                    add(text(roster.count { it.third == status }.toString(), 22, color, bold = true, centered = true))
+                    space(4); add(text(status, 10, color, bold = true, centered = true))
                 }, 0, -2, 1f)
             }
         }); col.space(20)
@@ -1222,7 +1225,7 @@ class AdminActivity : AppCompatActivity() {
         }); col.space(24)
         col.add(horizontal().apply {
             add(text("Assigned Members and their Roles", 12, navy, true), 0, -2, 1f)
-            add(text("Edit", 13, purple, true, true).apply {
+            add(text("Edit", 13, purple, bold = true, centered = true).apply {
                 setOnClickListener { serviceWizard = false; saveLeaderDraft(); navigate("serviceAssignments") }
             }, 48, 48)
         })
@@ -1617,7 +1620,7 @@ class AdminActivity : AppCompatActivity() {
             add(text(name, 13, navy, true)); space(3); add(text(role, 12, Color.DKGRAY))
         }
         add(info, 0, -2, 1f)
-        if (badge != null) add(text(badge, 11, navy, true, true).apply {
+        if (badge != null) add(text(badge, 11, navy, bold = true, centered = true).apply {
             if (badge == "Admin") background = bg(Color.rgb(225, 225, 228), 14)
         }, 64, 30)
         onClick?.let { action ->
@@ -1651,7 +1654,7 @@ class AdminActivity : AppCompatActivity() {
             val row = horizontal().apply {
                 background = bg(Color.WHITE, 20, if (preferences.getString("serviceDate", "") == date.replace("\n", " ")) purple else Color.rgb(230, 230, 235))
                 elevation = dp(3).toFloat(); setPadding(dp(8), dp(10), dp(12), dp(10))
-                add(text(date, 15, Color.WHITE, true, true).apply {
+                add(text(date, 15, Color.WHITE, bold = true, centered = true).apply {
                     background = GradientDrawable(GradientDrawable.Orientation.TL_BR,
                         intArrayOf(purple, Color.rgb(167, 0, 214))).apply { cornerRadius = dp(14).toFloat() }
                 }, 60, 66)
@@ -1688,7 +1691,7 @@ class AdminActivity : AppCompatActivity() {
             contentDescription = "Previous month"; isFocusable = true
         }, 48, 48)
         monthRow.add(vertical().apply {
-            add(text(java.text.SimpleDateFormat("MMMM", java.util.Locale.ENGLISH).format(date.time), 22, navy, true, true))
+            add(text(java.text.SimpleDateFormat("MMMM", java.util.Locale.ENGLISH).format(date.time), 22, navy, bold = true, centered = true))
             space(4); add(text(calendarYear.toString(), 12, Color.GRAY, centered = true))
         }, 0, -2, 1f)
         monthRow.add(text("›", 28, navy, centered = true).apply {
@@ -1717,7 +1720,7 @@ class AdminActivity : AppCompatActivity() {
                             if (day == calendarDay) Color.WHITE else navy, centered = true).apply {
                             if (day == calendarDay) background = bg(purple, 24)
                         }, -1, 36)
-                        val marked = key >= start && key <= end && start.isNotBlank()
+                        val marked = key in start..end && start.isNotBlank()
                         cell.add(text(if (marked || day in listOf(4, 8, 9, 10)) "•" else "", 12,
                             if (marked) Color.RED else Color.rgb(0, 175, 125), centered = true), -1, 12)
                         cell.isClickable = true; cell.isFocusable = true; cell.contentDescription = key
@@ -1744,7 +1747,7 @@ class AdminActivity : AppCompatActivity() {
                 });col.space(12)
             }
         }
-        val unavailable = calendarKey() >= start && calendarKey() <= end && start.isNotBlank()
+        val unavailable = calendarKey() in start..end && start.isNotBlank()
         col.add(panel(if (unavailable) Color.RED else Color.rgb(0, 190, 70)).apply {
             add(text(if (unavailable) "Unavailable" else "Service", 14, navy, true)); space(8)
             add(text(if (unavailable) "$start – $end" else "8:00AM – 11:00AM • Main Sanctuary", 12, Color.DKGRAY))
@@ -1908,7 +1911,7 @@ class AdminActivity : AppCompatActivity() {
             add(text("Transpose preview", 12, Color.GRAY)); space(8)
             add(horizontal().apply {
                 listOf("C", "Db", "D", "Eb", "E", "F").forEach { chord ->
-                    add(text(chord, 12, navy, true, true).apply {
+                    add(text(chord, 12, navy, bold = true, centered = true).apply {
                         background = bg(Color.rgb(224, 215, 230), 6)
                         setOnClickListener { key.text = "Key: $chord    •    $tempo BPM"; toast("Key preview only; add a chord sheet to transpose music.") }
                         isFocusable = true
@@ -1975,7 +1978,7 @@ class AdminActivity : AppCompatActivity() {
     private fun teamTabs(): View = horizontal().apply {
         setPadding(dp(20), dp(10), dp(12), dp(10))
         listOf("Team Chat", "Members", "Role").forEach { label ->
-            val tab = text(label, 13, if (teamTab == label) Color.WHITE else navy, true, true).apply {
+            val tab = text(label, 13, if (teamTab == label) Color.WHITE else navy, bold = true, centered = true).apply {
                 if (teamTab == label) background = bg(Color.rgb(21, 28, 50), 20)
                 isFocusable = true; setOnClickListener { teamTab = label; navigate("teams") }
             }
@@ -2141,10 +2144,11 @@ class AdminActivity : AppCompatActivity() {
                 setOnClickListener {
                     val clipboard =
                         getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager
-                    clipboard.primaryClip = android.content.ClipData.newPlainText(
+                    @Suppress("UsePropertyAccessSyntax")
+                    clipboard.setPrimaryClip(android.content.ClipData.newPlainText(
                         "Demo team invite",
                         "DF432DE"
-                    )
+                    ))
                     toast("Demo invite code copied; it is not a live invitation.")
                 }
             }, -1, 36); col.space(20)
@@ -2202,13 +2206,7 @@ class AdminActivity : AppCompatActivity() {
         background=bg(Color.WHITE,24,Color.rgb(211,211,211));elevation=dp(4).toFloat()
         isClickable=true;isFocusable=true;contentDescription=label
         add(Symbol(this@AdminActivity,icon,Color.rgb(174,0,234)),28,28)
-        space(3);add(text(label,labelSize,navy,true,true))
-    }
-    private fun hub(id: Int, symbol: String, label: String, backgroundColor: Int, ink: Int) = vertical().apply {
-        this.id=id;gravity=Gravity.CENTER;isClickable=true;isFocusable=true;contentDescription=label
-        val tile=FrameLayout(this@AdminActivity).apply { background=bg(backgroundColor,20) }
-        tile.addView(Symbol(this@AdminActivity,symbol,ink),FrameLayout.LayoutParams(dp(30),dp(30),Gravity.CENTER))
-        add(tile,72,72);space(6);add(text(label,14,navy,bold = true,centered = true))
+        space(3);add(text(label,labelSize,navy,bold = true,centered = true))
     }
 
 }
