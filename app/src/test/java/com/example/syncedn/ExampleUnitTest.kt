@@ -60,4 +60,37 @@ class ExampleUnitTest {
         val fallbackImg = javax.imageio.ImageIO.read(java.io.ByteArrayInputStream(fallbackBytes))
         assertNotNull("Fallback should decode to a valid image", fallbackImg)
     }
+
+    @Test
+    fun testFirebaseClassesAvailable() {
+        assertNotNull(com.google.firebase.auth.FirebaseAuth::class.java)
+        assertNotNull(com.google.firebase.firestore.FirebaseFirestore::class.java)
+    }
+
+    @Test
+    fun testUserProfileModelMapping() {
+        val profile = com.example.syncedn.data.model.UserProfile(
+            uid = "test-uid-123",
+            username = "TestUser",
+            email = "test@example.com",
+            role = "Admin",
+            teamName = "Praise Team",
+            createdAt = 123456789L
+        )
+        val map = profile.toMap()
+        assertEquals("test-uid-123", map["uid"])
+        assertEquals("TestUser", map["username"])
+        assertEquals("test@example.com", map["email"])
+        assertEquals("Admin", map["role"])
+        assertEquals("Praise Team", map["teamName"])
+        assertEquals(123456789L, map["createdAt"])
+
+        val reconstructed = com.example.syncedn.data.model.UserProfile.fromMap(map)
+        assertEquals(profile.uid, reconstructed.uid)
+        assertEquals(profile.username, reconstructed.username)
+        assertEquals(profile.email, reconstructed.email)
+        assertEquals(profile.role, reconstructed.role)
+        assertEquals(profile.teamName, reconstructed.teamName)
+        assertEquals(profile.createdAt, reconstructed.createdAt)
+    }
 }

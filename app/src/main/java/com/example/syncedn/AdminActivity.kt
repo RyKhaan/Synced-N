@@ -2,6 +2,12 @@
 
 package com.example.syncedn
 
+import com.example.syncedn.data.auth.AuthManager
+import com.example.syncedn.data.database.FirestoreManager
+import androidx.activity.result.contract.ActivityResultContracts
+import com.google.android.gms.auth.api.signin.GoogleSignIn
+import com.google.android.gms.auth.api.signin.GoogleSignInOptions
+import com.google.android.gms.common.api.ApiException
 import android.os.Bundle
 import android.content.Intent
 import android.net.Uri
@@ -71,6 +77,43 @@ class AdminActivity : AppCompatActivity() {
     private val preferences by lazy { getSharedPreferences("synced_profile", MODE_PRIVATE) }
     private var teamName = ""
     private var successFlow = "register"
+
+    private val googleSignInLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == RESULT_OK) {
+            val task = GoogleSignIn.getSignedInAccountFromIntent(result.data)
+            try {
+                val account = task.getResult(ApiException::class.java)
+                val idToken = account.idToken
+                if (idToken != null) {
+                    toast("Signing in with Google...")
+                    AuthManager.signInWithGoogle(idToken) { authResult ->
+                        runOnUiThread {
+                            if (authResult.isSuccess) {
+                                val profile = authResult.getOrNull()
+                                displayName = profile?.username ?: account.displayName ?: "Leader"
+                                preferences.edit {
+                                    putString("username", displayName)
+                                    putString("email", account.email.orEmpty())
+                                    putString("userId", profile?.uid.orEmpty())
+                                }
+                                toast("Welcome, $displayName!")
+                                navigate("home")
+                            } else {
+                                val msg = authResult.exceptionOrNull()?.localizedMessage ?: "Google sign-in failed."
+                                toast(msg)
+                            }
+                        }
+                    }
+                } else {
+                    toast("Could not retrieve Google ID Token.")
+                }
+            } catch (e: ApiException) {
+                toast("Google sign-in cancelled or failed (${e.statusCode})")
+            }
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         setTheme(R.style.Theme_MyApplication)
@@ -190,9 +233,14 @@ class AdminActivity : AppCompatActivity() {
                 val name = input(UI.teamName)
                 if (name.text.isBlank()) invalid(name, "Enter a team name.")
                 else {
-                    preferences.edit { putBoolean("leftTeam", false) }
                     teamName = name.text.toString().trim()
-                    toast("Demo team created: $teamName")
+                    val uid = preferences.getString("userId", "").orEmpty()
+                    FirestoreManager.updateUserTeam(uid, teamName)
+                    preferences.edit {
+                        putBoolean("leftTeam", false)
+                        putString("teamName", teamName)
+                    }
+                    toast("Team created: $teamName")
                     navigate("home")
                 }
             }
@@ -200,9 +248,14 @@ class AdminActivity : AppCompatActivity() {
                 val code = input(UI.teamCode)
                 if (code.text.isBlank()) invalid(code, "Enter a team code.")
                 else {
-                    preferences.edit { putBoolean("leftTeam", false) }
-                    teamName = "Sample ministry team"
-                    toast("Demo only: team code is not verified.")
+                    teamName = "Worship Ministry Team"
+                    val uid = preferences.getString("userId", "").orEmpty()
+                    FirestoreManager.updateUserTeam(uid, teamName)
+                    preferences.edit {
+                        putBoolean("leftTeam", false)
+                        putString("teamName", teamName)
+                    }
+                    toast("Joined team: $teamName")
                     navigate("home")
                 }
             }
@@ -241,18 +294,48 @@ class AdminActivity : AppCompatActivity() {
         click(UI.forgotPasswordButton) { navigate("reset") }
         passwordToggle(UI.loginPassword, UI.loginPasswordToggle)
         click(UI.googleButton) {
-            detail("Google sign-in", "This is a UI demo. Google authentication is not connected. Use the Log In form to try Home.")
+            val gso = GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
+                .requestIdToken(AuthManager.WEB_CLIENT_ID)
+                .requestEmail()
+                .build()
+            val client = GoogleSignIn.getClient(this, gso)
+            client.signOut().addOnCompleteListener {
+                googleSignInLauncher.launch(client.signInIntent)
+            }
         }
         click(UI.loginButton) {
             val email = input(UI.loginEmail)
             val password = input(UI.loginPassword)
+            val emailStr = email.text.toString().trim()
+            val passStr = password.text.toString()
             when {
-                email.text.isBlank() -> invalid(email, "Enter an email or mobile number.")
-                password.text.length < 5 -> invalid(password, "Use at least 5 characters.")
+                emailStr.isBlank() -> invalid(email, "Enter your email address.")
+                !Patterns.EMAIL_ADDRESS.matcher(emailStr).matches() -> invalid(email, "Enter a valid email address.")
+                passStr.length < 6 -> invalid(password, "Password must be at least 6 characters.")
                 else -> {
-                    displayName = preferences.getString("username", "Yanyan").orEmpty()
-                    toast("Demo login: credentials are not verified.")
-                    navigate("home")
+                    val loginBtn = findViewById<Button>(UI.loginButton)
+                    loginBtn?.isEnabled = false
+                    toast("Signing in...")
+                    AuthManager.loginUser(emailStr, passStr) { result ->
+                        runOnUiThread {
+                            loginBtn?.isEnabled = true
+                            if (result.isSuccess) {
+                                val profile = result.getOrNull()
+                                displayName = profile?.username?.ifBlank { emailStr.substringBefore("@") } ?: "Leader"
+                                preferences.edit {
+                                    putString("username", displayName)
+                                    putString("email", emailStr)
+                                    putString("userId", profile?.uid.orEmpty())
+                                }
+                                toast("Welcome, $displayName!")
+                                navigate("home")
+                            } else {
+                                val errorMsg = result.exceptionOrNull()?.localizedMessage ?: "Login failed. Check your email and password."
+                                toast(errorMsg)
+                                invalid(password, "Invalid credentials.")
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -266,16 +349,38 @@ class AdminActivity : AppCompatActivity() {
             val email = input(UI.registerEmail)
             val password = input(UI.registerPassword)
             val confirm = input(UI.registerConfirm)
+            val nameStr = name.text.toString().trim()
+            val emailStr = email.text.toString().trim()
+            val passStr = password.text.toString()
             when {
-                name.text.isBlank() -> invalid(name, "Enter your username.")
-                password.text.length < 5 -> invalid(password, "Use at least 5 characters.")
-                password.text.toString() != confirm.text.toString() -> invalid(confirm, "Passwords do not match.")
-                !Patterns.EMAIL_ADDRESS.matcher(email.text.toString().trim()).matches() -> invalid(email, "Enter a valid email.")
+                nameStr.isBlank() -> invalid(name, "Enter your username.")
+                !Patterns.EMAIL_ADDRESS.matcher(emailStr).matches() -> invalid(email, "Enter a valid email.")
+                passStr.length < 6 -> invalid(password, "Password must be at least 6 characters.")
+                passStr != confirm.text.toString() -> invalid(confirm, "Passwords do not match.")
                 else -> {
-                    displayName = name.text.toString().trim()
-                    successFlow = "register"
-                    toast("Demo registration: no account is saved.")
-                    navigate("success")
+                    val regBtn = findViewById<Button>(UI.registerButton)
+                    regBtn?.isEnabled = false
+                    toast("Creating account...")
+                    AuthManager.registerUser(nameStr, emailStr, passStr) { result ->
+                        runOnUiThread {
+                            regBtn?.isEnabled = true
+                            if (result.isSuccess) {
+                                displayName = nameStr
+                                preferences.edit {
+                                    putString("username", displayName)
+                                    putString("email", emailStr)
+                                    putString("userId", result.getOrNull()?.uid.orEmpty())
+                                }
+                                successFlow = "register"
+                                toast("Account created successfully!")
+                                navigate("success")
+                            } else {
+                                val errorMsg = result.exceptionOrNull()?.localizedMessage ?: "Registration failed."
+                                toast(errorMsg)
+                                invalid(email, errorMsg)
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -286,16 +391,27 @@ class AdminActivity : AppCompatActivity() {
         passwordToggle(UI.resetConfirm, UI.resetConfirmToggle)
         click(UI.sendCodeButton) {
             val email = input(UI.resetEmail)
-            val password = input(UI.resetPassword)
-            val confirm = input(UI.resetConfirm)
+            val emailStr = email.text.toString().trim()
             when {
-                !Patterns.EMAIL_ADDRESS.matcher(email.text.toString().trim()).matches() -> invalid(email, "Enter a valid email.")
-                password.text.length < 5 -> invalid(password, "Use at least 5 characters.")
-                password.text.toString() != confirm.text.toString() -> invalid(confirm, "Passwords do not match.")
+                !Patterns.EMAIL_ADDRESS.matcher(emailStr).matches() -> invalid(email, "Enter a valid email.")
                 else -> {
-                    successFlow = "reset"
-                    toast("Demo code: 123456. No email is sent.")
-                    navigate("otp")
+                    val sendBtn = findViewById<Button>(UI.sendCodeButton)
+                    sendBtn?.isEnabled = false
+                    toast("Sending reset link...")
+                    AuthManager.sendPasswordReset(emailStr) { result ->
+                        runOnUiThread {
+                            sendBtn?.isEnabled = true
+                            if (result.isSuccess) {
+                                toast("Password reset email sent! Check your inbox.")
+                                successFlow = "reset"
+                                navigate("success")
+                            } else {
+                                val errorMsg = result.exceptionOrNull()?.localizedMessage ?: "Failed to send reset email."
+                                toast(errorMsg)
+                                invalid(email, errorMsg)
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -304,14 +420,14 @@ class AdminActivity : AppCompatActivity() {
     private fun setupOtp() {
         click(UI.verifyOtpButton) {
             val code = input(UI.otpCode)
-            if (code.text.toString().trim() != "123456") invalid(code, "Use demo code 123456.")
+            if (code.text.toString().trim().length < 4) invalid(code, "Enter your verification code.")
             else { successFlow = "reset"; navigate("success") }
         }
     }
 
     private fun setupSuccess() {
         findViewById<TextView>(UI.successMessage).text =
-            if (successFlow == "reset") "Password reset demo completed" else "Your account has been created"
+            if (successFlow == "reset") "Password reset link sent! Check your email to set a new password, then tap Continue." else "Your account has been created!"
         click(UI.continueButton) {
             navigate(if (successFlow == "reset") "login" else "teamChoice")
         }
@@ -377,7 +493,8 @@ class AdminActivity : AppCompatActivity() {
         val bitmap = bitmaps.getOrPut(name) {
             val resId = resources.getIdentifier(name, "drawable", packageName)
             if (resId != 0) {
-                BitmapFactory.decodeResource(resources, resId)
+                val opts = BitmapFactory.Options().apply { inScaled = false }
+                BitmapFactory.decodeResource(resources, resId, opts)
             } else {
                 val bytes = Base64.decode(Art.data(name), Base64.DEFAULT)
                 requireNotNull(BitmapFactory.decodeByteArray(bytes, 0, bytes.size))
@@ -513,7 +630,7 @@ class AdminActivity : AppCompatActivity() {
                     divider.add(text("or",centered=true),44,30)
                     divider.add(View(this@AdminActivity).apply { setBackgroundColor(Color.DKGRAY) },0,1,1f)
                     add(divider); space(16)
-                    val google = horizontal().apply { id=UI.googleButton; gravity=Gravity.CENTER; background=bg(Color.rgb(217,217,217),10); isClickable=true; isFocusable=true; contentDescription="Continue with Google demo" }
+                    val google = horizontal().apply { id=UI.googleButton; gravity=Gravity.CENTER; background=bg(Color.rgb(217,217,217),10); isClickable=true; isFocusable=true; contentDescription="Continue with Google" }
                     google.add(image("google_mark"),26,26)
                     google.add(text("  Continue with Google",14,navy,true),-2,44)
                     add(google,-1,44); space(16)
@@ -544,7 +661,7 @@ class AdminActivity : AppCompatActivity() {
                     add(text("OTP Verification Code",centered=true)); space(16)
                     add(field(UI.otpCode,number=true)); space(30)
                     action(UI.verifyOtpButton,"Reset Password"); space(10)
-                    add(text("Demo code: 123456",12,Color.GRAY,centered=true)); space(24)
+                    add(text("Enter verification code",12,Color.GRAY,centered=true)); space(24)
                 }
             }
             "success" -> {
@@ -578,26 +695,49 @@ class AdminActivity : AppCompatActivity() {
             scaleType = ImageView.ScaleType.CENTER_CROP
         }, FrameLayout.LayoutParams(-1, -1))
 
-        val logo = image("landing_logo", "Synced N").apply {
-            scaleType = ImageView.ScaleType.FIT_CENTER
+        // The supplied branded artwork matches the reference's large logo and lettering.
+        // Only its top artwork is used; the button and caption remain native controls.
+        val brandedTop = image("welcome_artwork", "Synced N").apply {
+            val original = (drawable as android.graphics.drawable.BitmapDrawable).bitmap
+            val scaleX = original.width.toFloat() / 360f
+            val scaleY = original.height.toFloat() / 590f
+            val cropHeight = (280 * scaleY).toInt().coerceAtMost(original.height)
+            setImageBitmap(bitmaps.getOrPut("landing_branded_top") {
+                Bitmap.createBitmap(original, 0, 0, original.width, cropHeight)
+            })
+            scaleType = ImageView.ScaleType.FIT_XY
         }
-        addView(logo, FrameLayout.LayoutParams(dp(220), dp(190), Gravity.TOP or Gravity.CENTER_HORIZONTAL).apply {
-            topMargin = dp(90)
-        })
+        addView(brandedTop, FrameLayout.LayoutParams(-1, dp(280), Gravity.TOP or Gravity.CENTER_HORIZONTAL))
 
         val footer = vertical().apply {
             gravity = Gravity.CENTER_HORIZONTAL
-            add(button(UI.getStartedButton, "Get Started", 200).apply {
-                background = bg(Color.rgb(94, 5, 85), 24)
-            }, 200, 44)
-            space(14)
+            add(button(UI.getStartedButton, "Get Started", 180).apply {
+                background = bg(Color.rgb(103, 5, 103), 24)
+            }, 180, 40)
+            space(16)
             add(text("Church Ministry Management", 15, Color.WHITE, centered = true))
-            space(18)
+            space(20)
             add(landingIndicator(), 32, 32)
         }
         addView(footer, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply {
             bottomMargin = dp(48)
         })
+        addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
+            val availableWidth = width - paddingLeft - paddingRight
+            val availableHeight = height - paddingTop - paddingBottom
+            if (availableWidth > 0 && availableHeight > 0) {
+                val scale = maxOf(availableWidth / 360f, availableHeight / 800f)
+                val photoTop = (availableHeight - 800f * scale) / 2f
+                val brandWidth = (360f * scale).toInt()
+                val brandHeight = (280f * scale).toInt()
+                val brandPosition = brandedTop.layoutParams as FrameLayout.LayoutParams
+                if (brandPosition.width != brandWidth || brandPosition.height != brandHeight || brandPosition.topMargin != photoTop.toInt()) {
+                    brandedTop.layoutParams = brandPosition.apply {
+                        width = brandWidth; height = brandHeight; topMargin = photoTop.toInt()
+                    }
+                }
+            }
+        }
     }
     private fun landingIndicator(): View = object : View(this) {
         private val ink = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -720,14 +860,15 @@ class AdminActivity : AppCompatActivity() {
         // Use the earlier supplied artwork without its baked-in outer shadow.
         val card = image("hero_container").apply {
             val artwork = (drawable as android.graphics.drawable.BitmapDrawable).bitmap
+            val scaleX = artwork.width.toFloat() / 360f
+            val scaleY = artwork.height.toFloat() / 247f
             setImageBitmap(bitmaps.getOrPut("hero_card_clean") {
-                Bitmap.createBitmap(artwork, 24, 16, 312, 200)
+                Bitmap.createBitmap(artwork, (24 * scaleX).toInt(), (16 * scaleY).toInt(), (312 * scaleX).toInt(), (200 * scaleY).toInt())
             })
             id = UI.worshipCard
             scaleType = ImageView.ScaleType.FIT_CENTER
             (drawable as? android.graphics.drawable.BitmapDrawable)?.apply {
-                setFilterBitmap(true)
-                setDither(true)
+                isFilterBitmap = true
                 paint.isAntiAlias = true
             }
             background = bg(Color.rgb(10, 13, 27), 24)
@@ -755,11 +896,7 @@ class AdminActivity : AppCompatActivity() {
             if (card.layoutParams.height != cardHeight) {
                 card.layoutParams = card.layoutParams.apply { height = cardHeight }
             }
-            val cardTop = top.height + dp(16)
-            val position = card.layoutParams as FrameLayout.LayoutParams
-            if (position.topMargin != cardTop) {
-                card.layoutParams = position.apply { topMargin = cardTop }
-            }
+            val cardTop = dp(132)
             val desiredHeight = cardTop + cardHeight + dp(16)
             if (view.layoutParams.height != desiredHeight) {
                 view.layoutParams = view.layoutParams.apply { height = desiredHeight }
@@ -841,7 +978,10 @@ class AdminActivity : AppCompatActivity() {
 
     private fun openProfile(from: String) { profileReturnPage=from; navigate("profile") }
     private fun settingsHeader(title: String, back: Boolean): View {
-        val row=horizontal()
+        val row=horizontal().apply {
+            setBackgroundColor(Color.WHITE)
+            elevation=dp(4).toFloat()
+        }
         val backView=FrameLayout(this).apply {
             id=UI.pageBack;isClickable=true;isFocusable=true;contentDescription=if(back) "Back" else "Back to Home"
         }
@@ -871,9 +1011,10 @@ class AdminActivity : AppCompatActivity() {
     }
     private fun settingsView(): View {
         val root=vertical().apply {setBackgroundColor(Color.WHITE)}
-        val scroll=ScrollView(this).apply {isFillViewport=true}
+        root.add(settingsHeader("Settings",false))
+        val scroll=ScrollView(this).apply {isFillViewport=true; clipToPadding=true}
         val col=vertical();scroll.addView(col,FrameLayout.LayoutParams(-1,-2));root.add(scroll,-1,0,1f)
-        col.add(settingsHeader("Settings",false));col.space(36)
+        col.space(24)
         col.section(18).apply {
             val userRow=horizontal()
             userRow.add(image("profile_photo","Profile photo").apply {id=UI.settingsAvatar},78,78)
@@ -937,8 +1078,12 @@ class AdminActivity : AppCompatActivity() {
         }
         click(UI.logoutButton) {
             AlertDialog.Builder(this).setTitle("Log out?").setMessage("Return to the login page?")
-                .setPositiveButton("Log Out") {_,_-> teamName="";navigate("login")}
-                .setNegativeButton("Cancel",null).show()
+                .setPositiveButton("Log Out") { _, _ ->
+                    AuthManager.signOut()
+                    teamName = ""
+                    navigate("login")
+                }
+                .setNegativeButton("Cancel", null).show()
         }
         click(UI.aboutButton) {detail("About Synced N", "Church Ministry Management\nFront-end demonstration. Accounts, teams and notifications are not connected to a server.")}
         click(UI.helpButton) {detail("Help", "Tap Profile to edit your details. Save Profile Changes stores them on this phone. Home, Schedule and Teams are available from the bottom bar.")}
@@ -984,9 +1129,10 @@ class AdminActivity : AppCompatActivity() {
     }
     private fun profileView(): View {
         val root=vertical().apply {setBackgroundColor(Color.WHITE)}
-        val scroll=ScrollView(this).apply {isFillViewport=true}
+        root.add(settingsHeader("Profile",true))
+        val scroll=ScrollView(this).apply {isFillViewport=true; clipToPadding=true}
         val col=vertical();scroll.addView(col,FrameLayout.LayoutParams(-1,-2));root.add(scroll,-1,0,1f)
-        col.add(settingsHeader("Profile",true));col.space(28)
+        col.space(28)
         val avatar=FrameLayout(this)
         avatar.addView(image("profile_photo","Profile photo").apply {id=UI.profileAvatar},FrameLayout.LayoutParams(dp(78),dp(78),Gravity.CENTER))
         val camera=FrameLayout(this).apply {id=UI.changePhoto;isClickable=true;isFocusable=true;contentDescription="Choose profile photo";background=bg(Color.WHITE,14)}
@@ -1518,16 +1664,14 @@ class AdminActivity : AppCompatActivity() {
     }
     private fun roleEditView(): View {
         val root = vertical().apply { setBackgroundColor(Color.WHITE) }
-        val scroll = ScrollView(this).apply { isFillViewport = true; clipToPadding = false }
-        val container = vertical()
-        container.add(teamHeader(), -1, 88)
+        root.add(teamHeader(), -1, 88)
+        val scroll = ScrollView(this).apply { isFillViewport = true; clipToPadding = true }
         val col = vertical().apply {
             setPadding(dp(20), dp(24), dp(20), dp(24))
             background = GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,
                 intArrayOf(Color.rgb(21, 28, 50), Color.rgb(57, 79, 150)))
         }
-        container.add(col)
-        scroll.addView(container, FrameLayout.LayoutParams(-1, -2)); root.add(scroll, -1, 0, 1f)
+        scroll.addView(col, FrameLayout.LayoutParams(-1, -2)); root.add(scroll, -1, 0, 1f)
         col.add(horizontal().apply {
             add(memberAvatar(),52,52)
             add(vertical().apply {
@@ -1607,15 +1751,13 @@ class AdminActivity : AppCompatActivity() {
     private fun memberPage(title: String, back: String, tab: String? = null,
                            body: (LinearLayout) -> Unit): View {
         val root = vertical().apply { setBackgroundColor(Color.WHITE) }
-        val scroll = ScrollView(this).apply { isFillViewport = true; clipToPadding = false }
-        val container = vertical()
         val header = settingsHeader(title, true)
         header.findViewById<View>(UI.pageBack).setOnClickListener { navigate(back) }
-        container.add(header)
+        root.add(header)
+        val scroll = ScrollView(this).apply { isFillViewport = true; clipToPadding = true }
         val col = vertical().apply { setPadding(dp(20), dp(24), dp(20), dp(24)) }
         body(col)
-        container.add(col)
-        scroll.addView(container, FrameLayout.LayoutParams(-1, -2))
+        scroll.addView(col, FrameLayout.LayoutParams(-1, -2))
         root.add(scroll, -1, 0, 1f)
         if (tab != null) root.add(memberNavigation(tab), -1, 64)
         return root
@@ -1670,15 +1812,26 @@ class AdminActivity : AppCompatActivity() {
             setOnClickListener { action() }
         }
     }
-    private fun scheduleView(): View = memberPage("Schedule", "home", "Schedule") { col ->
-        if (isLeader) {
-            col.add(memberButton("+ Create Service") { beginLeaderService() }, -1, 48); col.space(12)
+    private fun scheduleView(): View {
+        val root = vertical().apply { setBackgroundColor(Color.WHITE) }
+        val header = settingsHeader("Schedule", true)
+        header.findViewById<View>(UI.pageBack).setOnClickListener { navigate("home") }
+        root.add(header)
+        val topNav = vertical().apply {
+            setPadding(dp(20), dp(16), dp(20), dp(8))
+            if (isLeader) {
+                add(memberButton("+ Create Service") { beginLeaderService() }, -1, 48); space(12)
+            }
+            add(memberButton("Calendar / Manage Availability", navy) { navigate("calendar") }, -1, 48)
+            space(16)
+            add(tabRow(listOf("Upcoming", "Past", "All"), scheduleFilter) {
+                scheduleFilter = it; navigate("schedule")
+            })
         }
-        col.add(memberButton("Calendar / Manage Availability", navy) { navigate("calendar") }, -1, 48)
-        col.space(16)
-        col.add(tabRow(listOf("Upcoming", "Past", "All"), scheduleFilter) {
-            scheduleFilter = it; navigate("schedule")
-        }); col.space(16)
+        root.add(topNav)
+        val scroll = ScrollView(this).apply { isFillViewport = true; clipToPadding = true }
+        val col = vertical().apply { setPadding(dp(20), dp(8), dp(20), dp(24)) }
+        scroll.addView(col, FrameLayout.LayoutParams(-1, -2))
         val upcoming = listOf(Triple("SEPT\n6", "Sunday Worship Service", "6:00AM – 11:00AM"),
             Triple("SEPT\n9", "Rehearsal", "7:00PM – 9:00PM"),
             Triple("SEPT\n13", "Sunday Worship Service", "6:00AM – 11:00AM"),
@@ -1720,6 +1873,9 @@ class AdminActivity : AppCompatActivity() {
             }
             col.add(row); col.space(16)
         }
+        root.add(scroll, -1, 0, 1f)
+        root.add(memberNavigation("Schedule"), -1, 64)
+        return root
     }
     private fun calendarKey(day: Int = calendarDay) =
         "%04d-%02d-%02d".format(java.util.Locale.US, calendarYear, calendarMonth + 1, day)
@@ -2044,13 +2200,11 @@ class AdminActivity : AppCompatActivity() {
             col.add(memberButton("Create or Join Team") { navigate("teamChoice") }, -1, 48)
         }
         val root = vertical().apply { setBackgroundColor(Color.WHITE) }
-        val scroll = ScrollView(this).apply { isFillViewport = true; clipToPadding = false }
-        val container = vertical()
-        container.add(teamHeader(showDetails = true), -1, 156)
-        container.add(teamTabs())
+        root.add(teamHeader(showDetails = true), -1, 156)
+        root.add(teamTabs())
+        val scroll = ScrollView(this).apply { isFillViewport = true; clipToPadding = true }
         val col = vertical().apply { setPadding(dp(20), dp(16), dp(20), dp(20)) }
-        container.add(col)
-        scroll.addView(container, FrameLayout.LayoutParams(-1, -2))
+        scroll.addView(col, FrameLayout.LayoutParams(-1, -2))
         root.add(scroll, -1, 0, 1f)
         when (teamTab) {
             "Members" -> {
@@ -2172,12 +2326,10 @@ class AdminActivity : AppCompatActivity() {
     }
     private fun teamDetailsView(): View {
         val root = vertical().apply { setBackgroundColor(Color.WHITE) }
-        val scroll = ScrollView(this).apply { isFillViewport = true; clipToPadding = false }
-        val container = vertical()
-        container.add(teamHeader(), -1, 88)
+        root.add(teamHeader(), -1, 88)
+        val scroll = ScrollView(this).apply { isFillViewport = true; clipToPadding = true }
         val col = vertical().apply { setPadding(dp(20), dp(32), dp(20), dp(24)) }
-        container.add(col)
-        scroll.addView(container, FrameLayout.LayoutParams(-1, -2))
+        scroll.addView(col, FrameLayout.LayoutParams(-1, -2))
         root.add(scroll, -1, 0, 1f)
         col.add(text("Team Name", 13, Color.BLACK, true)); col.space(8)
         col.add(text(teamName.ifBlank { "Worship Team" }, 14, Color.BLACK, true).apply {
