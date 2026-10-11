@@ -1,37 +1,46 @@
 package com.example.syncedn
 
-import android.content.Context
+import android.os.Bundle
 import android.content.Intent
+import android.net.Uri
+import android.widget.Spinner
+import android.widget.ArrayAdapter
+import android.widget.Switch
+import android.content.Context
 import android.content.res.ColorStateList
+import android.graphics.Outline
+import android.view.ViewOutlineProvider
+import android.view.ViewGroup
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Color
-import android.graphics.Outline
+import android.graphics.ColorFilter
 import android.graphics.Paint
-import android.graphics.Typeface
+import android.graphics.PixelFormat
 import android.graphics.drawable.GradientDrawable
-import android.net.Uri
-import android.os.Bundle
 import android.text.InputType
-import android.text.method.HideReturnsTransformationMethod
-import android.text.method.PasswordTransformationMethod
 import android.util.Base64
-import android.util.Patterns
 import android.view.Gravity
-import android.view.View
-import android.view.ViewGroup
-import android.view.ViewOutlineProvider
-import android.widget.ArrayAdapter
 import android.widget.Button
-import android.widget.EditText
 import android.widget.FrameLayout
-import android.widget.ImageButton
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
-import android.widget.Spinner
-import android.widget.Switch
+import android.animation.ObjectAnimator
+import android.animation.ValueAnimator
+import android.view.animation.LinearInterpolator
+import android.graphics.Typeface
+import androidx.core.graphics.PathParser
+import androidx.core.graphics.withScale
+import androidx.core.graphics.withTranslation
+
+import android.text.method.HideReturnsTransformationMethod
+import android.text.method.PasswordTransformationMethod
+import android.util.Patterns
+import android.view.View
+import android.widget.EditText
+import android.widget.ImageButton
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.OnBackPressedCallback
@@ -64,7 +73,7 @@ open class MemberActivity : AppCompatActivity() {
     private var successFlow = "register"
 
     override fun onCreate(savedInstanceState: Bundle?) {
-        setTheme(androidx.appcompat.R.style.Theme_AppCompat_Light_NoActionBar)
+        setTheme(R.style.Theme_MyApplication)
         super.onCreate(savedInstanceState)
         WindowCompat.setDecorFitsSystemWindows(window, false)
         displayName = savedInstanceState?.getString("displayName") ?: preferences.getString("username", "Yanyan").orEmpty()
@@ -352,8 +361,13 @@ open class MemberActivity : AppCompatActivity() {
     private fun heading(value: String) = text(value, 21, navy, true)
     private fun image(name: String, description: String? = null) = ImageView(this).apply {
         val bitmap = bitmaps.getOrPut(name) {
-            val bytes = Base64.decode(Art.data(name), Base64.DEFAULT)
-            requireNotNull(BitmapFactory.decodeByteArray(bytes, 0, bytes.size))
+            val resId = resources.getIdentifier(name, "drawable", packageName)
+            if (resId != 0) {
+                BitmapFactory.decodeResource(resources, resId)
+            } else {
+                val bytes = Base64.decode(Art.data(name), Base64.DEFAULT)
+                requireNotNull(BitmapFactory.decodeByteArray(bytes, 0, bytes.size))
+            }
         }
         setImageBitmap(bitmap); scaleType = ImageView.ScaleType.FIT_CENTER
         if (name == "profile_photo") {
@@ -540,60 +554,76 @@ open class MemberActivity : AppCompatActivity() {
         addView(image("landing_background", "Worshippers and glowing cross").apply {
             scaleType = ImageView.ScaleType.CENTER_CROP
         }, FrameLayout.LayoutParams(-1, -1))
-        // The supplied branded artwork matches the reference's large logo and lettering.
-        // Only its top artwork is used; the button and caption remain native controls.
-        val brandedTop = image("welcome_artwork", "Synced N").apply {
-            val original = (drawable as android.graphics.drawable.BitmapDrawable).bitmap
-            setImageBitmap(bitmaps.getOrPut("landing_branded_top") {
-                Bitmap.createBitmap(original, 0, 0, original.width, 280)
-            })
-            scaleType = ImageView.ScaleType.FIT_XY
+
+        val logo = image("landing_logo", "Synced N").apply {
+            scaleType = ImageView.ScaleType.FIT_CENTER
         }
-        addView(brandedTop, FrameLayout.LayoutParams(-1, dp(280), Gravity.TOP or Gravity.CENTER_HORIZONTAL))
+        addView(logo, FrameLayout.LayoutParams(dp(220), dp(190), Gravity.TOP or Gravity.CENTER_HORIZONTAL).apply {
+            topMargin = dp(90)
+        })
+
         val footer = vertical().apply {
             gravity = Gravity.CENTER_HORIZONTAL
-            add(button(UI.getStartedButton, "Get Started", 180).apply {
-                background = bg(Color.rgb(103, 5, 103), 24)
-            }, 180, 40)
-            space(16); add(text("Church Ministry Management", 15, Color.WHITE, centered = true))
-            space(20); add(landingIndicator(), 32, 32)
+            add(button(UI.getStartedButton, "Get Started", 200).apply {
+                background = bg(Color.rgb(94, 5, 85), 24)
+            }, 200, 44)
+            space(14)
+            add(text("Church Ministry Management", 15, Color.WHITE, centered = true))
+            space(18)
+            add(landingIndicator(), 32, 32)
         }
-        addView(footer, FrameLayout.LayoutParams(-1, -2, Gravity.TOP))
-        addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
-            val availableWidth = width - paddingLeft - paddingRight
-            val availableHeight = height - paddingTop - paddingBottom
-            if (availableWidth > 0 && availableHeight > 0) {
-                // Match the photo's center-crop transform so the logo stays on the same sky.
-                val scale = maxOf(availableWidth / 360f, availableHeight / 800f)
-                val photoTop = (availableHeight - 800f * scale) / 2f
-                val brandWidth = (360f * scale).toInt()
-                val brandHeight = (280f * scale).toInt()
-                val brandPosition = brandedTop.layoutParams as FrameLayout.LayoutParams
-                if (brandPosition.width != brandWidth || brandPosition.height != brandHeight || brandPosition.topMargin != photoTop.toInt()) {
-                    brandedTop.layoutParams = brandPosition.apply {
-                        width = brandWidth; height = brandHeight; topMargin = photoTop.toInt()
-                    }
-                }
-                val desiredTop = (photoTop + 595f * scale).toInt()
-                    .coerceAtMost((availableHeight - footer.measuredHeight - dp(24)).coerceAtLeast(0))
-                val footerPosition = footer.layoutParams as FrameLayout.LayoutParams
-                if (footerPosition.topMargin != desiredTop) footer.layoutParams = footerPosition.apply { topMargin = desiredTop }
-            }
-        }
+        addView(footer, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply {
+            bottomMargin = dp(48)
+        })
     }
     private fun landingIndicator(): View = object : View(this) {
         private val ink = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             style = Paint.Style.STROKE; strokeCap = Paint.Cap.ROUND
         }
+        private val arcRect = android.graphics.RectF(2.5f, 2.5f, 29.5f, 29.5f)
+        private var rotationAngle = 0f
+        private var lastFrameTime = 0L
 
         init {
             importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
         }
+
+        override fun onAttachedToWindow() {
+            super.onAttachedToWindow()
+            lastFrameTime = android.os.SystemClock.uptimeMillis()
+            postInvalidateOnAnimation()
+        }
+
+        override fun onVisibilityChanged(changedView: View, visibility: Int) {
+            super.onVisibilityChanged(changedView, visibility)
+            if (visibility == View.VISIBLE) {
+                lastFrameTime = android.os.SystemClock.uptimeMillis()
+                postInvalidateOnAnimation()
+            }
+        }
+
+        override fun onWindowVisibilityChanged(visibility: Int) {
+            super.onWindowVisibilityChanged(visibility)
+            if (visibility == View.VISIBLE) {
+                lastFrameTime = android.os.SystemClock.uptimeMillis()
+                postInvalidateOnAnimation()
+            }
+        }
+
         override fun onDraw(canvas: Canvas) {
             super.onDraw(canvas)
-            val checkpoint = canvas.save(); canvas.scale(width / 32f, height / 32f)
+            val now = android.os.SystemClock.uptimeMillis()
+            if (lastFrameTime > 0L) {
+                val delta = (now - lastFrameTime).coerceIn(0L, 100L)
+                rotationAngle = (rotationAngle + delta * 0.36f) % 360f
+            }
+            lastFrameTime = now
+
+            val checkpoint = canvas.save()
+            canvas.rotate(rotationAngle, width / 2f, height / 2f)
+            canvas.scale(width / 32f, height / 32f)
             ink.color = Color.rgb(35, 187, 125); ink.alpha = 255; ink.strokeWidth = 3.5f
-            canvas.drawArc(android.graphics.RectF(2.5f, 2.5f, 29.5f, 29.5f), 180f, 180f, false, ink)
+            canvas.drawArc(arcRect, 180f, 180f, false, ink)
             ink.strokeWidth = 1.5f
             repeat(9) { step ->
                 val angle = Math.toRadians((12 + step * 18).toDouble())
@@ -602,6 +632,10 @@ open class MemberActivity : AppCompatActivity() {
                 canvas.drawLine(16f + x * 11.5f, 16f + y * 11.5f, 16f + x * 14.5f, 16f + y * 14.5f, ink)
             }
             canvas.restoreToCount(checkpoint)
+
+            if (isAttachedToWindow && windowVisibility == View.VISIBLE) {
+                postInvalidateOnAnimation()
+            }
         }
     }
     private fun homeUpcomingRecord(): org.json.JSONObject? {
@@ -750,7 +784,7 @@ open class MemberActivity : AppCompatActivity() {
             upcoming.add(service,0,-2,0.63f)
             upcoming.add(View(this@MemberActivity),24,1)
             upcoming.add(announcementHomeTile(),0,104,0.37f)
-            add(upcoming);space(22)
+            add(upcoming);space(44)
         }
         val nav=horizontal().apply { elevation=dp(8).toFloat();setBackgroundColor(Color.WHITE) }
         for ((id,symbol,label) in listOf(Triple(UI.homeTab,"home","Home"),Triple(UI.scheduleTab,"calendar","Schedule"),Triple(UI.teamsTab,"teams","Teams"),Triple(UI.settingsTab,"settings","Settings"))) {
@@ -1019,13 +1053,15 @@ open class MemberActivity : AppCompatActivity() {
     private fun memberPage(title: String, back: String, tab: String? = null,
                            body: (LinearLayout) -> Unit): View {
         val root = vertical().apply { setBackgroundColor(Color.WHITE) }
+        val scroll = ScrollView(this).apply { isFillViewport = true; clipToPadding = false }
+        val container = vertical()
         val header = settingsHeader(title, true)
         header.findViewById<View>(UI.pageBack).setOnClickListener { navigate(back) }
-        root.add(header)
-        val scroll = ScrollView(this).apply { isFillViewport = true; clipToPadding = false }
+        container.add(header)
         val col = vertical().apply { setPadding(dp(20), dp(24), dp(20), dp(24)) }
-        scroll.addView(col, FrameLayout.LayoutParams(-1, -2))
         body(col)
+        container.add(col)
+        scroll.addView(container, FrameLayout.LayoutParams(-1, -2))
         root.add(scroll, -1, 0, 1f)
         if (tab != null) root.add(memberNavigation(tab), -1, 64)
         return root
@@ -1500,11 +1536,14 @@ open class MemberActivity : AppCompatActivity() {
             col.add(memberButton("Create or Join Team") { navigate("teamChoice") }, -1, 48)
         }
         val root = vertical().apply { setBackgroundColor(Color.WHITE) }
-        root.add(teamHeader(showDetails = true), -1, 156)
-        root.add(teamTabs())
-        val scroll = ScrollView(this).apply { isFillViewport = true }
+        val scroll = ScrollView(this).apply { isFillViewport = true; clipToPadding = false }
+        val container = vertical()
+        container.add(teamHeader(showDetails = true), -1, 156)
+        container.add(teamTabs())
         val col = vertical().apply { setPadding(dp(20), dp(16), dp(20), dp(20)) }
-        scroll.addView(col, FrameLayout.LayoutParams(-1, -2)); root.add(scroll, -1, 0, 1f)
+        container.add(col)
+        scroll.addView(container, FrameLayout.LayoutParams(-1, -2))
+        root.add(scroll, -1, 0, 1f)
         when (teamTab) {
             "Members" -> ministryMembers.forEach { (name, role, badge) -> col.add(memberRow(name, role, badge)); col.space(4) }
             "Role" -> {
@@ -1618,10 +1657,13 @@ open class MemberActivity : AppCompatActivity() {
     }
     private fun teamDetailsView(): View {
         val root = vertical().apply { setBackgroundColor(Color.WHITE) }
-        root.add(teamHeader(), -1, 88)
-        val scroll = ScrollView(this).apply { isFillViewport = true }
+        val scroll = ScrollView(this).apply { isFillViewport = true; clipToPadding = false }
+        val container = vertical()
+        container.add(teamHeader(), -1, 88)
         val col = vertical().apply { setPadding(dp(20), dp(32), dp(20), dp(24)) }
-        scroll.addView(col, FrameLayout.LayoutParams(-1, -2)); root.add(scroll, -1, 0, 1f)
+        container.add(col)
+        scroll.addView(container, FrameLayout.LayoutParams(-1, -2))
+        root.add(scroll, -1, 0, 1f)
         col.add(text("Team Name", 13, Color.BLACK, true)); col.space(8)
         col.add(text(teamName.ifBlank { "Worship Team" }, 14, Color.BLACK, true).apply {
             background = bg(Color.rgb(217, 217, 217), 9)

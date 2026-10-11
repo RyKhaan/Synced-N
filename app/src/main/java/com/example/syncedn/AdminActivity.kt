@@ -1,37 +1,45 @@
+@file:Suppress("NewApi")
+
 package com.example.syncedn
 
-import android.annotation.SuppressLint
+import android.os.Bundle
 import android.content.Intent
+import android.net.Uri
+import android.widget.Spinner
+import android.widget.ArrayAdapter
+import android.widget.Switch
 import android.content.res.ColorStateList
+import android.graphics.Outline
+import android.view.ViewOutlineProvider
+import android.view.ViewGroup
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Color
-import android.graphics.Outline
 import android.graphics.Paint
-import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
-import android.net.Uri
-import android.os.Bundle
 import android.text.InputType
-import android.text.method.HideReturnsTransformationMethod
-import android.text.method.PasswordTransformationMethod
 import android.util.Base64
-import android.util.Patterns
 import android.view.Gravity
-import android.view.View
-import android.view.ViewGroup
-import android.view.ViewOutlineProvider
-import android.widget.ArrayAdapter
 import android.widget.Button
-import android.widget.EditText
 import android.widget.FrameLayout
-import android.widget.ImageButton
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
-import android.widget.Spinner
-import android.widget.Switch
+import android.animation.ObjectAnimator
+import android.animation.ValueAnimator
+import android.view.animation.LinearInterpolator
+import android.graphics.Typeface
+import androidx.core.content.edit
+import androidx.core.net.toUri
+import androidx.core.graphics.withScale
+
+import android.text.method.HideReturnsTransformationMethod
+import android.text.method.PasswordTransformationMethod
+import android.util.Patterns
+import android.view.View
+import android.widget.EditText
+import android.widget.ImageButton
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.OnBackPressedCallback
@@ -55,7 +63,6 @@ import androidx.core.view.WindowInsetsCompat
  * This separate version always opens the Admin/Leader dashboard.
  * Admin publishing, assignments and team management operate only on this phone.
  */
-@SuppressLint("SetTextI18n", "UseKtx")
 class AdminActivity : AppCompatActivity() {
     private var page = "start"
     private var displayName = "Yanyan"
@@ -66,7 +73,7 @@ class AdminActivity : AppCompatActivity() {
     private var successFlow = "register"
 
     override fun onCreate(savedInstanceState: Bundle?) {
-        setTheme(androidx.appcompat.R.style.Theme_AppCompat_Light_NoActionBar)
+        setTheme(R.style.Theme_MyApplication)
         super.onCreate(savedInstanceState)
         WindowCompat.setDecorFitsSystemWindows(window, false)
         displayName = savedInstanceState?.getString("displayName") ?: preferences.getString("username", "Yanyan").orEmpty()
@@ -76,7 +83,7 @@ class AdminActivity : AppCompatActivity() {
         teamName = savedInstanceState?.getString("teamName") ?: ""
         successFlow = savedInstanceState?.getString("successFlow") ?: "register"
         savedInstanceState?.let { state ->
-            scheduleFilter = state.getString("scheduleFilter", "Upcoming") ?: "Upcoming"
+            scheduleFilter = state.getString("scheduleFilter") ?: "Upcoming"
             teamTab = state.getString("teamTab", "Team Chat") ?: "Team Chat"
             expandedRole = state.getString("expandedRole")
             selectedSong = state.getString("selectedSong", "Trust in God") ?: "Trust in God"
@@ -183,7 +190,7 @@ class AdminActivity : AppCompatActivity() {
                 val name = input(UI.teamName)
                 if (name.text.isBlank()) invalid(name, "Enter a team name.")
                 else {
-                    preferences.edit().putBoolean("leftTeam", false).apply()
+                    preferences.edit { putBoolean("leftTeam", false) }
                     teamName = name.text.toString().trim()
                     toast("Demo team created: $teamName")
                     navigate("home")
@@ -193,7 +200,7 @@ class AdminActivity : AppCompatActivity() {
                 val code = input(UI.teamCode)
                 if (code.text.isBlank()) invalid(code, "Enter a team code.")
                 else {
-                    preferences.edit().putBoolean("leftTeam", false).apply()
+                    preferences.edit { putBoolean("leftTeam", false) }
                     teamName = "Sample ministry team"
                     toast("Demo only: team code is not verified.")
                     navigate("home")
@@ -318,7 +325,7 @@ class AdminActivity : AppCompatActivity() {
         click(UI.worshipCard) {
             selectedService = "Sunday Worship Service"; serviceReturnPage = "home"
             if (isLeader) loadSampleLeaderService(selectedService, "2025-05-18", "9:00AM")
-            preferences.edit().putString("serviceDate", "May 18, 2025").putString("serviceTime", "9:00AM").putString("serviceVenue", "Main Sanctuary").apply()
+            preferences.edit { putString("serviceDate", "May 18, 2025"); putString("serviceTime", "9:00AM"); putString("serviceVenue", "Main Sanctuary") }
             navigate("service")
         }
         findViewById<TextView>(UI.teamTitle).apply {
@@ -368,8 +375,13 @@ class AdminActivity : AppCompatActivity() {
     private fun heading(value: String) = text(value, 21, navy, true)
     private fun image(name: String, description: String? = null) = ImageView(this).apply {
         val bitmap = bitmaps.getOrPut(name) {
-            val bytes = Base64.decode(Art.data(name), Base64.DEFAULT)
-            requireNotNull(BitmapFactory.decodeByteArray(bytes, 0, bytes.size))
+            val resId = resources.getIdentifier(name, "drawable", packageName)
+            if (resId != 0) {
+                BitmapFactory.decodeResource(resources, resId)
+            } else {
+                val bytes = Base64.decode(Art.data(name), Base64.DEFAULT)
+                requireNotNull(BitmapFactory.decodeByteArray(bytes, 0, bytes.size))
+            }
         }
         setImageBitmap(bitmap); scaleType = ImageView.ScaleType.FIT_CENTER
         if (name == "profile_photo") {
@@ -565,62 +577,76 @@ class AdminActivity : AppCompatActivity() {
         addView(image("landing_background", "Worshippers and glowing cross").apply {
             scaleType = ImageView.ScaleType.CENTER_CROP
         }, FrameLayout.LayoutParams(-1, -1))
-        // The supplied branded artwork matches the reference's large logo and lettering.
-        // Only its top artwork is used; the button and caption remain native controls.
-        val brandedTop = image("welcome_artwork", "Synced N").apply {
-            val original = (drawable as android.graphics.drawable.BitmapDrawable).bitmap
-            setImageBitmap(bitmaps.getOrPut("landing_branded_top") {
-                Bitmap.createBitmap(original, 0, 0, original.width, 280)
-            })
-            scaleType = ImageView.ScaleType.FIT_XY
+
+        val logo = image("landing_logo", "Synced N").apply {
+            scaleType = ImageView.ScaleType.FIT_CENTER
         }
-        addView(brandedTop, FrameLayout.LayoutParams(-1, dp(280), Gravity.TOP or Gravity.CENTER_HORIZONTAL))
+        addView(logo, FrameLayout.LayoutParams(dp(220), dp(190), Gravity.TOP or Gravity.CENTER_HORIZONTAL).apply {
+            topMargin = dp(90)
+        })
+
         val footer = vertical().apply {
             gravity = Gravity.CENTER_HORIZONTAL
-            add(button(UI.getStartedButton, "Get Started", 180).apply {
-                background = bg(Color.rgb(103, 5, 103), 24)
-            }, 180, 40)
-            space(16); add(text("Church Ministry Management", 15, Color.WHITE, centered = true))
-            space(20); add(landingIndicator(), 32, 32)
+            add(button(UI.getStartedButton, "Get Started", 200).apply {
+                background = bg(Color.rgb(94, 5, 85), 24)
+            }, 200, 44)
+            space(14)
+            add(text("Church Ministry Management", 15, Color.WHITE, centered = true))
+            space(18)
+            add(landingIndicator(), 32, 32)
         }
-        addView(footer, FrameLayout.LayoutParams(-1, -2, Gravity.TOP))
-        addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
-            val availableWidth = width - paddingLeft - paddingRight
-            val availableHeight = height - paddingTop - paddingBottom
-            if (availableWidth > 0 && availableHeight > 0) {
-                // Match the photo's center-crop transform so the logo stays on the same sky.
-                val scale = maxOf(availableWidth / 360f, availableHeight / 800f)
-                val photoTop = (availableHeight - 800f * scale) / 2f
-                val brandWidth = (360f * scale).toInt()
-                val brandHeight = (280f * scale).toInt()
-                val brandPosition = brandedTop.layoutParams as FrameLayout.LayoutParams
-                if (brandPosition.width != brandWidth || brandPosition.height != brandHeight || brandPosition.topMargin != photoTop.toInt()) {
-                    brandedTop.layoutParams = brandPosition.apply {
-                        width = brandWidth; height = brandHeight; topMargin = photoTop.toInt()
-                    }
-                }
-                val desiredTop = (photoTop + 595f * scale).toInt()
-                    .coerceAtMost((availableHeight - footer.measuredHeight - dp(24)).coerceAtLeast(0))
-                val footerPosition = footer.layoutParams as FrameLayout.LayoutParams
-                if (footerPosition.topMargin != desiredTop) footer.layoutParams = footerPosition.apply { topMargin = desiredTop }
-            }
-        }
+        addView(footer, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply {
+            bottomMargin = dp(48)
+        })
     }
     private fun landingIndicator(): View = object : View(this) {
         private val ink = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             style = Paint.Style.STROKE; strokeCap = Paint.Cap.ROUND
         }
-
-        private val arcBounds = android.graphics.RectF(2.5f, 2.5f, 29.5f, 29.5f)
+        private val arcRect = android.graphics.RectF(2.5f, 2.5f, 29.5f, 29.5f)
+        private var rotationAngle = 0f
+        private var lastFrameTime = 0L
 
         init {
             importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
         }
+
+        override fun onAttachedToWindow() {
+            super.onAttachedToWindow()
+            lastFrameTime = android.os.SystemClock.uptimeMillis()
+            postInvalidateOnAnimation()
+        }
+
+        override fun onVisibilityChanged(changedView: View, visibility: Int) {
+            super.onVisibilityChanged(changedView, visibility)
+            if (visibility == View.VISIBLE) {
+                lastFrameTime = android.os.SystemClock.uptimeMillis()
+                postInvalidateOnAnimation()
+            }
+        }
+
+        override fun onWindowVisibilityChanged(visibility: Int) {
+            super.onWindowVisibilityChanged(visibility)
+            if (visibility == View.VISIBLE) {
+                lastFrameTime = android.os.SystemClock.uptimeMillis()
+                postInvalidateOnAnimation()
+            }
+        }
+
         override fun onDraw(canvas: Canvas) {
             super.onDraw(canvas)
-            val checkpoint = canvas.save(); canvas.scale(width / 32f, height / 32f)
+            val now = android.os.SystemClock.uptimeMillis()
+            if (lastFrameTime > 0L) {
+                val delta = (now - lastFrameTime).coerceIn(0L, 100L)
+                rotationAngle = (rotationAngle + delta * 0.36f) % 360f
+            }
+            lastFrameTime = now
+
+            val checkpoint = canvas.save()
+            canvas.rotate(rotationAngle, width / 2f, height / 2f)
+            canvas.scale(width / 32f, height / 32f)
             ink.color = Color.rgb(35, 187, 125); ink.alpha = 255; ink.strokeWidth = 3.5f
-            canvas.drawArc(arcBounds, 180f, 180f, false, ink)
+            canvas.drawArc(arcRect, 180f, 180f, false, ink)
             ink.strokeWidth = 1.5f
             repeat(9) { step ->
                 val angle = Math.toRadians((12 + step * 18).toDouble())
@@ -629,6 +655,10 @@ class AdminActivity : AppCompatActivity() {
                 canvas.drawLine(16f + x * 11.5f, 16f + y * 11.5f, 16f + x * 14.5f, 16f + y * 14.5f, ink)
             }
             canvas.restoreToCount(checkpoint)
+
+            if (isAttachedToWindow && windowVisibility == View.VISIBLE) {
+                postInvalidateOnAnimation()
+            }
         }
     }
     private fun homeUpcomingRecord(): org.json.JSONObject? {
@@ -641,17 +671,22 @@ class AdminActivity : AppCompatActivity() {
         serviceReturnPage = "home"
         if (record != null) {
             selectedService = record.optString("title")
-            preferences.edit().putString("serviceDate", record.optString("date"))
-                .putString("serviceTime", leaderTime(record.optString("start")) + " – " + leaderTime(record.optString("end")))
-                .putString("serviceVenue", record.optString("venue")).apply()
+            preferences.edit {
+                putString("serviceDate", record.optString("date"))
+                putString("serviceTime", leaderTime(record.optString("start")) + " – " + leaderTime(record.optString("end")))
+                putString("serviceVenue", record.optString("venue"))
+            }
             if (isLeader) {
                 leaderDraft = org.json.JSONObject(record.toString())
                 activeServiceIndex = localServices.indexOf(record); serviceWizard = false; saveLeaderDraft()
             }
         } else {
             selectedService = "Sunday Worship Service"
-            preferences.edit().putString("serviceDate", "May 18, 2025")
-                .putString("serviceTime", "6:00AM – 11:00AM").putString("serviceVenue", "Main Sanctuary").apply()
+            preferences.edit {
+                putString("serviceDate", "May 18, 2025")
+                putString("serviceTime", "6:00AM – 11:00AM")
+                putString("serviceVenue", "Main Sanctuary")
+            }
             if (isLeader) loadSampleLeaderService(selectedService, "2025-05-18", "6:00AM – 11:00AM")
         }
         navigate("service")
@@ -792,7 +827,7 @@ class AdminActivity : AppCompatActivity() {
                 upcoming.add(View(this@AdminActivity),24,1)
                 upcoming.add(announcementHomeTile(),0,104,0.37f)
             }
-            add(upcoming);space(22)
+            add(upcoming);space(44)
         }
         val nav=horizontal().apply { elevation=dp(8).toFloat();setBackgroundColor(Color.WHITE) }
         for ((id,symbol,label) in listOf(Triple(UI.homeTab,"home","Home"),Triple(UI.scheduleTab,"calendar","Schedule"),Triple(UI.teamsTab,"teams","Teams"),Triple(UI.settingsTab,"settings","Settings"))) {
@@ -847,7 +882,7 @@ class AdminActivity : AppCompatActivity() {
                 add(text(fullName,14,Color.BLACK,true));space(8)
                 add(text(displayName,12).apply {background=bg(Color.rgb(217,217,217),14);setPadding(dp(10),0,dp(10),0);maxLines=1;ellipsize=android.text.TextUtils.TruncateAt.END},-1,24)
                 space(10)
-                add(text("Profile",13,Color.BLACK,bold=true,centered=true,id=UI.openProfileButton).apply {
+                add(text("Profile", 13, Color.BLACK, bold = true, centered = true, id = UI.openProfileButton).apply {
                     background=bg(Color.rgb(217,217,217),4);isClickable=true;isFocusable=true
                 },-1,32)
             }
@@ -896,7 +931,7 @@ class AdminActivity : AppCompatActivity() {
         findViewById<Switch>(UI.notificationSwitch).apply {
             isChecked=preferences.getBoolean("notifications",true)
             setOnCheckedChangeListener { _, checked ->
-                preferences.edit().putBoolean("notifications",checked).apply()
+                preferences.edit { putBoolean("notifications", checked) }
                 toast(if(checked) "Notifications enabled locally" else "Notifications disabled locally")
             }
         }
@@ -958,7 +993,7 @@ class AdminActivity : AppCompatActivity() {
         camera.addView(Symbol(this,"camera",Color.BLACK),FrameLayout.LayoutParams(dp(16),dp(16),Gravity.CENTER))
         avatar.addView(camera,FrameLayout.LayoutParams(dp(24),dp(24),Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply {leftMargin=dp(48);bottomMargin=dp(2)})
         col.add(avatar,-1,82);col.space(10)
-        col.add(text(fullName,14,Color.BLACK,bold=true,centered=true));col.space(3)
+        col.add(text(fullName, 14, Color.BLACK, bold = true, centered = true)); col.space(3)
         col.add(text("Ministry Member",12,Color.GRAY,centered=true));col.space(26)
         col.section(11).apply {
             add(text("Profile",15,Color.BLACK,true));space(12)
@@ -992,11 +1027,14 @@ class AdminActivity : AppCompatActivity() {
                 email.text.isNotBlank() && !Patterns.EMAIL_ADDRESS.matcher(email.text.toString().trim()).matches()->invalid(email,"Enter a valid email.")
                 else->{
                     fullName=name.text.toString().trim();displayName=username.text.toString().trim()
-                    preferences.edit().putString("fullName",fullName).putString("username",displayName)
-                        .putString("phone",input(UI.profilePhone).text.toString().trim())
-                        .putString("email",email.text.toString().trim())
-                        .putString("country",findViewById<Spinner>(UI.countrySpinner).selectedItem.toString())
-                        .putString("language",findViewById<Spinner>(UI.languageSpinner).selectedItem.toString()).apply()
+                    preferences.edit {
+                        putString("fullName", fullName)
+                        putString("username", displayName)
+                        putString("phone", input(UI.profilePhone).text.toString().trim())
+                        putString("email", email.text.toString().trim())
+                        putString("country", findViewById<Spinner>(UI.countrySpinner).selectedItem.toString())
+                        putString("language", findViewById<Spinner>(UI.languageSpinner).selectedItem.toString())
+                    }
                     toast("Profile saved on this phone");navigate(profileReturnPage)
                 }
             }
@@ -1004,7 +1042,7 @@ class AdminActivity : AppCompatActivity() {
     }
     private fun applyProfilePhoto(id: Int) {
         val uri=preferences.getString("photoUri",null) ?: return
-        try {findViewById<ImageView>(id).setImageURI(Uri.parse(uri))} catch(_: Exception) {preferences.edit().remove("photoUri").apply()}
+        try {findViewById<ImageView>(id).setImageURI(uri.toUri())} catch(_: Exception) {preferences.edit { remove("photoUri") }}
     }
     @Deprecated("Deprecated in Java")
     override fun onActivityResult(requestCode: Int,resultCode: Int,data: Intent?) {
@@ -1021,7 +1059,7 @@ class AdminActivity : AppCompatActivity() {
             val uri=data?.data ?: return
             try {
                 contentResolver.takePersistableUriPermission(uri,Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                preferences.edit().putString("photoUri",uri.toString()).apply()
+                preferences.edit { putString("photoUri", uri.toString()) }
                 if(page=="profile") applyProfilePhoto(UI.profileAvatar)
             } catch(_: Exception) {toast("Could not use that photo. Try another image.")}
         }
@@ -1480,14 +1518,16 @@ class AdminActivity : AppCompatActivity() {
     }
     private fun roleEditView(): View {
         val root = vertical().apply { setBackgroundColor(Color.WHITE) }
-        root.add(teamHeader(), -1, 88)
-        val scroll = ScrollView(this).apply { isFillViewport = true }
+        val scroll = ScrollView(this).apply { isFillViewport = true; clipToPadding = false }
+        val container = vertical()
+        container.add(teamHeader(), -1, 88)
         val col = vertical().apply {
             setPadding(dp(20), dp(24), dp(20), dp(24))
             background = GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,
                 intArrayOf(Color.rgb(21, 28, 50), Color.rgb(57, 79, 150)))
         }
-        scroll.addView(col, FrameLayout.LayoutParams(-1, -2)); root.add(scroll, -1, 0, 1f)
+        container.add(col)
+        scroll.addView(container, FrameLayout.LayoutParams(-1, -2)); root.add(scroll, -1, 0, 1f)
         col.add(horizontal().apply {
             add(memberAvatar(),52,52)
             add(vertical().apply {
@@ -1567,13 +1607,15 @@ class AdminActivity : AppCompatActivity() {
     private fun memberPage(title: String, back: String, tab: String? = null,
                            body: (LinearLayout) -> Unit): View {
         val root = vertical().apply { setBackgroundColor(Color.WHITE) }
+        val scroll = ScrollView(this).apply { isFillViewport = true; clipToPadding = false }
+        val container = vertical()
         val header = settingsHeader(title, true)
         header.findViewById<View>(UI.pageBack).setOnClickListener { navigate(back) }
-        root.add(header)
-        val scroll = ScrollView(this).apply { isFillViewport = true; clipToPadding = false }
+        container.add(header)
         val col = vertical().apply { setPadding(dp(20), dp(24), dp(20), dp(24)) }
-        scroll.addView(col, FrameLayout.LayoutParams(-1, -2))
         body(col)
+        container.add(col)
+        scroll.addView(container, FrameLayout.LayoutParams(-1, -2))
         root.add(scroll, -1, 0, 1f)
         if (tab != null) root.add(memberNavigation(tab), -1, 64)
         return root
@@ -1691,7 +1733,7 @@ class AdminActivity : AppCompatActivity() {
             contentDescription = "Previous month"; isFocusable = true
         }, 48, 48)
         monthRow.add(vertical().apply {
-            add(text(java.text.SimpleDateFormat("MMMM", java.util.Locale.ENGLISH).format(date.time), 22, navy, bold = true, centered = true))
+            add(text(java.text.SimpleDateFormat("MMMM", java.util.Locale.ENGLISH).format(date.time), 22, navy, true, true))
             space(4); add(text(calendarYear.toString(), 12, Color.GRAY, centered = true))
         }, 0, -2, 1f)
         monthRow.add(text("›", 28, navy, centered = true).apply {
@@ -1911,7 +1953,7 @@ class AdminActivity : AppCompatActivity() {
             add(text("Transpose preview", 12, Color.GRAY)); space(8)
             add(horizontal().apply {
                 listOf("C", "Db", "D", "Eb", "E", "F").forEach { chord ->
-                    add(text(chord, 12, navy, bold = true, centered = true).apply {
+                    add(text(chord, 12, navy, true, true).apply {
                         background = bg(Color.rgb(224, 215, 230), 6)
                         setOnClickListener { key.text = "Key: $chord    •    $tempo BPM"; toast("Key preview only; add a chord sheet to transpose music.") }
                         isFocusable = true
@@ -1978,7 +2020,7 @@ class AdminActivity : AppCompatActivity() {
     private fun teamTabs(): View = horizontal().apply {
         setPadding(dp(20), dp(10), dp(12), dp(10))
         listOf("Team Chat", "Members", "Role").forEach { label ->
-            val tab = text(label, 13, if (teamTab == label) Color.WHITE else navy, bold = true, centered = true).apply {
+            val tab = text(label, 13, if (teamTab == label) Color.WHITE else navy, true, true).apply {
                 if (teamTab == label) background = bg(Color.rgb(21, 28, 50), 20)
                 isFocusable = true; setOnClickListener { teamTab = label; navigate("teams") }
             }
@@ -2002,11 +2044,14 @@ class AdminActivity : AppCompatActivity() {
             col.add(memberButton("Create or Join Team") { navigate("teamChoice") }, -1, 48)
         }
         val root = vertical().apply { setBackgroundColor(Color.WHITE) }
-        root.add(teamHeader(showDetails = true), -1, 156)
-        root.add(teamTabs())
-        val scroll = ScrollView(this).apply { isFillViewport = true }
+        val scroll = ScrollView(this).apply { isFillViewport = true; clipToPadding = false }
+        val container = vertical()
+        container.add(teamHeader(showDetails = true), -1, 156)
+        container.add(teamTabs())
         val col = vertical().apply { setPadding(dp(20), dp(16), dp(20), dp(20)) }
-        scroll.addView(col, FrameLayout.LayoutParams(-1, -2)); root.add(scroll, -1, 0, 1f)
+        container.add(col)
+        scroll.addView(container, FrameLayout.LayoutParams(-1, -2))
+        root.add(scroll, -1, 0, 1f)
         when (teamTab) {
             "Members" -> {
                 val members = if (isLeader) leaderRoster().map { Triple(it.first,it.second,if(it.first=="Joshua Lagare") "Admin" else "Member") }
@@ -2073,7 +2118,7 @@ class AdminActivity : AppCompatActivity() {
                         if (message.startsWith("photo:")) {
                             add(ImageView(this@AdminActivity).apply {
                                 contentDescription = "Attached photo"; scaleType = ImageView.ScaleType.FIT_CENTER
-                                try { setImageURI(Uri.parse(message.removePrefix("photo:"))) }
+                                try { setImageURI(message.removePrefix("photo:").toUri()) }
                                 catch (_: Exception) { contentDescription = "Photo unavailable" }
                             }, -1, 180)
                         } else add(text(message, 14, navy))
@@ -2127,10 +2172,13 @@ class AdminActivity : AppCompatActivity() {
     }
     private fun teamDetailsView(): View {
         val root = vertical().apply { setBackgroundColor(Color.WHITE) }
-        root.add(teamHeader(), -1, 88)
-        val scroll = ScrollView(this).apply { isFillViewport = true }
+        val scroll = ScrollView(this).apply { isFillViewport = true; clipToPadding = false }
+        val container = vertical()
+        container.add(teamHeader(), -1, 88)
         val col = vertical().apply { setPadding(dp(20), dp(32), dp(20), dp(24)) }
-        scroll.addView(col, FrameLayout.LayoutParams(-1, -2)); root.add(scroll, -1, 0, 1f)
+        container.add(col)
+        scroll.addView(container, FrameLayout.LayoutParams(-1, -2))
+        root.add(scroll, -1, 0, 1f)
         col.add(text("Team Name", 13, Color.BLACK, true)); col.space(8)
         col.add(text(teamName.ifBlank { "Worship Team" }, 14, Color.BLACK, true).apply {
             background = bg(Color.rgb(217, 217, 217), 9)
@@ -2142,13 +2190,10 @@ class AdminActivity : AppCompatActivity() {
                 background = bg(Color.rgb(217,217,217),9);setPadding(dp(10),0,dp(10),0)
                 contentDescription = "Copy demo invite code"
                 setOnClickListener {
-                    val clipboard =
-                        getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager
-                    @Suppress("UsePropertyAccessSyntax")
-                    clipboard.setPrimaryClip(android.content.ClipData.newPlainText(
-                        "Demo team invite",
-                        "DF432DE"
-                    ))
+                    val clipboard = getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                    clipboard.setPrimaryClip(
+                        android.content.ClipData.newPlainText("Demo team invite", "DF432DE")
+                    )
                     toast("Demo invite code copied; it is not a live invitation.")
                 }
             }, -1, 36); col.space(20)
@@ -2206,8 +2251,7 @@ class AdminActivity : AppCompatActivity() {
         background=bg(Color.WHITE,24,Color.rgb(211,211,211));elevation=dp(4).toFloat()
         isClickable=true;isFocusable=true;contentDescription=label
         add(Symbol(this@AdminActivity,icon,Color.rgb(174,0,234)),28,28)
-        space(3);add(text(label,labelSize,navy,bold = true,centered = true))
+        space(3);add(text(label,labelSize,navy,true,true))
     }
-
 }
 

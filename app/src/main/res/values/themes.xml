@@ -1,5 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
 
-    <style name="Theme.MyApplication" parent="android:Theme.Material.Light.NoActionBar" />
+    <style name="Theme.MyApplication" parent="Theme.AppCompat.Light.NoActionBar">
+        <item name="alertDialogTheme">@style/Theme.MyApplication.Dialog</item>
+    </style>
+
+    <style name="Theme.MyApplication.Dialog" parent="Theme.AppCompat.Light.Dialog.Alert" />
 </resources>
