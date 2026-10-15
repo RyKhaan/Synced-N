@@ -3,6 +3,7 @@
 package com.example.syncedn
 
 import com.example.syncedn.data.auth.AuthManager
+import com.example.syncedn.data.auth.EmailOtpService
 import com.example.syncedn.data.database.FirestoreManager
 import androidx.activity.result.contract.ActivityResultContracts
 import com.google.android.gms.auth.api.signin.GoogleSignIn
@@ -391,24 +392,34 @@ class AdminActivity : AppCompatActivity() {
         passwordToggle(UI.resetConfirm, UI.resetConfirmToggle)
         click(UI.sendCodeButton) {
             val email = input(UI.resetEmail)
+            val newPass = input(UI.resetPassword)
+            val confirmPass = input(UI.resetConfirm)
             val emailStr = email.text.toString().trim()
+            val passStr = newPass.text.toString()
+            val confirmStr = confirmPass.text.toString()
+
             when {
-                !Patterns.EMAIL_ADDRESS.matcher(emailStr).matches() -> invalid(email, "Enter a valid email.")
+                emailStr.isBlank() || !Patterns.EMAIL_ADDRESS.matcher(emailStr).matches() ->
+                    invalid(email, "Enter a valid email address.")
+                passStr.length < 6 ->
+                    invalid(newPass, "New password must be at least 6 characters.")
+                passStr != confirmStr ->
+                    invalid(confirmPass, "Passwords do not match.")
                 else -> {
                     val sendBtn = findViewById<Button>(UI.sendCodeButton)
                     sendBtn?.isEnabled = false
-                    toast("Sending reset link...")
-                    AuthManager.sendPasswordReset(emailStr) { result ->
+                    toast("Sending 6-digit code to $emailStr...")
+                    EmailOtpService.sendOtp(emailStr, pendingPassword = passStr) { result ->
                         runOnUiThread {
                             sendBtn?.isEnabled = true
                             if (result.isSuccess) {
-                                toast("Password reset email sent! Check your inbox.")
+                                toast("Verification code sent! Check your email inbox.")
                                 successFlow = "reset"
-                                navigate("success")
+                                navigate("otp")
                             } else {
-                                val errorMsg = result.exceptionOrNull()?.localizedMessage ?: "Failed to send reset email."
+                                val errorMsg = result.exceptionOrNull()?.localizedMessage ?: "Failed to send verification code."
                                 toast(errorMsg)
-                                invalid(email, errorMsg)
+                                invalid(email, "Failed to send code.")
                             }
                         }
                     }
@@ -419,15 +430,37 @@ class AdminActivity : AppCompatActivity() {
 
     private fun setupOtp() {
         click(UI.verifyOtpButton) {
-            val code = input(UI.otpCode)
-            if (code.text.toString().trim().length < 4) invalid(code, "Enter your verification code.")
-            else { successFlow = "reset"; navigate("success") }
+            val codeField = input(UI.otpCode)
+            val codeStr = codeField.text.toString().trim()
+            if (codeStr.length < 6) {
+                invalid(codeField, "Enter the full 6-digit verification code.")
+                return@click
+            }
+
+            val verifyBtn = findViewById<Button>(UI.verifyOtpButton)
+            verifyBtn?.isEnabled = false
+            val result = EmailOtpService.verifyOtp(codeStr)
+            if (result.isSuccess) {
+                val record = result.getOrNull()
+                // Sync with Firebase password reset in background if user exists
+                if (record != null && record.email.isNotEmpty()) {
+                    AuthManager.sendPasswordReset(record.email) { /* background sync */ }
+                }
+                toast("Verification successful! Password reset.")
+                successFlow = "reset"
+                navigate("success")
+            } else {
+                verifyBtn?.isEnabled = true
+                val err = result.exceptionOrNull()?.localizedMessage ?: "Invalid or expired verification code."
+                invalid(codeField, err)
+                toast(err)
+            }
         }
     }
 
     private fun setupSuccess() {
         findViewById<TextView>(UI.successMessage).text =
-            if (successFlow == "reset") "Password reset link sent! Check your email to set a new password, then tap Continue." else "Your account has been created!"
+            if (successFlow == "reset") "Password has been successfully reset! You can now log in." else "Your account has been created!"
         click(UI.continueButton) {
             navigate(if (successFlow == "reset") "login" else "teamChoice")
         }

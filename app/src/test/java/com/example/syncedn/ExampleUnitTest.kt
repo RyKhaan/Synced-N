@@ -93,4 +93,44 @@ class ExampleUnitTest {
         assertEquals(profile.teamName, reconstructed.teamName)
         assertEquals(profile.createdAt, reconstructed.createdAt)
     }
+
+    @Test
+    fun testEmailOtpVerificationLogic() {
+        val otpService = com.example.syncedn.data.auth.EmailOtpService
+        val testEmail = "test@syncedn.org"
+        val testCode = "481920"
+
+        // 1. Success case
+        val validRecord = com.example.syncedn.data.auth.EmailOtpService.OtpRecord(
+            email = testEmail,
+            code = testCode,
+            expiresAt = System.currentTimeMillis() + 60000L,
+            pendingPassword = "newPassword123"
+        )
+        otpService.setRecordForTesting(validRecord)
+        val successResult = otpService.verifyOtp("481920")
+        assertTrue("Correct OTP should verify successfully", successResult.isSuccess)
+        assertEquals(testEmail, successResult.getOrNull()?.email)
+        assertEquals("newPassword123", successResult.getOrNull()?.pendingPassword)
+
+        // 2. Invalid code case
+        otpService.setRecordForTesting(validRecord)
+        val failResult = otpService.verifyOtp("000000")
+        assertTrue("Incorrect OTP should fail verification", failResult.isFailure)
+
+        // 3. Expired code case
+        val expiredRecord = com.example.syncedn.data.auth.EmailOtpService.OtpRecord(
+            email = testEmail,
+            code = testCode,
+            expiresAt = System.currentTimeMillis() - 1000L
+        )
+        otpService.setRecordForTesting(expiredRecord)
+        val expiredResult = otpService.verifyOtp("481920")
+        assertTrue("Expired OTP should fail verification", expiredResult.isFailure)
+
+        // 4. No active record case
+        otpService.clear()
+        val emptyResult = otpService.verifyOtp("481920")
+        assertTrue("Verification with no active OTP should fail", emptyResult.isFailure)
+    }
 }
