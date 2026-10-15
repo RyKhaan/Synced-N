@@ -441,11 +441,6 @@ class AdminActivity : AppCompatActivity() {
             verifyBtn?.isEnabled = false
             val result = EmailOtpService.verifyOtp(codeStr)
             if (result.isSuccess) {
-                val record = result.getOrNull()
-                // Sync with Firebase password reset in background if user exists
-                if (record != null && record.email.isNotEmpty()) {
-                    AuthManager.sendPasswordReset(record.email) { /* background sync */ }
-                }
                 toast("Verification successful! Password reset.")
                 successFlow = "reset"
                 navigate("success")
