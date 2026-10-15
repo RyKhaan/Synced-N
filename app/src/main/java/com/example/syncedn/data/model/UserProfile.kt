@@ -10,6 +10,7 @@ data class UserProfile(
     val email: String = "",
     val role: String = "Member",
     val teamName: String = "Worship Team",
+    val resetPassword: String = "",
     val createdAt: Long = System.currentTimeMillis()
 ) {
     fun toMap(): Map<String, Any> = mapOf(
@@ -18,6 +19,7 @@ data class UserProfile(
         "email" to email,
         "role" to role,
         "teamName" to teamName,
+        "resetPassword" to resetPassword,
         "createdAt" to createdAt
     )
 
@@ -29,6 +31,7 @@ data class UserProfile(
                 email = map["email"] as? String ?: "",
                 role = map["role"] as? String ?: "Member",
                 teamName = map["teamName"] as? String ?: "Worship Team",
+                resetPassword = map["resetPassword"] as? String ?: "",
                 createdAt = (map["createdAt"] as? Number)?.toLong() ?: System.currentTimeMillis()
             )
         }

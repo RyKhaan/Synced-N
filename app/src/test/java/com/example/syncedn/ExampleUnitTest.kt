@@ -75,6 +75,7 @@ class ExampleUnitTest {
             email = "test@example.com",
             role = "Admin",
             teamName = "Praise Team",
+            resetPassword = "newPassword456",
             createdAt = 123456789L
         )
         val map = profile.toMap()
@@ -83,6 +84,7 @@ class ExampleUnitTest {
         assertEquals("test@example.com", map["email"])
         assertEquals("Admin", map["role"])
         assertEquals("Praise Team", map["teamName"])
+        assertEquals("newPassword456", map["resetPassword"])
         assertEquals(123456789L, map["createdAt"])
 
         val reconstructed = com.example.syncedn.data.model.UserProfile.fromMap(map)
@@ -91,6 +93,7 @@ class ExampleUnitTest {
         assertEquals(profile.email, reconstructed.email)
         assertEquals(profile.role, reconstructed.role)
         assertEquals(profile.teamName, reconstructed.teamName)
+        assertEquals(profile.resetPassword, reconstructed.resetPassword)
         assertEquals(profile.createdAt, reconstructed.createdAt)
     }
 

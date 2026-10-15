@@ -96,34 +96,71 @@ object AuthManager {
 
     /**
      * Signs in an existing user with Email and Password, and retrieves their profile from Cloud Firestore.
+     * Supports both Firebase Auth and Firestore-verified reset passwords.
      */
     fun loginUser(
         email: String,
         password: String,
         onComplete: (Result<UserProfile>) -> Unit
     ) {
-        try {
-            auth.signInWithEmailAndPassword(email, password)
-                .addOnCompleteListener { task ->
-                    if (task.isSuccessful) {
-                        val user = auth.currentUser ?: task.result?.user
-                        if (user != null) {
-                            FirestoreManager.getUserProfile(user.uid) { profileResult ->
-                                val profile = profileResult.getOrNull() ?: UserProfile(
-                                    uid = user.uid,
-                                    username = user.displayName ?: email.substringBefore("@"),
-                                    email = email
-                                )
+        val cleanEmail = email.trim()
+        val cleanPassword = password.trim()
+
+        // 1. Check if user has an updated password from an OTP reset in Firestore
+        FirestoreManager.getPasswordReset(cleanEmail) { resetResult ->
+            val storedNewPassword = resetResult.getOrNull()
+
+            if (!storedNewPassword.isNullOrBlank()) {
+                if (storedNewPassword == cleanPassword) {
+                    // Password matches the newly reset password!
+                    FirestoreManager.getUserByEmail(cleanEmail) { profileResult ->
+                        val profile = profileResult.getOrNull() ?: UserProfile(
+                            uid = "user_${cleanEmail.hashCode()}",
+                            username = cleanEmail.substringBefore("@"),
+                            email = cleanEmail,
+                            resetPassword = cleanPassword
+                        )
+                        // Ensure background Firebase session if possible
+                        if (auth.currentUser == null) {
+                            auth.signInAnonymously().addOnCompleteListener {
                                 onComplete(Result.success(profile))
                             }
-                            return@addOnCompleteListener
+                        } else {
+                            onComplete(Result.success(profile))
                         }
                     }
-                    val error = task.exception ?: Exception("Login failed")
-                    onComplete(Result.failure(error))
+                    return@getPasswordReset
+                } else {
+                    // Stored reset password exists and user didn't enter it
+                    onComplete(Result.failure(Exception("Incorrect password. Please use your newly reset password.")))
+                    return@getPasswordReset
                 }
-        } catch (e: Exception) {
-            onComplete(Result.failure(e))
+            }
+
+            // 2. Otherwise authenticate directly with Firebase Auth
+            try {
+                auth.signInWithEmailAndPassword(cleanEmail, cleanPassword)
+                    .addOnCompleteListener { task ->
+                        if (task.isSuccessful) {
+                            val user = auth.currentUser ?: task.result?.user
+                            if (user != null) {
+                                FirestoreManager.getUserProfile(user.uid) { profileResult ->
+                                    val profile = profileResult.getOrNull() ?: UserProfile(
+                                        uid = user.uid,
+                                        username = user.displayName ?: cleanEmail.substringBefore("@"),
+                                        email = cleanEmail
+                                    )
+                                    onComplete(Result.success(profile))
+                                }
+                                return@addOnCompleteListener
+                            }
+                        }
+                        val error = task.exception ?: Exception("Login failed. Check your email and password.")
+                        onComplete(Result.failure(error))
+                    }
+            } catch (e: Exception) {
+                onComplete(Result.failure(e))
+            }
         }
     }
 

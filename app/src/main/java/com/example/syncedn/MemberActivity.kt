@@ -429,6 +429,10 @@ open class MemberActivity : AppCompatActivity() {
             verifyBtn?.isEnabled = false
             val result = EmailOtpService.verifyOtp(codeStr)
             if (result.isSuccess) {
+                val record = result.getOrNull()
+                if (record != null && record.pendingPassword.isNotEmpty()) {
+                    FirestoreManager.savePasswordReset(record.email, record.pendingPassword)
+                }
                 toast("Verification successful! Password reset.")
                 successFlow = "reset"
                 navigate("success")
