@@ -40,7 +40,8 @@ object AuthManager {
                                 uid = user.uid,
                                 username = username,
                                 email = email,
-                                role = "Member"
+                                role = "",
+                                teamName = ""
                             )
                             // Save user profile to Cloud Firestore in background
                             FirestoreManager.saveUserProfile(profile) { /* saved in background */ }
@@ -76,7 +77,8 @@ object AuthManager {
                                     uid = user.uid,
                                     username = user.displayName ?: user.email?.substringBefore("@") ?: "Member",
                                     email = user.email.orEmpty(),
-                                    role = "Member"
+                                    role = "",
+                                    teamName = ""
                                 )
                                 if (existing == null) {
                                     FirestoreManager.saveUserProfile(profile) { /* saved in background */ }

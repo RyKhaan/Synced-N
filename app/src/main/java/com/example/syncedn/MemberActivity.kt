@@ -76,7 +76,7 @@ open class MemberActivity : AppCompatActivity() {
     private var displayName = "Yanyan"
     private var fullName = "Ryan Lloyd Genturo"
     private var profileReturnPage = "settings"
-    private val preferences by lazy { getSharedPreferences("synced_profile", MODE_PRIVATE) }
+    protected val preferences by lazy { getSharedPreferences("synced_profile", MODE_PRIVATE) }
     private var teamName = ""
     private var successFlow = "register"
 
@@ -95,13 +95,29 @@ open class MemberActivity : AppCompatActivity() {
                             if (authResult.isSuccess) {
                                 val profile = authResult.getOrNull()
                                 displayName = profile?.username ?: account.displayName ?: "Member"
+                                val userRole = profile?.role.orEmpty().ifBlank { "Member" }
+                                val userTeam = profile?.teamName.orEmpty()
                                 preferences.edit {
                                     putString("username", displayName)
                                     putString("email", account.email.orEmpty())
                                     putString("userId", profile?.uid.orEmpty())
+                                    putString("role", userRole)
+                                    putString("teamName", userTeam)
                                 }
                                 toast("Welcome, $displayName!")
-                                navigate("home")
+                                if (userTeam.isBlank()) {
+                                    navigate("teamChoice")
+                                } else if (userRole.equals("Leader", ignoreCase = true)) {
+                                    startActivity(Intent(this@MemberActivity, AdminActivity::class.java).putExtra("startPage", "home"))
+                                    finish()
+                                } else {
+                                    if (javaClass == MainActivity::class.java) {
+                                        startActivity(Intent(this@MemberActivity, MemberActivity::class.java).putExtra("startPage", "home"))
+                                        finish()
+                                    } else {
+                                        navigate("home")
+                                    }
+                                }
                             } else {
                                 val msg = authResult.exceptionOrNull()?.localizedMessage ?: "Google sign-in failed."
                                 toast(msg)
@@ -149,7 +165,7 @@ open class MemberActivity : AppCompatActivity() {
                     "register", "reset" -> "login"
                     "otp" -> "reset"
                     "success" -> "login"
-                    "teamChoice" -> "home"
+                    "teamChoice" -> "login"
                     "createTeam", "joinTeam" -> "teamChoice"
                     "home" -> "login"
                     "settings" -> "home"
@@ -224,13 +240,15 @@ open class MemberActivity : AppCompatActivity() {
                 else {
                     teamName = name.text.toString().trim()
                     val uid = preferences.getString("userId", "").orEmpty()
-                    FirestoreManager.updateUserTeam(uid, teamName)
+                    FirestoreManager.updateUserRoleAndTeam(uid, "Leader", teamName)
                     preferences.edit {
                         putBoolean("leftTeam", false)
+                        putString("role", "Leader")
                         putString("teamName", teamName)
                     }
                     toast("Team created: $teamName")
-                    navigate("home")
+                    startActivity(Intent(this, AdminActivity::class.java).putExtra("startPage", "home"))
+                    finish()
                 }
             }
             "joinTeam" -> click(UI.joinTeamButton) {
@@ -239,13 +257,19 @@ open class MemberActivity : AppCompatActivity() {
                 else {
                     teamName = "Worship Ministry Team"
                     val uid = preferences.getString("userId", "").orEmpty()
-                    FirestoreManager.updateUserTeam(uid, teamName)
+                    FirestoreManager.updateUserRoleAndTeam(uid, "Member", teamName)
                     preferences.edit {
                         putBoolean("leftTeam", false)
+                        putString("role", "Member")
                         putString("teamName", teamName)
                     }
                     toast("Joined team: $teamName")
-                    navigate("home")
+                    if (javaClass == MainActivity::class.java) {
+                        startActivity(Intent(this, MemberActivity::class.java).putExtra("startPage", "home"))
+                        finish()
+                    } else {
+                        navigate("home")
+                    }
                 }
             }
             "home" -> setupHome()
@@ -311,13 +335,29 @@ open class MemberActivity : AppCompatActivity() {
                             if (result.isSuccess) {
                                 val profile = result.getOrNull()
                                 displayName = profile?.username?.ifBlank { emailStr.substringBefore("@") } ?: "Member"
+                                val userRole = profile?.role.orEmpty().ifBlank { "Member" }
+                                val userTeam = profile?.teamName.orEmpty()
                                 preferences.edit {
                                     putString("username", displayName)
                                     putString("email", emailStr)
                                     putString("userId", profile?.uid.orEmpty())
+                                    putString("role", userRole)
+                                    putString("teamName", userTeam)
                                 }
                                 toast("Welcome, $displayName!")
-                                navigate("home")
+                                if (userTeam.isBlank()) {
+                                    navigate("teamChoice")
+                                } else if (userRole.equals("Leader", ignoreCase = true)) {
+                                    startActivity(Intent(this@MemberActivity, AdminActivity::class.java).putExtra("startPage", "home"))
+                                    finish()
+                                } else {
+                                    if (javaClass == MainActivity::class.java) {
+                                        startActivity(Intent(this@MemberActivity, MemberActivity::class.java).putExtra("startPage", "home"))
+                                        finish()
+                                    } else {
+                                        navigate("home")
+                                    }
+                                }
                             } else {
                                 val errorMsg = result.exceptionOrNull()?.localizedMessage ?: "Login failed. Check your email and password."
                                 toast(errorMsg)
@@ -359,6 +399,8 @@ open class MemberActivity : AppCompatActivity() {
                                     putString("username", displayName)
                                     putString("email", emailStr)
                                     putString("userId", result.getOrNull()?.uid.orEmpty())
+                                    putString("role", "")
+                                    putString("teamName", "")
                                 }
                                 successFlow = "register"
                                 toast("Account created successfully!")

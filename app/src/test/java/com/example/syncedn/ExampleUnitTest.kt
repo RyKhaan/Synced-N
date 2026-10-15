@@ -136,4 +136,45 @@ class ExampleUnitTest {
         val emptyResult = otpService.verifyOtp("481920")
         assertTrue("Verification with no active OTP should fail", emptyResult.isFailure)
     }
+
+    @Test
+    fun testUserProfileDefaultTeamNameIsEmpty() {
+        val newProfile = com.example.syncedn.data.model.UserProfile(
+            uid = "new-user-1",
+            username = "Newbie",
+            email = "newbie@syncedn.org"
+        )
+        assertEquals("", newProfile.teamName)
+        assertEquals("Member", newProfile.role)
+
+        val map = newProfile.toMap()
+        assertEquals("", map["teamName"])
+
+        val reconstructed = com.example.syncedn.data.model.UserProfile.fromMap(map)
+        assertEquals("", reconstructed.teamName)
+    }
+
+    @Test
+    fun testRoleAndTeamRoutingLogic() {
+        // Routing decision logic representing MainActivity and MemberActivity role routing
+        fun resolveDashboard(role: String, teamName: String): String {
+            return if (teamName.isBlank()) {
+                "teamChoice"
+            } else if (role.equals("Leader", ignoreCase = true)) {
+                "AdminActivity"
+            } else {
+                "MemberActivity"
+            }
+        }
+
+        // 1. Newly registered user with no team yet
+        assertEquals("teamChoice", resolveDashboard(role = "", teamName = ""))
+        assertEquals("teamChoice", resolveDashboard(role = "Member", teamName = ""))
+
+        // 2. Leader who created a team
+        assertEquals("AdminActivity", resolveDashboard(role = "Leader", teamName = "Praise & Worship Team"))
+
+        // 3. Member who joined a team
+        assertEquals("MemberActivity", resolveDashboard(role = "Member", teamName = "Worship Ministry Team"))
+    }
 }

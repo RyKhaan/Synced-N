@@ -9,7 +9,7 @@ data class UserProfile(
     val username: String = "",
     val email: String = "",
     val role: String = "Member",
-    val teamName: String = "Worship Team",
+    val teamName: String = "",
     val resetPassword: String = "",
     val createdAt: Long = System.currentTimeMillis()
 ) {
@@ -30,7 +30,7 @@ data class UserProfile(
                 username = map["username"] as? String ?: "",
                 email = map["email"] as? String ?: "",
                 role = map["role"] as? String ?: "Member",
-                teamName = map["teamName"] as? String ?: "Worship Team",
+                teamName = map["teamName"] as? String ?: "",
                 resetPassword = map["resetPassword"] as? String ?: "",
                 createdAt = (map["createdAt"] as? Number)?.toLong() ?: System.currentTimeMillis()
             )

@@ -90,6 +90,35 @@ object FirestoreManager {
         }
     }
 
+    /**
+     * Updates the user's role and team in Firestore: /users/{uid}
+     * Uses SetOptions.merge() so fields are merged safely without clobbering other data.
+     */
+    fun updateUserRoleAndTeam(uid: String, role: String, teamName: String, onComplete: (Result<Unit>) -> Unit = {}) {
+        if (uid.isBlank()) {
+            onComplete(Result.success(Unit))
+            return
+        }
+
+        try {
+            val updates = mapOf(
+                "role" to role,
+                "teamName" to teamName
+            )
+            db.collection(USERS_COLLECTION)
+                .document(uid)
+                .set(updates, com.google.firebase.firestore.SetOptions.merge())
+                .addOnSuccessListener {
+                    onComplete(Result.success(Unit))
+                }
+                .addOnFailureListener { exception ->
+                    onComplete(Result.failure(exception))
+                }
+        } catch (e: Exception) {
+            onComplete(Result.failure(e))
+        }
+    }
+
     const val PASSWORD_RESETS_COLLECTION = "password_resets"
 
     /**

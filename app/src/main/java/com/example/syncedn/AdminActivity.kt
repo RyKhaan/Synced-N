@@ -94,13 +94,24 @@ class AdminActivity : AppCompatActivity() {
                             if (authResult.isSuccess) {
                                 val profile = authResult.getOrNull()
                                 displayName = profile?.username ?: account.displayName ?: "Leader"
+                                val userRole = profile?.role.orEmpty().ifBlank { "Leader" }
+                                val userTeam = profile?.teamName.orEmpty()
                                 preferences.edit {
                                     putString("username", displayName)
                                     putString("email", account.email.orEmpty())
                                     putString("userId", profile?.uid.orEmpty())
+                                    putString("role", userRole)
+                                    putString("teamName", userTeam)
                                 }
                                 toast("Welcome, $displayName!")
-                                navigate("home")
+                                if (userTeam.isBlank()) {
+                                    navigate("teamChoice")
+                                } else if (userRole.equals("Leader", ignoreCase = true)) {
+                                    navigate("home")
+                                } else {
+                                    startActivity(Intent(this@AdminActivity, MemberActivity::class.java).putExtra("startPage", "home"))
+                                    finish()
+                                }
                             } else {
                                 val msg = authResult.exceptionOrNull()?.localizedMessage ?: "Google sign-in failed."
                                 toast(msg)
@@ -150,7 +161,7 @@ class AdminActivity : AppCompatActivity() {
                     "register", "reset" -> "login"
                     "otp" -> "reset"
                     "success" -> "login"
-                    "teamChoice" -> "home"
+                    "teamChoice" -> "login"
                     "createTeam", "joinTeam" -> "teamChoice"
                     "home" -> "login"
                     "settings" -> "home"
@@ -236,9 +247,10 @@ class AdminActivity : AppCompatActivity() {
                 else {
                     teamName = name.text.toString().trim()
                     val uid = preferences.getString("userId", "").orEmpty()
-                    FirestoreManager.updateUserTeam(uid, teamName)
+                    FirestoreManager.updateUserRoleAndTeam(uid, "Leader", teamName)
                     preferences.edit {
                         putBoolean("leftTeam", false)
+                        putString("role", "Leader")
                         putString("teamName", teamName)
                     }
                     toast("Team created: $teamName")
@@ -251,13 +263,15 @@ class AdminActivity : AppCompatActivity() {
                 else {
                     teamName = "Worship Ministry Team"
                     val uid = preferences.getString("userId", "").orEmpty()
-                    FirestoreManager.updateUserTeam(uid, teamName)
+                    FirestoreManager.updateUserRoleAndTeam(uid, "Member", teamName)
                     preferences.edit {
                         putBoolean("leftTeam", false)
+                        putString("role", "Member")
                         putString("teamName", teamName)
                     }
                     toast("Joined team: $teamName")
-                    navigate("home")
+                    startActivity(Intent(this, MemberActivity::class.java).putExtra("startPage", "home"))
+                    finish()
                 }
             }
             "home" -> setupHome()
@@ -323,13 +337,24 @@ class AdminActivity : AppCompatActivity() {
                             if (result.isSuccess) {
                                 val profile = result.getOrNull()
                                 displayName = profile?.username?.ifBlank { emailStr.substringBefore("@") } ?: "Leader"
+                                val userRole = profile?.role.orEmpty().ifBlank { "Leader" }
+                                val userTeam = profile?.teamName.orEmpty()
                                 preferences.edit {
                                     putString("username", displayName)
                                     putString("email", emailStr)
                                     putString("userId", profile?.uid.orEmpty())
+                                    putString("role", userRole)
+                                    putString("teamName", userTeam)
                                 }
                                 toast("Welcome, $displayName!")
-                                navigate("home")
+                                if (userTeam.isBlank()) {
+                                    navigate("teamChoice")
+                                } else if (userRole.equals("Leader", ignoreCase = true)) {
+                                    navigate("home")
+                                } else {
+                                    startActivity(Intent(this@AdminActivity, MemberActivity::class.java).putExtra("startPage", "home"))
+                                    finish()
+                                }
                             } else {
                                 val errorMsg = result.exceptionOrNull()?.localizedMessage ?: "Login failed. Check your email and password."
                                 toast(errorMsg)
@@ -371,6 +396,8 @@ class AdminActivity : AppCompatActivity() {
                                     putString("username", displayName)
                                     putString("email", emailStr)
                                     putString("userId", result.getOrNull()?.uid.orEmpty())
+                                    putString("role", "")
+                                    putString("teamName", "")
                                 }
                                 successFlow = "register"
                                 toast("Account created successfully!")
