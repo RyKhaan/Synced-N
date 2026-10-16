@@ -347,4 +347,32 @@ class ExampleUnitTest {
         assertTrue(restoredTeam.roles.contains("Worship Leader"))
         assertTrue(restoredTeam.roles.contains("Vocalist"))
     }
+
+    @Test
+    fun testTeamRepositoryRosterAndRoleCaching() {
+        val repo = com.example.syncedn.data.database.TeamRepository
+        repo.clearCache()
+        repo.cacheMember(com.example.syncedn.data.model.TeamMember(
+            uid = "u1", fullName = "Leader Ryan", role = "Leader", ministryRole = "Worship Leader", teamCode = "CODE01"
+        ))
+        repo.cacheMember(com.example.syncedn.data.model.TeamMember(
+            uid = "u2", fullName = "Member Dave", role = "Member", ministryRole = "Bassist", teamCode = "CODE01"
+        ))
+
+        val roster = repo.getCachedRoster("CODE01")
+        assertEquals(2, roster.size)
+        assertEquals("Leader Ryan", roster[0].fullName)
+        assertEquals("Member Dave", roster[1].fullName)
+
+        // Test ministry role update in cache
+        repo.updateMemberMinistryRole("u2", "Guitarist") {}
+        val updated = repo.getCachedRoster("CODE01")
+        assertEquals("Guitarist", updated.find { it.uid == "u2" }?.ministryRole)
+
+        // Test removing member from team
+        repo.removeMemberFromTeam("u2") {}
+        val afterRemove = repo.getCachedRoster("CODE01")
+        assertEquals(1, afterRemove.size)
+        assertEquals("u1", afterRemove[0].uid)
+    }
 }
