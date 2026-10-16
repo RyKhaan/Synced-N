@@ -430,4 +430,104 @@ class ExampleUnitTest {
         val roster = repo.getCachedRoster("CONCURRENT")
         assertEquals(10, roster.size)
     }
+
+    @Test
+    fun testSessionManagerIsolationBetweenUsers() {
+        val prefs = FakePreferences()
+        val session = com.example.syncedn.data.auth.SessionManager
+
+        // Step 1: User A (Leader) logs in and sets their profile
+        val leaderProfile = com.example.syncedn.data.model.UserProfile(
+            uid = "leader_123",
+            username = "LeaderRyan",
+            email = "leader@test.com",
+            fullName = "Ryan Lloyd Genturo",
+            phone = "09123456789",
+            country = "Philippines",
+            language = "English",
+            ministryRole = "Worship Leader"
+        )
+        session.saveSessionProfile(prefs, leaderProfile, "LeaderRyan", "leader@test.com")
+        assertEquals("Ryan Lloyd Genturo", prefs.getString("fullName", ""))
+        assertEquals("09123456789", prefs.getString("phone", ""))
+        assertEquals("leader@test.com", prefs.getString("email", ""))
+
+        // Step 2: User A logs out
+        session.clearSession(prefs)
+        assertEquals("", prefs.getString("phone", ""))
+        assertEquals("", prefs.getString("fullName", ""))
+        assertEquals("", prefs.getString("email", ""))
+
+        // Step 3: User B (Member) logs in with no phone and no full name
+        val memberProfile = com.example.syncedn.data.model.UserProfile(
+            uid = "member_456",
+            username = "MemberAngelo",
+            email = "member@test.com",
+            fullName = "",
+            phone = "",
+            country = "Philippines",
+            language = "English",
+            ministryRole = "Vocalist"
+        )
+        session.saveSessionProfile(prefs, memberProfile, "MemberAngelo", "member@test.com")
+
+        // CRUCIAL: Verify no data leakage from User A to User B
+        assertEquals("", prefs.getString("phone", "")) // Must NOT be 09123456789!
+        assertEquals("", prefs.getString("fullName", "")) // Must NOT be Ryan Lloyd Genturo!
+        assertEquals("member@test.com", prefs.getString("email", ""))
+        assertEquals("MemberAngelo", prefs.getString("username", ""))
+        assertEquals("Vocalist", prefs.getString("ministryRole", ""))
+    }
+
+    @Test
+    fun testSessionManagerClearsRosterCacheOnLogout() {
+        val prefs = FakePreferences()
+        val repo = com.example.syncedn.data.database.TeamRepository
+        repo.cacheMember(com.example.syncedn.data.model.TeamMember(
+            uid = "member_1",
+            fullName = "Member One",
+            teamCode = "LOGOUT_TEAM"
+        ))
+        assertEquals(1, repo.getCachedRoster("LOGOUT_TEAM").size)
+
+        com.example.syncedn.data.auth.SessionManager.clearSession(prefs)
+        assertEquals(0, repo.getCachedRoster("LOGOUT_TEAM").size)
+    }
+
+    private class FakePreferences : android.content.SharedPreferences {
+        private val map = mutableMapOf<String, Any?>()
+
+        override fun getAll(): MutableMap<String, *> = map
+        override fun getString(key: String?, defValue: String?): String? = map[key] as? String ?: defValue
+        override fun getStringSet(key: String?, defValues: MutableSet<String>?): MutableSet<String>? = defValues
+        override fun getInt(key: String?, defValue: Int): Int = map[key] as? Int ?: defValue
+        override fun getLong(key: String?, defValue: Long): Long = map[key] as? Long ?: defValue
+        override fun getFloat(key: String?, defValue: Float): Float = map[key] as? Float ?: defValue
+        override fun getBoolean(key: String?, defValue: Boolean): Boolean = map[key] as? Boolean ?: defValue
+        override fun contains(key: String?): Boolean = map.containsKey(key)
+        override fun edit(): android.content.SharedPreferences.Editor = FakeEditor(map)
+        override fun registerOnSharedPreferenceChangeListener(listener: android.content.SharedPreferences.OnSharedPreferenceChangeListener?) {}
+        override fun unregisterOnSharedPreferenceChangeListener(listener: android.content.SharedPreferences.OnSharedPreferenceChangeListener?) {}
+
+        private class FakeEditor(private val target: MutableMap<String, Any?>) : android.content.SharedPreferences.Editor {
+            private val pending = mutableMapOf<String, Any?>()
+            private val removes = mutableSetOf<String>()
+            private var clearAll = false
+
+            override fun putString(key: String?, value: String?): android.content.SharedPreferences.Editor { key?.let { pending[it] = value }; return this }
+            override fun putStringSet(key: String?, values: MutableSet<String>?): android.content.SharedPreferences.Editor = this
+            override fun putInt(key: String?, value: Int): android.content.SharedPreferences.Editor { key?.let { pending[it] = value }; return this }
+            override fun putLong(key: String?, value: Long): android.content.SharedPreferences.Editor { key?.let { pending[it] = value }; return this }
+            override fun putFloat(key: String?, value: Float): android.content.SharedPreferences.Editor { key?.let { pending[it] = value }; return this }
+            override fun putBoolean(key: String?, value: Boolean): android.content.SharedPreferences.Editor { key?.let { pending[it] = value }; return this }
+            override fun remove(key: String?): android.content.SharedPreferences.Editor { key?.let { removes.add(it); pending.remove(it) }; return this }
+            override fun clear(): android.content.SharedPreferences.Editor { clearAll = true; return this }
+            override fun commit(): Boolean { apply(); return true }
+            override fun apply() {
+                if (clearAll) target.clear()
+                removes.forEach { target.remove(it) }
+                pending.forEach { (k, v) -> if (v != null) target[k] = v else target.remove(k) }
+            }
+        }
+    }
 }

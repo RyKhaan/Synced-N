@@ -4,6 +4,7 @@ package com.example.syncedn
 
 import com.example.syncedn.data.auth.AuthManager
 import com.example.syncedn.data.auth.EmailOtpService
+import com.example.syncedn.data.auth.SessionManager
 import com.example.syncedn.data.database.FirestoreManager
 import com.example.syncedn.data.database.TeamRepository
 import com.example.syncedn.data.model.TeamMember
@@ -74,8 +75,8 @@ import androidx.core.view.WindowInsetsCompat
  */
 class AdminActivity : AppCompatActivity() {
     private var page = "start"
-    private var displayName = "Yanyan"
-    private var fullName = "Ryan Lloyd Genturo"
+    private var displayName = ""
+    private var fullName = ""
     private var profileReturnPage = "settings"
     private val preferences by lazy { getSharedPreferences("synced_profile", MODE_PRIVATE) }
     private var teamName = ""
@@ -100,19 +101,9 @@ class AdminActivity : AppCompatActivity() {
                                 val uid = profile?.uid.orEmpty()
                                 val (userRole, userTeam, userTeamCode) = resolveUserTeamSession(profile, emailStr)
                                 teamName = userTeam
-                                preferences.edit {
-                                    putString("username", displayName)
-                                    putString("email", emailStr)
-                                    putString("userId", uid)
-                                    if (!profile?.fullName.isNullOrBlank()) putString("fullName", profile?.fullName)
-                                    if (!profile?.phone.isNullOrBlank()) putString("phone", profile?.phone)
-                                    if (!profile?.country.isNullOrBlank()) putString("country", profile?.country)
-                                    if (!profile?.language.isNullOrBlank()) putString("language", profile?.language)
-                                    if (!profile?.ministryRole.isNullOrBlank()) putString("ministryRole", profile?.ministryRole)
-                                }
-                                if (!profile?.fullName.isNullOrBlank()) {
-                                    fullName = profile?.fullName.orEmpty()
-                                }
+                                SessionManager.saveSessionProfile(preferences, profile, displayName, emailStr)
+                                fullName = preferences.getString(SessionManager.KEY_FULL_NAME, "").orEmpty()
+                                displayName = preferences.getString(SessionManager.KEY_USERNAME, displayName).orEmpty()
                                 if (userTeam.isNotBlank()) {
                                     saveUserTeamState(userRole, userTeam, userTeamCode)
                                     FirestoreManager.updateUserRoleAndTeam(uid, userRole, userTeam, userTeamCode, emailStr)
@@ -254,8 +245,8 @@ class AdminActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         WindowCompat.setDecorFitsSystemWindows(window, false)
         syncLocalTeamsToMemory()
-        displayName = savedInstanceState?.getString("displayName") ?: preferences.getString("username", "Yanyan").orEmpty()
-        fullName = preferences.getString("fullName", "Ryan Lloyd Genturo").orEmpty()
+        displayName = savedInstanceState?.getString("displayName") ?: preferences.getString(SessionManager.KEY_USERNAME, "").orEmpty()
+        fullName = preferences.getString(SessionManager.KEY_FULL_NAME, "").orEmpty()
         profileReturnPage = savedInstanceState?.getString("profileReturnPage") ?: "settings"
         roleMember = savedInstanceState?.getString("roleMember") ?: "Angelo Daniel"
         teamName = savedInstanceState?.getString("teamName") ?: preferences.getString("teamName", "").orEmpty()
@@ -517,19 +508,9 @@ class AdminActivity : AppCompatActivity() {
                                 displayName = profile?.username?.ifBlank { emailStr.substringBefore("@") } ?: "Leader"
                                 val (userRole, userTeam, userTeamCode) = resolveUserTeamSession(profile, emailStr)
                                 teamName = userTeam
-                                preferences.edit {
-                                    putString("username", displayName)
-                                    putString("email", emailStr)
-                                    putString("userId", uid)
-                                    if (!profile?.fullName.isNullOrBlank()) putString("fullName", profile?.fullName)
-                                    if (!profile?.phone.isNullOrBlank()) putString("phone", profile?.phone)
-                                    if (!profile?.country.isNullOrBlank()) putString("country", profile?.country)
-                                    if (!profile?.language.isNullOrBlank()) putString("language", profile?.language)
-                                    if (!profile?.ministryRole.isNullOrBlank()) putString("ministryRole", profile?.ministryRole)
-                                }
-                                if (!profile?.fullName.isNullOrBlank()) {
-                                    fullName = profile?.fullName.orEmpty()
-                                }
+                                SessionManager.saveSessionProfile(preferences, profile, displayName, emailStr)
+                                fullName = preferences.getString(SessionManager.KEY_FULL_NAME, "").orEmpty()
+                                displayName = preferences.getString(SessionManager.KEY_USERNAME, displayName).orEmpty()
                                 if (userTeam.isNotBlank()) {
                                     saveUserTeamState(userRole, userTeam, userTeamCode)
                                     FirestoreManager.updateUserRoleAndTeam(uid, userRole, userTeam, userTeamCode, emailStr)
@@ -586,10 +567,10 @@ class AdminActivity : AppCompatActivity() {
                             regBtn?.isEnabled = true
                             if (result.isSuccess) {
                                 displayName = nameStr
+                                fullName = ""
+                                SessionManager.clearSession(preferences)
+                                SessionManager.saveSessionProfile(preferences, null, displayName, emailStr)
                                 preferences.edit {
-                                    putString("username", displayName)
-                                    putString("email", emailStr)
-                                    putString("userId", result.getOrNull()?.uid.orEmpty())
                                     putString("role", "")
                                     putString("teamName", "")
                                     putString("teamCode", "")
@@ -688,7 +669,7 @@ class AdminActivity : AppCompatActivity() {
     }
 
     private fun setupHome() {
-        findViewById<TextView>(UI.welcomeText).text = displayName
+        findViewById<TextView>(UI.welcomeText).text = displayName.ifBlank { "Leader" }
         click(UI.notificationsButton) { navigate("announcements") }
         applyProfilePhoto(UI.profileButton)
         click(UI.profileButton) { openProfile("home") }
@@ -1105,7 +1086,7 @@ class AdminActivity : AppCompatActivity() {
         hero.addView(header,FrameLayout.LayoutParams(-1,dp(245)))
         val top=vertical().apply { setPadding(dp(24),dp(32),dp(24),0) }
         val row=horizontal()
-        val greeting=vertical().apply { add(text("Welcome to Ministry",14,Color.WHITE)); space(4); add(text("Yanyan",23,Color.WHITE,id=UI.welcomeText)) }
+        val greeting=vertical().apply { add(text("Welcome to Ministry",14,Color.WHITE)); space(4); add(text(displayName.ifBlank { "Leader" },23,Color.WHITE,id=UI.welcomeText)) }
         row.add(greeting,0,-2,1f)
         val bell=FrameLayout(this).apply { id=UI.notificationsButton; background=bg(Color.rgb(244,243,227),24); isClickable=true; isFocusable=true; contentDescription="Notifications" }
         bell.addView(Symbol(this,"bell",navy),FrameLayout.LayoutParams(dp(24),dp(24),Gravity.CENTER));row.add(bell,40,40)
@@ -1337,9 +1318,16 @@ class AdminActivity : AppCompatActivity() {
         click(UI.logoutButton) {
             AlertDialog.Builder(this).setTitle("Log out?").setMessage("Return to the login page?")
                 .setPositiveButton("Log Out") { _, _ ->
-                    AuthManager.signOut()
+                    SessionManager.clearSession(preferences)
+                    displayName = ""
+                    fullName = ""
                     teamName = ""
-                    navigate("login")
+                    teamRoster = emptyList()
+                    startActivity(Intent(this, MainActivity::class.java).apply {
+                        flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
+                        putExtra("startPage", "login")
+                    })
+                    finish()
                 }
                 .setNegativeButton("Cancel", null).show()
         }
@@ -1386,8 +1374,8 @@ class AdminActivity : AppCompatActivity() {
         return row
     }
     private fun profileView(): View {
-        fullName = preferences.getString("fullName", fullName).orEmpty()
-        displayName = preferences.getString("username", displayName).orEmpty()
+        fullName = preferences.getString(SessionManager.KEY_FULL_NAME, fullName).orEmpty()
+        displayName = preferences.getString(SessionManager.KEY_USERNAME, displayName).orEmpty()
         val root=vertical().apply {setBackgroundColor(Color.WHITE)}
         root.add(settingsHeader("Profile",true))
         val scroll=ScrollView(this).apply {isFillViewport=true; clipToPadding=true}
@@ -1399,17 +1387,17 @@ class AdminActivity : AppCompatActivity() {
         camera.addView(Symbol(this,"camera",Color.BLACK),FrameLayout.LayoutParams(dp(16),dp(16),Gravity.CENTER))
         avatar.addView(camera,FrameLayout.LayoutParams(dp(24),dp(24),Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply {leftMargin=dp(48);bottomMargin=dp(2)})
         col.add(avatar,-1,82);col.space(10)
-        col.add(text(fullName, 14, Color.BLACK, bold = true, centered = true)); col.space(3)
+        col.add(text(fullName.ifBlank { displayName.ifBlank { "Leader" } }, 14, Color.BLACK, bold = true, centered = true)); col.space(3)
         col.add(text("Ministry Leader",12,Color.GRAY,centered=true));col.space(26)
         col.section(11).apply {
             add(text("Profile",15,Color.BLACK,true));space(12)
-            add(profileField(UI.profileName,"Full Name",fullName));space(8)
-            add(profileField(UI.profileUsername,"Username",displayName));space(8)
-            add(profileField(UI.profilePhone,"Phone Number",preferences.getString("phone","").orEmpty(),"Add your phone number",InputType.TYPE_CLASS_PHONE));space(8)
-            add(profileField(UI.profileEmail,"Email",preferences.getString("email","").orEmpty(),kind=InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS));space(16)
+            add(profileField(UI.profileName,"Full Name",fullName,hint="Add your full name"));space(8)
+            add(profileField(UI.profileUsername,"Username",displayName,hint="Add your username"));space(8)
+            add(profileField(UI.profilePhone,"Phone Number",preferences.getString(SessionManager.KEY_PHONE,"").orEmpty(),"Add your phone number",InputType.TYPE_CLASS_PHONE));space(8)
+            add(profileField(UI.profileEmail,"Email",preferences.getString(SessionManager.KEY_EMAIL,"").orEmpty(),kind=InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS));space(16)
             add(text("Preference",15,Color.BLACK,true));space(12)
-            add(preferenceRow(UI.countrySpinner,"Country",listOf("Philippines","Singapore","United States"),preferences.getString("country","Philippines").orEmpty()));space(8)
-            add(preferenceRow(UI.languageSpinner,"Language",listOf("English","Filipino"),preferences.getString("language","English").orEmpty()));space(48)
+            add(preferenceRow(UI.countrySpinner,"Country",listOf("Philippines","Singapore","United States"),preferences.getString(SessionManager.KEY_COUNTRY,"Philippines").orEmpty()));space(8)
+            add(preferenceRow(UI.languageSpinner,"Language",listOf("English","Filipino"),preferences.getString(SessionManager.KEY_LANGUAGE,"English").orEmpty()));space(48)
             action(UI.saveProfileButton,"Save Profile Changes");space(32)
         }
         root.add(bottomNavigation("Settings"),-1,64)
@@ -1437,16 +1425,9 @@ class AdminActivity : AppCompatActivity() {
                     val emailStr = email.text.toString().trim()
                     val countryStr = findViewById<Spinner>(UI.countrySpinner).selectedItem.toString()
                     val langStr = findViewById<Spinner>(UI.languageSpinner).selectedItem.toString()
-                    preferences.edit {
-                        putString("fullName", fullName)
-                        putString("username", displayName)
-                        putString("phone", phoneStr)
-                        putString("email", emailStr)
-                        putString("country", countryStr)
-                        putString("language", langStr)
-                    }
-                    val uid = preferences.getString("userId", "").orEmpty()
-                    val activeCode = preferences.getString("teamCode", "").orEmpty()
+                    val uid = preferences.getString(SessionManager.KEY_USER_ID, "").orEmpty()
+                    val activeCode = preferences.getString(SessionManager.KEY_TEAM_CODE, "").orEmpty()
+                    val activeMinistry = preferences.getString(SessionManager.KEY_MINISTRY_ROLE, "Worship Leader").orEmpty().ifBlank { "Worship Leader" }
                     val profileObj = com.example.syncedn.data.model.UserProfile(
                         uid = uid,
                         username = displayName,
@@ -1458,8 +1439,9 @@ class AdminActivity : AppCompatActivity() {
                         phone = phoneStr,
                         country = countryStr,
                         language = langStr,
-                        ministryRole = preferences.getString("ministryRole", "Worship Leader").orEmpty().ifBlank { "Worship Leader" }
+                        ministryRole = activeMinistry
                     )
+                    SessionManager.saveSessionProfile(preferences, profileObj, displayName, emailStr)
                     TeamRepository.updateUserProfile(profileObj)
                     toast("Profile saved successfully");navigate(profileReturnPage)
                 }
