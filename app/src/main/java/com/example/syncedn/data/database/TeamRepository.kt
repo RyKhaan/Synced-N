@@ -142,7 +142,10 @@ object TeamRepository {
                     if (snapshot != null) {
                         for (doc in snapshot.documents) {
                             val data = doc.data ?: continue
-                            members.add(TeamMember.fromMap(data))
+                            val mapWithId = data.toMutableMap()
+                            val uidFromDoc = (mapWithId["uid"] as? String)?.ifBlank { doc.id } ?: doc.id
+                            mapWithId["uid"] = uidFromDoc
+                            members.add(TeamMember.fromMap(mapWithId))
                         }
                     }
                     if (members.isNotEmpty()) {
@@ -163,10 +166,16 @@ object TeamRepository {
 
     /**
      * Updates a member's ministry role (e.g. "Vocalist", "Guitarist") in Firestore and local cache.
+     * Matches in-memory and Firestore records by memberUid and/or memberName (fullName / username).
      */
     @Synchronized
-    fun updateMemberMinistryRole(memberUid: String, newRole: String, onComplete: (Result<Unit>) -> Unit = {}) {
-        if (memberUid.isBlank()) {
+    fun updateMemberMinistryRole(
+        memberUid: String,
+        newRole: String,
+        memberName: String = "",
+        onComplete: (Result<Unit>) -> Unit = {}
+    ) {
+        if (memberUid.isBlank() && memberName.isBlank()) {
             onComplete(Result.success(Unit))
             return
         }
@@ -174,7 +183,10 @@ object TeamRepository {
         // Update in-memory caches
         for ((_, roster) in cachedRosters) {
             synchronized(roster) {
-                val member = roster.find { it.uid == memberUid }
+                val member = roster.find {
+                    (memberUid.isNotBlank() && it.uid == memberUid) ||
+                    (memberName.isNotBlank() && (it.fullName.equals(memberName, true) || it.username.equals(memberName, true)))
+                }
                 if (member != null) {
                     val updated = member.copy(ministryRole = newRole)
                     val idx = roster.indexOf(member)
@@ -184,11 +196,24 @@ object TeamRepository {
         }
 
         try {
-            db.collection(USERS_COLLECTION)
-                .document(memberUid)
-                .update("ministryRole", newRole)
-                .addOnSuccessListener { onComplete(Result.success(Unit)) }
-                .addOnFailureListener { onComplete(Result.failure(it)) }
+            if (memberUid.isNotBlank()) {
+                db.collection(USERS_COLLECTION)
+                    .document(memberUid)
+                    .update("ministryRole", newRole)
+                    .addOnSuccessListener { onComplete(Result.success(Unit)) }
+                    .addOnFailureListener { onComplete(Result.failure(it)) }
+            } else {
+                db.collection(USERS_COLLECTION)
+                    .whereEqualTo("fullName", memberName)
+                    .get()
+                    .addOnSuccessListener { snap ->
+                        for (doc in snap.documents) {
+                            doc.reference.update("ministryRole", newRole)
+                        }
+                        onComplete(Result.success(Unit))
+                    }
+                    .addOnFailureListener { onComplete(Result.failure(it)) }
+            }
         } catch (e: Exception) {
             onComplete(Result.failure(e))
         }

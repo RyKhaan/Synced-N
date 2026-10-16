@@ -494,6 +494,87 @@ class ExampleUnitTest {
         assertEquals(0, repo.getCachedRoster("LOGOUT_TEAM").size)
     }
 
+    @Test
+    fun testPhilippinePhoneValidationAndCharacterLimits() {
+        val vu = com.example.syncedn.data.util.ValidationUtils
+
+        // 1. Valid Philippine Mobile Numbers
+        assertTrue("09123456789 should be valid", vu.isValidPhilippinePhone("09123456789"))
+        assertTrue("+639123456789 should be valid", vu.isValidPhilippinePhone("+639123456789"))
+        assertTrue("639123456789 should be valid", vu.isValidPhilippinePhone("639123456789"))
+        assertTrue("Blank should be valid if optional", vu.isValidPhilippinePhone(""))
+        assertTrue("Whitespace should be valid if optional", vu.isValidPhilippinePhone("   "))
+
+        // 2. Invalid Philippine Mobile Numbers
+        assertFalse("Too short should be invalid", vu.isValidPhilippinePhone("0912345678"))
+        assertFalse("Too long should be invalid", vu.isValidPhilippinePhone("091234567890"))
+        assertFalse("Wrong prefix 08 should be invalid", vu.isValidPhilippinePhone("08123456789"))
+        assertFalse("Non-digits should be invalid", vu.isValidPhilippinePhone("0912345678a"))
+        assertFalse("US country code should be invalid", vu.isValidPhilippinePhone("+12025550123"))
+
+        // 3. Character length limits
+        assertTrue("Name <= 50 chars valid", vu.isValidName("Ryan Lloyd Genturo"))
+        assertFalse("Blank name invalid", vu.isValidName(""))
+        assertFalse("Name > 50 chars invalid", vu.isValidName("A".repeat(51)))
+
+        assertTrue("Username <= 30 chars valid", vu.isValidUsername("RL Gents"))
+        assertFalse("Blank username invalid", vu.isValidUsername(""))
+        assertFalse("Username > 30 chars invalid", vu.isValidUsername("U".repeat(31)))
+    }
+
+    @Test
+    fun testMinistryRoleAssignmentAndRosterOverlay() {
+        val repo = com.example.syncedn.data.database.TeamRepository
+        val teamCode = "ROSTER_TEST"
+
+        // Cache two members: Leader (Worship Leader) and Member (empty ministryRole initially)
+        repo.cacheMember(com.example.syncedn.data.model.TeamMember(
+            uid = "leader_uid_1",
+            fullName = "Ryan Lloyd Genturo",
+            role = "Leader",
+            ministryRole = "Worship Leader",
+            teamCode = teamCode
+        ))
+        repo.cacheMember(com.example.syncedn.data.model.TeamMember(
+            uid = "member_uid_2",
+            fullName = "RL Gents",
+            username = "RL Gents",
+            role = "Member",
+            ministryRole = "",
+            teamCode = teamCode
+        ))
+
+        // Before assignment: Vocalist count is 0
+        var cached = repo.getCachedRoster(teamCode)
+        val vocalistsBefore = cached.filter { it.ministryRole.equals("Vocalist", true) }
+        assertEquals(0, vocalistsBefore.size)
+
+        // Leader assigns "Vocalist" to RL Gents
+        repo.updateMemberMinistryRole("member_uid_2", "Vocalist", memberName = "RL Gents")
+
+        // After assignment: In-memory cache must immediately reflect "Vocalist"
+        cached = repo.getCachedRoster(teamCode)
+        val vocalistsAfter = cached.filter { it.ministryRole.equals("Vocalist", true) }
+        assertEquals(1, vocalistsAfter.size)
+        assertEquals("RL Gents", vocalistsAfter[0].fullName)
+        assertEquals("Vocalist", vocalistsAfter[0].ministryRole)
+
+        // Overlay with SharedPreferences memberRoles map simulation
+        val memberRolesMap = mapOf("RL Gents" to "Vocalist")
+
+        // Even with a member who had blank ministryRole, overlay resolves to "Vocalist"
+        val rawMember = com.example.syncedn.data.model.TeamMember(
+            uid = "unknown_uid",
+            fullName = "RL Gents",
+            ministryRole = "",
+            teamCode = teamCode
+        )
+        val resolvedRole = rawMember.ministryRole.ifBlank {
+            memberRolesMap[rawMember.uid] ?: memberRolesMap[rawMember.fullName] ?: memberRolesMap[rawMember.username] ?: ""
+        }
+        assertEquals("Vocalist", resolvedRole)
+    }
+
     private class FakePreferences : android.content.SharedPreferences {
         private val map = mutableMapOf<String, Any?>()
 

@@ -6,6 +6,8 @@ import com.example.syncedn.data.auth.SessionManager
 import com.example.syncedn.data.database.FirestoreManager
 import com.example.syncedn.data.database.TeamRepository
 import com.example.syncedn.data.model.TeamMember
+import com.example.syncedn.data.util.ValidationUtils
+import android.text.InputFilter
 import androidx.activity.result.contract.ActivityResultContracts
 import com.google.android.gms.auth.api.signin.GoogleSignIn
 import com.google.android.gms.auth.api.signin.GoogleSignInOptions
@@ -1278,17 +1280,28 @@ open class MemberActivity : AppCompatActivity() {
         click(UI.homeTab) {navigate("home")};click(UI.scheduleTab) {schedule()}
         click(UI.teamsTab) {navigate("teams")};click(UI.settingsTab) {toast("You are on Settings.")}
     }
-    private fun profileField(id: Int, label: String, value: String, hint: String="", kind: Int=InputType.TYPE_CLASS_TEXT): View {
-        val row=horizontal().apply {background=bg(Color.rgb(217,217,217),5);setPadding(dp(6),0,dp(6),0)}
-        row.add(text(label,12).apply {maxLines=1},100,40)
+    private fun profileField(
+        id: Int,
+        label: String,
+        value: String,
+        hint: String = "",
+        kind: Int = InputType.TYPE_CLASS_TEXT,
+        maxLength: Int = ValidationUtils.MAX_NAME_LENGTH
+    ): View {
+        val row = horizontal().apply { background = bg(Color.rgb(217, 217, 217), 5); setPadding(dp(6), 0, dp(6), 0) }
+        row.add(text(label, 12).apply { maxLines = 1 }, 100, 40)
         row.add(EditText(this).apply {
-            this.id=id;setText(value);this.hint=hint;inputType=kind;setSingleLine(true)
-            background=null;textSize=12f;includeFontPadding=false
-            gravity=Gravity.END or Gravity.CENTER_VERTICAL
-            setTextColor(Color.rgb(112,112,112));setHintTextColor(Color.GRAY)
-            setPadding(0,0,dp(3),0);isSaveEnabled=false
-        },0,40,1f)
-        if(id!=UI.profileEmail) row.add(Symbol(this,"arrow",Color.rgb(65,80,100)),14,20)
+            this.id = id; setText(value); this.hint = hint; inputType = kind; setSingleLine(true)
+            background = null; textSize = 12f; includeFontPadding = false
+            gravity = Gravity.END or Gravity.CENTER_VERTICAL
+            setTextColor(Color.rgb(112, 112, 112)); setHintTextColor(Color.GRAY)
+            setPadding(0, 0, dp(3), 0); isSaveEnabled = false
+            filters = arrayOf(InputFilter.LengthFilter(maxLength))
+            if (kind == InputType.TYPE_CLASS_PHONE) {
+                keyListener = android.text.method.DigitsKeyListener.getInstance("0123456789+")
+            }
+        }, 0, 40, 1f)
+        if (id != UI.profileEmail) row.add(Symbol(this, "arrow", Color.rgb(65, 80, 100)), 14, 20)
         return row
     }
     private fun preferenceRow(id: Int, label: String, values: List<String>, value: String): View {
@@ -1333,10 +1346,10 @@ open class MemberActivity : AppCompatActivity() {
         col.add(text("Ministry Member",12,Color.GRAY,centered=true));col.space(26)
         col.section(11).apply {
             add(text("Profile",15,Color.BLACK,true));space(12)
-            add(profileField(UI.profileName,"Full Name",fullName,hint="Add your full name"));space(8)
-            add(profileField(UI.profileUsername,"Username",displayName,hint="Add your username"));space(8)
-            add(profileField(UI.profilePhone,"Phone Number",preferences.getString(SessionManager.KEY_PHONE,"").orEmpty(),"Add your phone number",InputType.TYPE_CLASS_PHONE));space(8)
-            add(profileField(UI.profileEmail,"Email",preferences.getString(SessionManager.KEY_EMAIL,"").orEmpty(),kind=InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS));space(16)
+            add(profileField(UI.profileName,"Full Name",fullName,hint="Add your full name",maxLength=ValidationUtils.MAX_NAME_LENGTH));space(8)
+            add(profileField(UI.profileUsername,"Username",displayName,hint="Add your username",maxLength=ValidationUtils.MAX_USERNAME_LENGTH));space(8)
+            add(profileField(UI.profilePhone,"Phone Number",preferences.getString(SessionManager.KEY_PHONE,"").orEmpty(),"Add your phone number",InputType.TYPE_CLASS_PHONE,maxLength=ValidationUtils.MAX_PHONE_LENGTH));space(8)
+            add(profileField(UI.profileEmail,"Email",preferences.getString(SessionManager.KEY_EMAIL,"").orEmpty(),kind=InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS,maxLength=ValidationUtils.MAX_EMAIL_LENGTH));space(16)
             add(text("Preference",15,Color.BLACK,true));space(12)
             add(preferenceRow(UI.countrySpinner,"Country",listOf("Philippines","Singapore","United States"),preferences.getString(SessionManager.KEY_COUNTRY,"Philippines").orEmpty()));space(8)
             add(preferenceRow(UI.languageSpinner,"Language",listOf("English","Filipino"),preferences.getString(SessionManager.KEY_LANGUAGE,"English").orEmpty()));space(48)
@@ -1357,14 +1370,18 @@ open class MemberActivity : AppCompatActivity() {
         }
         click(UI.saveProfileButton) {
             val name=input(UI.profileName);val username=input(UI.profileUsername);val email=input(UI.profileEmail)
+            val phone=input(UI.profilePhone)
+            val phoneStr = phone.text.toString().trim()
+            val emailStr = email.text.toString().trim()
             when {
                 name.text.isBlank()->invalid(name,"Enter your full name.")
+                name.text.length > ValidationUtils.MAX_NAME_LENGTH -> invalid(name, "Full name must not exceed ${ValidationUtils.MAX_NAME_LENGTH} characters.")
                 username.text.isBlank()->invalid(username,"Enter your username.")
-                email.text.isNotBlank() && !Patterns.EMAIL_ADDRESS.matcher(email.text.toString().trim()).matches()->invalid(email,"Enter a valid email.")
+                username.text.length > ValidationUtils.MAX_USERNAME_LENGTH -> invalid(username, "Username must not exceed ${ValidationUtils.MAX_USERNAME_LENGTH} characters.")
+                phoneStr.isNotBlank() && !ValidationUtils.isValidPhilippinePhone(phoneStr) -> invalid(phone, "Enter a valid Philippine number (e.g. 09123456789 or +639123456789).")
+                emailStr.isNotBlank() && !Patterns.EMAIL_ADDRESS.matcher(emailStr).matches()->invalid(email,"Enter a valid email.")
                 else->{
                     fullName=name.text.toString().trim();displayName=username.text.toString().trim()
-                    val phoneStr = input(UI.profilePhone).text.toString().trim()
-                    val emailStr = email.text.toString().trim()
                     val countryStr = findViewById<Spinner>(UI.countrySpinner).selectedItem.toString()
                     val langStr = findViewById<Spinner>(UI.languageSpinner).selectedItem.toString()
                     val uid = preferences.getString(SessionManager.KEY_USER_ID, "").orEmpty()
@@ -1434,9 +1451,24 @@ open class MemberActivity : AppCompatActivity() {
     private fun getActiveRoster(): List<TeamMember> {
         val currentCode = preferences.getString("teamCode", "").orEmpty()
             .ifBlank { FirestoreManager.findCodeByTeamName(teamName).orEmpty() }
+        val memberRolesMap = try {
+            org.json.JSONObject(preferences.getString(SessionManager.KEY_MEMBER_ROLES, "{}").orEmpty())
+        } catch (_: Exception) { org.json.JSONObject() }
+
+        fun applyOverrides(list: List<TeamMember>): List<TeamMember> {
+            return list.map { m ->
+                val override = memberRolesMap.optString(m.uid).ifBlank {
+                    memberRolesMap.optString(m.fullName).ifBlank {
+                        memberRolesMap.optString(m.username)
+                    }
+                }
+                if (override.isNotBlank()) m.copy(ministryRole = override) else m
+            }
+        }
+
         val cached = TeamRepository.getCachedRoster(currentCode)
-        if (cached.isNotEmpty()) return cached
-        if (teamRoster.isNotEmpty()) return teamRoster
+        if (cached.isNotEmpty()) return applyOverrides(cached)
+        if (teamRoster.isNotEmpty()) return applyOverrides(teamRoster)
         val currentUid = preferences.getString("userId", "").orEmpty()
         val currentName = fullName.ifBlank { displayName }
         val userRole = preferences.getString("role", "Member").orEmpty()
@@ -1451,9 +1483,9 @@ open class MemberActivity : AppCompatActivity() {
                 ministryRole = ministry,
                 teamCode = currentCode
             )
-            return listOf(self)
+            return applyOverrides(listOf(self))
         }
-        return ministryMembers.map { (name, role, badge) ->
+        return applyOverrides(ministryMembers.map { (name, role, badge) ->
             TeamMember(
                 uid = name.lowercase().replace(" ", "_"),
                 fullName = name,
@@ -1463,7 +1495,7 @@ open class MemberActivity : AppCompatActivity() {
                 ministryRole = role,
                 teamCode = currentCode
             )
-        }
+        })
     }
 
     private fun refreshTeamRoster() {
@@ -2016,7 +2048,7 @@ open class MemberActivity : AppCompatActivity() {
                 val roster = getActiveRoster()
                 val baseRoles = listOf("Worship Leader", "Keyboardist", "Bassist", "Vocalist", "Guitarist")
                 val activeRoles = (baseRoles + roster.map { it.ministryRole }).filter { it.isNotBlank() }.distinct()
-                val roles = expandedRole?.let { listOf(it) } ?: activeRoles
+                val roles = activeRoles
                 roles.forEach { role ->
                     val people = roster.filter { it.ministryRole.equals(role, ignoreCase = true) }
                     col.add(horizontal().apply {
@@ -2036,12 +2068,10 @@ open class MemberActivity : AppCompatActivity() {
                     if (expandedRole == role) {
                         col.space(8)
                         val members = vertical().apply {
-                            setPadding(dp(20), dp(28), dp(20), dp(24))
-                            minimumHeight = dp(maxOf(1, people.size) * 68 + 52)
+                            setPadding(dp(20), dp(20), dp(20), dp(20))
                             background = GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,
                                 intArrayOf(Color.rgb(21, 28, 50), Color.rgb(57, 79, 150))).apply {
-                                cornerRadii = floatArrayOf(dp(40).toFloat(), dp(40).toFloat(),
-                                    dp(40).toFloat(), dp(40).toFloat(), 0f, 0f, 0f, 0f)
+                                cornerRadius = dp(16).toFloat()
                             }
                             if (people.isEmpty()) {
                                 add(text("No members assigned to this role yet", 13, Color.LTGRAY))
@@ -2050,17 +2080,18 @@ open class MemberActivity : AppCompatActivity() {
                                     val memberName = member.fullName.ifBlank { member.username.ifBlank { "Member" } }
                                     add(horizontal().apply {
                                         setPadding(0, dp(8), 0, dp(8))
-                                        add(memberAvatar(), 52, 52)
+                                        add(memberAvatar(), 44, 44)
                                         add(vertical().apply {
-                                            setPadding(dp(16), 0, 0, 0)
-                                            add(text(memberName, 14, Color.WHITE, true)); space(4)
-                                            add(text(role, 12, Color.WHITE))
+                                            setPadding(dp(14), 0, 0, 0)
+                                            add(text(memberName, 14, Color.WHITE, true)); space(2)
+                                            add(text(role, 12, Color.LTGRAY))
                                         }, 0, -2, 1f)
                                     })
                                 }
                             }
                         }
-                        col.add(members, -1, 0, 1f)
+                        col.add(members, -1, -2)
+                        col.space(12)
                     }
                 }
             }
