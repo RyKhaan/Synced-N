@@ -2,6 +2,7 @@ package com.example.syncedn.data.database
 
 import com.example.syncedn.data.model.TeamData
 import com.example.syncedn.data.model.TeamMember
+import com.example.syncedn.data.model.UnavailableRange
 import com.example.syncedn.data.model.UserProfile
 import com.google.firebase.firestore.FirebaseFirestore
 import androidx.core.content.edit
@@ -18,6 +19,7 @@ object TeamRepository {
     // In-memory cache for fast UI updates, offline fallback, and unit tests
     private val cachedRosters = java.util.concurrent.ConcurrentHashMap<String, MutableList<TeamMember>>()
     private val cachedRoles = java.util.concurrent.ConcurrentHashMap<String, MutableList<String>>()
+    private val cachedUserRanges = java.util.concurrent.ConcurrentHashMap<String, MutableList<UnavailableRange>>()
 
     /**
      * Clears all in-memory roster and role caches (primarily for unit tests).
@@ -26,6 +28,7 @@ object TeamRepository {
     fun clearCache() {
         cachedRosters.clear()
         cachedRoles.clear()
+        cachedUserRanges.clear()
     }
 
     /**
@@ -47,6 +50,10 @@ object TeamRepository {
                 list.add(member)
             }
             sortRoster(list)
+        }
+
+        if (member.unavailableRanges.isNotEmpty()) {
+            cachedUserRanges[member.uid] = java.util.Collections.synchronizedList(member.unavailableRanges.toMutableList())
         }
 
         if (preferences != null) {
@@ -109,6 +116,7 @@ object TeamRepository {
 
                 val memberName = fullName.ifBlank { username }
                 if (memberName.isNotBlank()) {
+                    val ranges = getMemberUnavailableRanges(uid, preferences)
                     val member = TeamMember(
                         uid = uid,
                         fullName = memberName,
@@ -116,7 +124,8 @@ object TeamRepository {
                         email = emailLower,
                         role = role,
                         ministryRole = ministry,
-                        teamCode = code
+                        teamCode = code,
+                        unavailableRanges = ranges
                     )
                     cacheMember(member)
                 }
@@ -445,5 +454,185 @@ object TeamRepository {
      */
     fun leaveTeam(uid: String, onComplete: (Result<Unit>) -> Unit = {}) {
         removeMemberFromTeam(uid, onComplete)
+    }
+
+    /**
+     * Retrieves the unavailable date ranges for a user from in-memory cache, SharedPreferences, or roster cache.
+     */
+    @Synchronized
+    fun getMemberUnavailableRanges(
+        uid: String,
+        preferences: android.content.SharedPreferences? = null
+    ): List<UnavailableRange> {
+        if (uid.isBlank()) return emptyList()
+        val fromMemory = cachedUserRanges[uid]
+        if (!fromMemory.isNullOrEmpty()) {
+            return synchronized(fromMemory) { fromMemory.toList() }
+        }
+
+        if (preferences != null) {
+            val jsonStr = preferences.getString("user_unavailable_ranges_$uid", null)
+            if (!jsonStr.isNullOrBlank()) {
+                try {
+                    val array = org.json.JSONArray(jsonStr)
+                    val list = mutableListOf<UnavailableRange>()
+                    for (i in 0 until array.length()) {
+                        val obj = array.getJSONObject(i)
+                        val map = mutableMapOf<String, Any?>()
+                        val keys = obj.keys()
+                        while (keys.hasNext()) {
+                            val k = keys.next()
+                            map[k] = obj.opt(k)
+                        }
+                        list.add(UnavailableRange.fromMap(map))
+                    }
+                    cachedUserRanges[uid] = java.util.Collections.synchronizedList(list)
+                    return list
+                } catch (_: Throwable) {}
+            }
+        }
+
+        for ((_, roster) in cachedRosters) {
+            val found = synchronized(roster) { roster.find { it.uid == uid } }
+            if (found != null && found.unavailableRanges.isNotEmpty()) {
+                cachedUserRanges[uid] = java.util.Collections.synchronizedList(found.unavailableRanges.toMutableList())
+                return found.unavailableRanges
+            }
+        }
+        return emptyList()
+    }
+
+    /**
+     * Adds an unavailable date range for a member in local cache, preferences, and Firestore (/users/{uid}).
+     */
+    @Synchronized
+    fun addUnavailableRange(
+        uid: String,
+        range: UnavailableRange,
+        preferences: android.content.SharedPreferences? = null,
+        onComplete: (Result<Unit>) -> Unit = {}
+    ) {
+        if (uid.isBlank()) {
+            onComplete(Result.failure(IllegalArgumentException("UID cannot be blank")))
+            return
+        }
+
+        val current = getMemberUnavailableRanges(uid, preferences).toMutableList()
+        current.removeAll { it.id == range.id }
+        current.add(range)
+        cachedUserRanges[uid] = java.util.Collections.synchronizedList(current)
+
+        for ((_, roster) in cachedRosters) {
+            synchronized(roster) {
+                val idx = roster.indexOfFirst { it.uid == uid }
+                if (idx >= 0) {
+                    roster[idx] = roster[idx].copy(unavailableRanges = current)
+                }
+            }
+        }
+
+        if (preferences != null) {
+            try {
+                val array = org.json.JSONArray()
+                current.forEach { item ->
+                    val obj = org.json.JSONObject()
+                    item.toMap().forEach { (k, v) -> obj.put(k, v) }
+                    array.put(obj)
+                }
+                preferences.edit().putString("user_unavailable_ranges_$uid", array.toString()).apply()
+            } catch (_: Throwable) {}
+        }
+
+        try {
+            val serialized = current.map { it.toMap() }
+            db.collection(USERS_COLLECTION)
+                .document(uid)
+                .set(mapOf("unavailableRanges" to serialized), com.google.firebase.firestore.SetOptions.merge())
+                .addOnSuccessListener { onComplete(Result.success(Unit)) }
+                .addOnFailureListener { onComplete(Result.failure(it)) }
+        } catch (e: Exception) {
+            onComplete(Result.failure(e))
+        }
+    }
+
+    /**
+     * Removes an unavailable date range for a member from local cache, preferences, and Firestore.
+     */
+    @Synchronized
+    fun removeUnavailableRange(
+        uid: String,
+        rangeId: String,
+        preferences: android.content.SharedPreferences? = null,
+        onComplete: (Result<Unit>) -> Unit = {}
+    ) {
+        if (uid.isBlank() || rangeId.isBlank()) {
+            onComplete(Result.success(Unit))
+            return
+        }
+
+        val current = getMemberUnavailableRanges(uid, preferences).toMutableList()
+        current.removeAll { it.id == rangeId }
+        cachedUserRanges[uid] = java.util.Collections.synchronizedList(current)
+
+        for ((_, roster) in cachedRosters) {
+            synchronized(roster) {
+                val idx = roster.indexOfFirst { it.uid == uid }
+                if (idx >= 0) {
+                    roster[idx] = roster[idx].copy(unavailableRanges = current)
+                }
+            }
+        }
+
+        if (preferences != null) {
+            try {
+                val array = org.json.JSONArray()
+                current.forEach { item ->
+                    val obj = org.json.JSONObject()
+                    item.toMap().forEach { (k, v) -> obj.put(k, v) }
+                    array.put(obj)
+                }
+                preferences.edit().putString("user_unavailable_ranges_$uid", array.toString()).apply()
+            } catch (_: Throwable) {}
+        }
+
+        try {
+            val serialized = current.map { it.toMap() }
+            db.collection(USERS_COLLECTION)
+                .document(uid)
+                .set(mapOf("unavailableRanges" to serialized), com.google.firebase.firestore.SetOptions.merge())
+                .addOnSuccessListener { onComplete(Result.success(Unit)) }
+                .addOnFailureListener { onComplete(Result.failure(it)) }
+        } catch (e: Exception) {
+            onComplete(Result.failure(e))
+        }
+    }
+
+    /**
+     * Checks team availability for a given target date.
+     * Returns Pair(AvailableMembers, UnavailableMembersWithReason).
+     */
+    @Synchronized
+    fun checkTeamAvailabilityForDate(
+        teamCode: String,
+        targetDate: String
+    ): Pair<List<TeamMember>, List<Pair<TeamMember, String>>> {
+        val roster = getCachedRoster(teamCode)
+        val available = mutableListOf<TeamMember>()
+        val unavailable = mutableListOf<Pair<TeamMember, String>>()
+
+        for (member in roster) {
+            val ranges = if (member.unavailableRanges.isNotEmpty()) {
+                member.unavailableRanges
+            } else {
+                getMemberUnavailableRanges(member.uid)
+            }
+            val conflict = ranges.find { it.includes(targetDate) }
+            if (conflict != null) {
+                unavailable.add(Pair(member, conflict.reason.ifBlank { "Unavailable" }))
+            } else {
+                available.add(member)
+            }
+        }
+        return Pair(available, unavailable)
     }
 }

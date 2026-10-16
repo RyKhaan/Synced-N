@@ -768,6 +768,28 @@ class ExampleUnitTest {
         assertEquals("r1", restoredMember.unavailableRanges[0].id)
     }
 
+    @Test
+    fun testTeamAvailabilityCalculationForDate() {
+        val repo = com.example.syncedn.data.database.TeamRepository
+        val range1 = com.example.syncedn.data.model.UnavailableRange("r1", "2026-10-20", "2026-10-25", "Family reunion")
+        val member1 = com.example.syncedn.data.model.TeamMember(uid = "m1", fullName = "Alice", teamCode = "TEAM99", unavailableRanges = listOf(range1))
+        val member2 = com.example.syncedn.data.model.TeamMember(uid = "m2", fullName = "Bob", teamCode = "TEAM99", unavailableRanges = emptyList())
+
+        repo.cacheMember(member1)
+        repo.cacheMember(member2)
+
+        val (available, unavailable) = repo.checkTeamAvailabilityForDate("TEAM99", "2026-10-22")
+        assertEquals(1, available.size)
+        assertEquals("Bob", available[0].fullName)
+        assertEquals(1, unavailable.size)
+        assertEquals("Alice", unavailable[0].first.fullName)
+        assertEquals("Family reunion", unavailable[0].second)
+
+        val (allAvailable, noneUnavailable) = repo.checkTeamAvailabilityForDate("TEAM99", "2026-10-30")
+        assertEquals(2, allAvailable.size)
+        assertEquals(0, noneUnavailable.size)
+    }
+
     private class FakePreferences : android.content.SharedPreferences {
         private val map = mutableMapOf<String, Any?>()
 
