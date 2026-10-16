@@ -4,6 +4,7 @@ import com.example.syncedn.data.model.TeamData
 import com.example.syncedn.data.model.TeamMember
 import com.example.syncedn.data.model.UserProfile
 import com.google.firebase.firestore.FirebaseFirestore
+import androidx.core.content.edit
 
 /**
  * Repository managing team roster, user profiles, and ministry role operations in Cloud Firestore.
@@ -63,7 +64,10 @@ object TeamRepository {
                     preferences.edit().putString("email_username_$emailLower", member.username).apply()
                 }
                 if (member.ministryRole.isNotBlank()) {
-                    preferences.edit().putString("email_ministry_$emailLower", member.ministryRole).apply()
+                    preferences.edit()
+                        .putString("email_ministry_$emailLower", member.ministryRole)
+                        .putString("user_ministry_${member.uid}", member.ministryRole)
+                        .apply()
                 }
             }
         }
@@ -79,14 +83,30 @@ object TeamRepository {
         if (code.isBlank()) return
 
         val all = preferences.all
+        val memberRolesMap = try {
+            org.json.JSONObject(preferences.getString(com.example.syncedn.data.auth.SessionManager.KEY_MEMBER_ROLES, "{}").orEmpty())
+        } catch (_: Throwable) { null }
+
         for ((key, value) in all) {
             if (key.startsWith("email_code_") && value is String && value.trim().uppercase() == code) {
                 val emailLower = key.removePrefix("email_code_").trim().lowercase()
                 val role = (all["email_role_$emailLower"] as? String).orEmpty().ifBlank { "Member" }
                 val fullName = (all["email_fullname_$emailLower"] as? String).orEmpty()
                 val username = (all["email_username_$emailLower"] as? String).orEmpty().ifBlank { emailLower.substringBefore("@") }
-                val ministry = (all["email_ministry_$emailLower"] as? String).orEmpty()
                 val uid = (all["email_uid_$emailLower"] as? String).orEmpty().ifBlank { "user_${emailLower.hashCode()}" }
+
+                val assignedRole = memberRolesMap?.let { map ->
+                    val byUid = if (uid.isNotBlank()) map.optString(uid, "") else ""
+                    val byEmail = if (emailLower.isNotBlank()) map.optString(emailLower, "") else ""
+                    val byFull = if (fullName.isNotBlank()) map.optString(fullName, "") else ""
+                    val byUser = if (username.isNotBlank()) map.optString(username, "") else ""
+                    byUid.ifBlank { byEmail }.ifBlank { byFull }.ifBlank { byUser }
+                }?.takeIf { it.isNotBlank() }
+
+                val ministry = assignedRole
+                    ?: (all["email_ministry_$emailLower"] as? String).orEmpty().takeIf { it.isNotBlank() }
+                    ?: (all["user_ministry_$uid"] as? String).orEmpty()
+
                 val memberName = fullName.ifBlank { username }
                 if (memberName.isNotBlank()) {
                     val member = TeamMember(
@@ -225,25 +245,31 @@ object TeamRepository {
 
     /**
      * Updates a member's ministry role (e.g. "Vocalist", "Guitarist") in Firestore and local cache.
-     * Matches in-memory and Firestore records by memberUid and/or memberName (fullName / username).
+     * Matches in-memory and Firestore records by memberUid, memberEmail, and/or memberName (fullName / username).
+     * Automatically persists to SharedPreferences if preferences is provided.
      */
     @Synchronized
     fun updateMemberMinistryRole(
         memberUid: String,
         newRole: String,
         memberName: String = "",
+        memberEmail: String = "",
+        preferences: android.content.SharedPreferences? = null,
         onComplete: (Result<Unit>) -> Unit = {}
     ) {
-        if (memberUid.isBlank() && memberName.isBlank()) {
+        if (memberUid.isBlank() && memberName.isBlank() && memberEmail.isBlank()) {
             onComplete(Result.success(Unit))
             return
         }
+
+        val cleanEmail = memberEmail.trim().lowercase()
 
         // Update in-memory caches
         for ((_, roster) in cachedRosters) {
             synchronized(roster) {
                 val member = roster.find {
                     (memberUid.isNotBlank() && it.uid == memberUid) ||
+                    (cleanEmail.isNotBlank() && it.email.equals(cleanEmail, ignoreCase = true)) ||
                     (memberName.isNotBlank() && (it.fullName.equals(memberName, true) || it.username.equals(memberName, true)))
                 }
                 if (member != null) {
@@ -254,14 +280,59 @@ object TeamRepository {
             }
         }
 
+        if (preferences != null) {
+            preferences.edit {
+                if (cleanEmail.isNotBlank()) putString("email_ministry_$cleanEmail", newRole)
+                if (memberUid.isNotBlank()) putString("user_ministry_$memberUid", newRole)
+                try {
+                    val map = org.json.JSONObject(preferences.getString(com.example.syncedn.data.auth.SessionManager.KEY_MEMBER_ROLES, "{}").orEmpty())
+                    if (cleanEmail.isNotBlank()) map.put(cleanEmail, newRole)
+                    if (memberUid.isNotBlank()) map.put(memberUid, newRole)
+                    if (memberName.isNotBlank()) map.put(memberName, newRole)
+                    putString(com.example.syncedn.data.auth.SessionManager.KEY_MEMBER_ROLES, map.toString())
+                } catch (_: Throwable) {}
+            }
+        }
+
         try {
-            if (memberUid.isNotBlank()) {
+            if (cleanEmail.isNotBlank()) {
+                db.collection(USERS_COLLECTION)
+                    .whereEqualTo("email", cleanEmail)
+                    .get()
+                    .addOnSuccessListener { snap ->
+                        if (snap != null && !snap.isEmpty) {
+                            for (doc in snap.documents) {
+                                doc.reference.update("ministryRole", newRole)
+                            }
+                            onComplete(Result.success(Unit))
+                        } else if (memberUid.isNotBlank() && !memberUid.startsWith("user_")) {
+                            db.collection(USERS_COLLECTION)
+                                .document(memberUid)
+                                .update("ministryRole", newRole)
+                                .addOnSuccessListener { onComplete(Result.success(Unit)) }
+                                .addOnFailureListener { onComplete(Result.failure(it)) }
+                        } else {
+                            onComplete(Result.success(Unit))
+                        }
+                    }
+                    .addOnFailureListener {
+                        if (memberUid.isNotBlank() && !memberUid.startsWith("user_")) {
+                            db.collection(USERS_COLLECTION)
+                                .document(memberUid)
+                                .update("ministryRole", newRole)
+                                .addOnSuccessListener { onComplete(Result.success(Unit)) }
+                                .addOnFailureListener { onComplete(Result.failure(it)) }
+                        } else {
+                            onComplete(Result.failure(it))
+                        }
+                    }
+            } else if (memberUid.isNotBlank() && !memberUid.startsWith("user_")) {
                 db.collection(USERS_COLLECTION)
                     .document(memberUid)
                     .update("ministryRole", newRole)
                     .addOnSuccessListener { onComplete(Result.success(Unit)) }
                     .addOnFailureListener { onComplete(Result.failure(it)) }
-            } else {
+            } else if (memberName.isNotBlank()) {
                 db.collection(USERS_COLLECTION)
                     .whereEqualTo("fullName", memberName)
                     .get()
@@ -272,6 +343,8 @@ object TeamRepository {
                         onComplete(Result.success(Unit))
                     }
                     .addOnFailureListener { onComplete(Result.failure(it)) }
+            } else {
+                onComplete(Result.success(Unit))
             }
         } catch (e: Exception) {
             onComplete(Result.failure(e))

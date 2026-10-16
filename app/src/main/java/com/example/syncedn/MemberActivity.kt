@@ -1511,9 +1511,14 @@ open class MemberActivity : AppCompatActivity() {
 
         fun applyOverrides(list: List<TeamMember>): List<TeamMember> {
             return list.map { m ->
+                val emailLower = m.email.trim().lowercase()
                 val override = memberRolesMap.optString(m.uid).ifBlank {
-                    memberRolesMap.optString(m.fullName).ifBlank {
-                        memberRolesMap.optString(m.username)
+                    memberRolesMap.optString(emailLower).ifBlank {
+                        memberRolesMap.optString(m.fullName).ifBlank {
+                            memberRolesMap.optString(m.username).ifBlank {
+                                preferences.getString("email_ministry_$emailLower", "").orEmpty()
+                            }
+                        }
                     }
                 }
                 if (override.isNotBlank()) m.copy(ministryRole = override) else m

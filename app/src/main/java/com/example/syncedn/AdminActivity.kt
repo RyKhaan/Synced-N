@@ -268,6 +268,8 @@ class AdminActivity : AppCompatActivity() {
         fullName = preferences.getString(SessionManager.KEY_FULL_NAME, "").orEmpty()
         profileReturnPage = savedInstanceState?.getString("profileReturnPage") ?: "settings"
         roleMember = savedInstanceState?.getString("roleMember") ?: "Angelo Daniel"
+        roleMemberUid = savedInstanceState?.getString("roleMemberUid").orEmpty()
+        roleMemberEmail = savedInstanceState?.getString("roleMemberEmail").orEmpty()
         teamName = savedInstanceState?.getString("teamName") ?: preferences.getString("teamName", "").orEmpty()
         val uid = preferences.getString("userId", "").orEmpty()
         val emailLower = preferences.getString("email", "").orEmpty().trim().lowercase()
@@ -343,6 +345,8 @@ class AdminActivity : AppCompatActivity() {
         outState.putString("page", page)
         outState.putString("profileReturnPage", profileReturnPage)
         outState.putString("roleMember", roleMember)
+        outState.putString("roleMemberUid", roleMemberUid)
+        outState.putString("roleMemberEmail", roleMemberEmail)
         outState.putString("displayName", displayName)
         outState.putString("teamName", teamName)
         outState.putString("successFlow", successFlow)
@@ -1549,6 +1553,7 @@ class AdminActivity : AppCompatActivity() {
     private var activeServiceIndex = -1
     private var roleMember = "Angelo Daniel"
     private var roleMemberUid = ""
+    private var roleMemberEmail = ""
     private var teamRoster: List<TeamMember> = emptyList()
 
     private fun getActiveRoster(): List<TeamMember> {
@@ -1560,9 +1565,14 @@ class AdminActivity : AppCompatActivity() {
 
         fun applyOverrides(list: List<TeamMember>): List<TeamMember> {
             return list.map { m ->
+                val emailLower = m.email.trim().lowercase()
                 val override = memberRolesMap.optString(m.uid).ifBlank {
-                    memberRolesMap.optString(m.fullName).ifBlank {
-                        memberRolesMap.optString(m.username)
+                    memberRolesMap.optString(emailLower).ifBlank {
+                        memberRolesMap.optString(m.fullName).ifBlank {
+                            memberRolesMap.optString(m.username).ifBlank {
+                                preferences.getString("email_ministry_$emailLower", "").orEmpty()
+                            }
+                        }
                     }
                 }
                 if (override.isNotBlank()) m.copy(ministryRole = override) else m
@@ -2127,12 +2137,19 @@ class AdminActivity : AppCompatActivity() {
         val radios = android.widget.RadioGroup(this)
         val activeMember = getActiveRoster().find {
             (roleMemberUid.isNotBlank() && it.uid == roleMemberUid) ||
+            (roleMemberEmail.isNotBlank() && it.email.equals(roleMemberEmail, ignoreCase = true)) ||
             it.fullName == roleMember || it.username == roleMember
         }
         val currentSavedRole = activeMember?.ministryRole?.takeIf { it.isNotBlank() }
             ?: try {
-                org.json.JSONObject(preferences.getString(SessionManager.KEY_MEMBER_ROLES, "{}").orEmpty())
-                    .optString(roleMember, "")
+                val map = org.json.JSONObject(preferences.getString(SessionManager.KEY_MEMBER_ROLES, "{}").orEmpty())
+                map.optString(roleMemberUid).ifBlank {
+                    map.optString(roleMemberEmail.lowercase()).ifBlank {
+                        map.optString(activeMember?.email.orEmpty().lowercase()).ifBlank {
+                            map.optString(roleMember)
+                        }
+                    }
+                }
             } catch (_: Exception) { "" }
         val defaultRole = currentSavedRole.ifBlank { leaderRoles.firstOrNull() ?: "Vocalist" }
 
@@ -2148,24 +2165,45 @@ class AdminActivity : AppCompatActivity() {
             if (selected == null) toast("Choose a role.")
             else {
                 val selectedRole = selected.text.toString()
+                val targetMember = getActiveRoster().find {
+                    (roleMemberUid.isNotBlank() && it.uid == roleMemberUid) ||
+                    (roleMemberEmail.isNotBlank() && it.email.equals(roleMemberEmail, ignoreCase = true)) ||
+                    it.fullName == roleMember || it.username == roleMember
+                }
+                val targetUid = roleMemberUid.ifBlank { targetMember?.uid.orEmpty() }
+                val targetEmail = roleMemberEmail.ifBlank { targetMember?.email.orEmpty() }.trim().lowercase()
+
                 val map = try {
                     org.json.JSONObject(preferences.getString(SessionManager.KEY_MEMBER_ROLES, "{}").orEmpty())
                 } catch (_: Exception) { org.json.JSONObject() }
                 map.put(roleMember, selectedRole)
                 if (roleMemberUid.isNotBlank()) map.put(roleMemberUid, selectedRole)
-                preferences.edit().putString(SessionManager.KEY_MEMBER_ROLES, map.toString()).apply()
+                if (targetUid.isNotBlank()) map.put(targetUid, selectedRole)
+                if (targetEmail.isNotBlank()) map.put(targetEmail, selectedRole)
+                if (targetMember?.fullName.orEmpty().isNotBlank()) map.put(targetMember!!.fullName, selectedRole)
+                if (targetMember?.username.orEmpty().isNotBlank()) map.put(targetMember!!.username, selectedRole)
 
-                val targetUid = roleMemberUid.ifBlank {
-                    getActiveRoster().find { it.fullName == roleMember || it.username == roleMember }?.uid.orEmpty()
+                preferences.edit {
+                    putString(SessionManager.KEY_MEMBER_ROLES, map.toString())
+                    if (targetEmail.isNotBlank()) putString("email_ministry_$targetEmail", selectedRole)
+                    if (targetUid.isNotBlank()) putString("user_ministry_$targetUid", selectedRole)
                 }
 
                 teamRoster = teamRoster.map {
-                    if ((targetUid.isNotBlank() && it.uid == targetUid) || it.fullName == roleMember || it.username == roleMember) {
+                    if ((targetUid.isNotBlank() && it.uid == targetUid) ||
+                        (targetEmail.isNotBlank() && it.email.equals(targetEmail, ignoreCase = true)) ||
+                        it.fullName == roleMember || it.username == roleMember) {
                         it.copy(ministryRole = selectedRole)
                     } else it
                 }
 
-                TeamRepository.updateMemberMinistryRole(targetUid, selectedRole, memberName = roleMember) {
+                TeamRepository.updateMemberMinistryRole(
+                    memberUid = targetUid,
+                    newRole = selectedRole,
+                    memberName = roleMember,
+                    memberEmail = targetEmail,
+                    preferences = preferences
+                ) {
                     runOnUiThread { refreshTeamRoster() }
                 }
                 toast("Member role updated to $selectedRole"); navigate("teams")
@@ -2696,6 +2734,7 @@ class AdminActivity : AppCompatActivity() {
                     col.add(memberRow(name, role, badge, if (isLeader) ({
                         roleMember = name
                         roleMemberUid = member.uid
+                        roleMemberEmail = member.email
                         navigate("roleEdit")
                     }) else null))
                     col.space(4)
@@ -2741,6 +2780,7 @@ class AdminActivity : AppCompatActivity() {
                                         if (isLeader) setOnClickListener {
                                             roleMember = memberName
                                             roleMemberUid = member.uid
+                                            roleMemberEmail = member.email
                                             navigate("roleEdit")
                                         }
                                         add(memberAvatar(), 44, 44)

@@ -50,7 +50,8 @@ object SessionManager {
             remove(KEY_TEAM_CODE)
             remove(KEY_PHOTO_URI)
             remove(KEY_LEFT_TEAM)
-            remove(KEY_MEMBER_ROLES)
+            // Note: KEY_MEMBER_ROLES is team configuration assigned by the leader,
+            // preserved across user sessions on the device.
         }
     }
 
@@ -87,8 +88,23 @@ object SessionManager {
         val language = profile?.language?.takeIf { it.isNotBlank() }
             ?: preferences.getString("email_language_$emailLower", "").orEmpty().ifBlank { "English" }
 
-        val ministryRole = profile?.ministryRole?.takeIf { it.isNotBlank() }
-            ?: preferences.getString("email_ministry_$emailLower", "").orEmpty()
+        val memberRolesMap = try {
+            org.json.JSONObject(preferences.getString(KEY_MEMBER_ROLES, "{}").orEmpty())
+        } catch (_: Throwable) { null }
+
+        val assignedRole = memberRolesMap?.let { map ->
+            val byUid = if (uid.isNotBlank()) map.optString(uid, "") else ""
+            val byEmail = if (emailLower.isNotBlank()) map.optString(emailLower, "") else ""
+            val byFull = if (fullName.isNotBlank()) map.optString(fullName, "") else ""
+            val byUser = if (username.isNotBlank()) map.optString(username, "") else ""
+            byUid.ifBlank { byEmail }.ifBlank { byFull }.ifBlank { byUser }
+        }?.takeIf { it.isNotBlank() }
+
+        val ministryRole = assignedRole
+            ?: preferences.getString("email_ministry_$emailLower", "").orEmpty().takeIf { it.isNotBlank() }
+            ?: (if (uid.isNotBlank()) preferences.getString("user_ministry_$uid", "").orEmpty().takeIf { it.isNotBlank() } else null)
+            ?: profile?.ministryRole?.takeIf { it.isNotBlank() }
+            ?: ""
 
         preferences.edit {
             putString(KEY_USER_ID, uid)
@@ -111,6 +127,9 @@ object SessionManager {
                 putString("email_country_$emailLower", country)
                 putString("email_language_$emailLower", language)
                 if (ministryRole.isNotBlank()) putString("email_ministry_$emailLower", ministryRole)
+            }
+            if (uid.isNotBlank() && ministryRole.isNotBlank()) {
+                putString("user_ministry_$uid", ministryRole)
             }
         }
     }

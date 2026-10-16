@@ -622,6 +622,107 @@ class ExampleUnitTest {
         assertEquals("Vocalist", member.ministryRole)
     }
 
+    @Test
+    fun testMinistryRolePersistenceAcrossLogoutAndMemberLogin() {
+        val repo = com.example.syncedn.data.database.TeamRepository
+        repo.clearCache()
+
+        val mockPrefs = FakePreferences().apply {
+            edit()
+                // Leader session initially logged in
+                .putString(com.example.syncedn.data.auth.SessionManager.KEY_USER_ID, "uid_leader_1")
+                .putString(com.example.syncedn.data.auth.SessionManager.KEY_EMAIL, "ryanlloydgenturo@gmail.com")
+                .putString(com.example.syncedn.data.auth.SessionManager.KEY_ROLE, "Leader")
+                .putString(com.example.syncedn.data.auth.SessionManager.KEY_TEAM_CODE, "MVBRWM")
+                .putString(com.example.syncedn.data.auth.SessionManager.KEY_TEAM_NAME, "Ryan")
+                // Seed Leader and Member records
+                .putString("email_code_ryanlloydgenturo@gmail.com", "MVBRWM")
+                .putString("email_role_ryanlloydgenturo@gmail.com", "Leader")
+                .putString("email_fullname_ryanlloydgenturo@gmail.com", "Ryan Lloyd Genturo")
+                .putString("email_ministry_ryanlloydgenturo@gmail.com", "Worship Leader")
+                .putString("email_uid_ryanlloydgenturo@gmail.com", "uid_leader_1")
+                .putString("email_code_rlgenturo@gmail.com", "MVBRWM")
+                .putString("email_role_rlgenturo@gmail.com", "Member")
+                .putString("email_fullname_rlgenturo@gmail.com", "RL Gents")
+                .putString("email_username_rlgenturo@gmail.com", "RL")
+                .putString("email_ministry_rlgenturo@gmail.com", "Vocalist")
+                .putString("email_uid_rlgenturo@gmail.com", "uid_member_2")
+                .apply()
+        }
+
+        // Leader syncs roster and sees RL Gents as Vocalist
+        repo.syncFromPreferences(mockPrefs, "MVBRWM")
+        var roster = repo.getCachedRoster("MVBRWM")
+        assertEquals(2, roster.size)
+        assertEquals("Vocalist", roster.first { it.email == "rlgenturo@gmail.com" }.ministryRole)
+
+        // 1. Leader changes role from "Vocalist" to "Bassist" in roleEditView
+        repo.updateMemberMinistryRole(
+            memberUid = "uid_member_2",
+            newRole = "Bassist",
+            memberName = "RL Gents",
+            memberEmail = "rlgenturo@gmail.com",
+            preferences = mockPrefs
+        )
+
+        // Verify local persistence was updated
+        assertEquals("Bassist", mockPrefs.getString("email_ministry_rlgenturo@gmail.com", ""))
+        assertEquals("Bassist", mockPrefs.getString("user_ministry_uid_member_2", ""))
+        val memberRolesMapStr = mockPrefs.getString(com.example.syncedn.data.auth.SessionManager.KEY_MEMBER_ROLES, "{}").orEmpty()
+        assertTrue(memberRolesMapStr.contains("Bassist"))
+
+        // 2. Leader logs out (clearSession)
+        com.example.syncedn.data.auth.SessionManager.clearSession(mockPrefs)
+        // Verify KEY_MEMBER_ROLES and email_ministry are preserved across logout!
+        assertEquals("Bassist", mockPrefs.getString("email_ministry_rlgenturo@gmail.com", ""))
+        assertTrue(mockPrefs.getString(com.example.syncedn.data.auth.SessionManager.KEY_MEMBER_ROLES, "{}").orEmpty().contains("Bassist"))
+
+        // 3. Member logs in
+        val memberProfile = com.example.syncedn.data.model.UserProfile(
+            uid = "uid_member_2",
+            username = "RL",
+            email = "rlgenturo@gmail.com",
+            role = "Member",
+            teamName = "Ryan",
+            teamCode = "MVBRWM",
+            fullName = "RL Gents",
+            ministryRole = "Vocalist" // Even if Firestore doc had stale "Vocalist"
+        )
+        com.example.syncedn.data.auth.SessionManager.saveSessionProfile(mockPrefs, memberProfile, fallbackUsername = "RL", fallbackEmail = "rlgenturo@gmail.com")
+
+        // Member's active session MUST adopt the Leader-assigned "Bassist" role
+        assertEquals("Bassist", mockPrefs.getString(com.example.syncedn.data.auth.SessionManager.KEY_MINISTRY_ROLE, ""))
+        assertEquals("Bassist", mockPrefs.getString("email_ministry_rlgenturo@gmail.com", ""))
+
+        // Member caches state
+        val selfMember = com.example.syncedn.data.model.TeamMember(
+            uid = "uid_member_2",
+            fullName = "RL Gents",
+            username = "RL",
+            email = "rlgenturo@gmail.com",
+            role = "Member",
+            ministryRole = mockPrefs.getString(com.example.syncedn.data.auth.SessionManager.KEY_MINISTRY_ROLE, "").orEmpty(),
+            teamCode = "MVBRWM"
+        )
+        repo.cacheMember(selfMember, mockPrefs)
+
+        // 4. Member logs out
+        com.example.syncedn.data.auth.SessionManager.clearSession(mockPrefs)
+
+        // 5. Leader logs back in
+        repo.syncFromPreferences(mockPrefs, "MVBRWM")
+        roster = repo.getCachedRoster("MVBRWM")
+        val rlGents = roster.first { it.email == "rlgenturo@gmail.com" }
+        assertEquals("Bassist", rlGents.ministryRole)
+
+        // Role tab groupings: Bassist has 1 member, Vocalist has 0 members
+        val bassists = roster.filter { it.ministryRole.equals("Bassist", ignoreCase = true) }
+        val vocalists = roster.filter { it.ministryRole.equals("Vocalist", ignoreCase = true) }
+        assertEquals(1, bassists.size)
+        assertEquals(0, vocalists.size)
+        assertEquals("RL Gents", bassists[0].fullName)
+    }
+
     private class FakePreferences : android.content.SharedPreferences {
         private val map = mutableMapOf<String, Any?>()
 
