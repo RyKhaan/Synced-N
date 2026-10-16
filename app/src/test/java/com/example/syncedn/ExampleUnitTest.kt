@@ -295,4 +295,56 @@ class ExampleUnitTest {
         assertEquals("Synced Worship", finalTeam)
         assertEquals(generatedCode, finalCode)
     }
+
+    @Test
+    fun testUserProfileExtendedFieldsSerialization() {
+        val profile = com.example.syncedn.data.model.UserProfile(
+            uid = "uid123",
+            username = "johndoe",
+            email = "john@example.com",
+            fullName = "John Doe",
+            phone = "09123456789",
+            country = "Philippines",
+            language = "English",
+            ministryRole = "Guitarist"
+        )
+        val map = profile.toMap()
+        val restored = com.example.syncedn.data.model.UserProfile.fromMap(map)
+        assertEquals("John Doe", restored.fullName)
+        assertEquals("09123456789", restored.phone)
+        assertEquals("Guitarist", restored.ministryRole)
+        assertEquals("Philippines", restored.country)
+        assertEquals("English", restored.language)
+    }
+
+    @Test
+    fun testTeamMemberAndTeamDataMapping() {
+        val member = com.example.syncedn.data.model.TeamMember(
+            uid = "u1",
+            fullName = "Jane Doe",
+            username = "janed",
+            email = "jane@example.com",
+            role = "Member",
+            ministryRole = "Vocalist",
+            teamCode = "TEST01",
+            joinedAt = 1000L
+        )
+        val map = member.toMap()
+        val restored = com.example.syncedn.data.model.TeamMember.fromMap(map)
+        assertEquals("Jane Doe", restored.fullName)
+        assertEquals("Vocalist", restored.ministryRole)
+        assertEquals("TEST01", restored.teamCode)
+
+        val team = com.example.syncedn.data.model.TeamData(
+            teamCode = "TEST01",
+            teamName = "Praise Ministry",
+            leaderUid = "leader-1",
+            leaderName = "Leader Ryan"
+        )
+        val teamMap = team.toMap()
+        val restoredTeam = com.example.syncedn.data.model.TeamData.fromMap(teamMap)
+        assertEquals("Praise Ministry", restoredTeam.teamName)
+        assertTrue(restoredTeam.roles.contains("Worship Leader"))
+        assertTrue(restoredTeam.roles.contains("Vocalist"))
+    }
 }

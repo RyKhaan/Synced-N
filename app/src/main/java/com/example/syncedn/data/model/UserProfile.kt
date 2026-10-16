@@ -12,6 +12,11 @@ data class UserProfile(
     val teamName: String = "",
     val teamCode: String = "",
     val resetPassword: String = "",
+    val fullName: String = "",
+    val phone: String = "",
+    val country: String = "Philippines",
+    val language: String = "English",
+    val ministryRole: String = "",
     val createdAt: Long = System.currentTimeMillis()
 ) {
     fun toMap(): Map<String, Any> = mapOf(
@@ -22,6 +27,11 @@ data class UserProfile(
         "teamName" to teamName,
         "teamCode" to teamCode,
         "resetPassword" to resetPassword,
+        "fullName" to fullName,
+        "phone" to phone,
+        "country" to country,
+        "language" to language,
+        "ministryRole" to ministryRole,
         "createdAt" to createdAt
     )
 
@@ -35,6 +45,11 @@ data class UserProfile(
                 teamName = map["teamName"] as? String ?: "",
                 teamCode = map["teamCode"] as? String ?: "",
                 resetPassword = map["resetPassword"] as? String ?: "",
+                fullName = map["fullName"] as? String ?: "",
+                phone = map["phone"] as? String ?: "",
+                country = map["country"] as? String ?: "Philippines",
+                language = map["language"] as? String ?: "English",
+                ministryRole = map["ministryRole"] as? String ?: "",
                 createdAt = (map["createdAt"] as? Number)?.toLong() ?: System.currentTimeMillis()
             )
         }
