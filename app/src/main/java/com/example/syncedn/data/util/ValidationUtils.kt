@@ -14,6 +14,8 @@ object ValidationUtils {
     const val MAX_USERNAME_LENGTH = 30
     const val MAX_PHONE_LENGTH = 13
     const val MAX_EMAIL_LENGTH = 60
+    const val MAX_TITLE_LENGTH = 100
+    const val MAX_REASON_LENGTH = 100
 
     /**
      * Checks if a phone number is a valid Philippine mobile number.
