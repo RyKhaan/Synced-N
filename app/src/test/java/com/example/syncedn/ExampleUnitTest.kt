@@ -723,6 +723,51 @@ class ExampleUnitTest {
         assertEquals("RL Gents", bassists[0].fullName)
     }
 
+    @Test
+    fun testUnavailableRangeSerializationAndIncludes() {
+        val range = com.example.syncedn.data.model.UnavailableRange(
+            id = "range1",
+            startDate = "2026-10-20",
+            endDate = "2026-10-25",
+            reason = "Out of town",
+            createdAt = 1000L
+        )
+        val map = range.toMap()
+        val restored = com.example.syncedn.data.model.UnavailableRange.fromMap(map)
+        assertEquals("range1", restored.id)
+        assertEquals("2026-10-20", restored.startDate)
+        assertEquals("2026-10-25", restored.endDate)
+        assertEquals("Out of town", restored.reason)
+
+        assertTrue(range.includes("2026-10-20"))
+        assertTrue(range.includes("2026-10-22"))
+        assertTrue(range.includes("2026-10-25"))
+        assertFalse(range.includes("2026-10-19"))
+        assertFalse(range.includes("2026-10-26"))
+    }
+
+    @Test
+    fun testUserProfileAndTeamMemberWithUnavailableRanges() {
+        val range = com.example.syncedn.data.model.UnavailableRange("r1", "2026-11-01", "2026-11-05", "Medical leave")
+        val profile = com.example.syncedn.data.model.UserProfile(
+            uid = "u1",
+            fullName = "Test User",
+            unavailableRanges = listOf(range)
+        )
+        val restoredProfile = com.example.syncedn.data.model.UserProfile.fromMap(profile.toMap())
+        assertEquals(1, restoredProfile.unavailableRanges.size)
+        assertEquals("Medical leave", restoredProfile.unavailableRanges[0].reason)
+
+        val member = com.example.syncedn.data.model.TeamMember(
+            uid = "u1",
+            fullName = "Test Member",
+            unavailableRanges = listOf(range)
+        )
+        val restoredMember = com.example.syncedn.data.model.TeamMember.fromMap(member.toMap())
+        assertEquals(1, restoredMember.unavailableRanges.size)
+        assertEquals("r1", restoredMember.unavailableRanges[0].id)
+    }
+
     private class FakePreferences : android.content.SharedPreferences {
         private val map = mutableMapOf<String, Any?>()
 
