@@ -964,8 +964,10 @@ class AdminActivity : AppCompatActivity() {
                 val brandHeight = (280f * scale).toInt()
                 val brandPosition = brandedTop.layoutParams as FrameLayout.LayoutParams
                 if (brandPosition.width != brandWidth || brandPosition.height != brandHeight || brandPosition.topMargin != photoTop.toInt()) {
-                    brandedTop.layoutParams = brandPosition.apply {
-                        width = brandWidth; height = brandHeight; topMargin = photoTop.toInt()
+                    brandedTop.post {
+                        brandedTop.layoutParams = brandPosition.apply {
+                            width = brandWidth; height = brandHeight; topMargin = photoTop.toInt()
+                        }
                     }
                 }
             }

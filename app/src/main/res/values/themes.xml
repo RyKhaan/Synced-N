@@ -3,6 +3,7 @@
 
     <style name="Theme.MyApplication" parent="Theme.AppCompat.Light.NoActionBar">
         <item name="alertDialogTheme">@style/Theme.MyApplication.Dialog</item>
+        <item name="android:windowBackground">@android:color/white</item>
     </style>
 
     <style name="Theme.MyApplication.Dialog" parent="Theme.AppCompat.Light.Dialog.Alert" />
