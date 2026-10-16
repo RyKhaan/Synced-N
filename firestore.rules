@@ -1,0 +1,369 @@
+rules_version = '2';
+
+// ===============================================================
+// Assumed Data Model
+// ===============================================================
+//
+// Collection: users
+// Document ID: {userId} (matches Firebase Auth UID)
+// Fields:
+//   - uid: string (required, 1-128 chars, matches auth.uid on create, immutable) - Firebase Auth UID
+//   - username: string (optional, 0-50 chars) - Display username
+//   - email: string (optional, valid email format, 0-100 chars) - User's email address
+//   - role: string (optional, allowed: "Leader", "Member", "") - Team authorization level
+//   - teamName: string (optional, 0-100 chars) - Name of the church ministry team
+//   - teamCode: string (optional, 0-20 chars) - 6-character team join code
+//   - resetPassword: string (optional, 0-128 chars) - Synced temporary reset password
+//   - fullName: string (optional, 0-100 chars) - Full name of the team member
+//   - phone: string (optional, 0-25 chars) - Contact telephone number
+//   - country: string (optional, 0-50 chars) - Country of residence
+//   - language: string (optional, 0-50 chars) - Preferred interface language
+//   - ministryRole: string (optional, 0-50 chars) - Assigned ministry role (e.g., "Worship Leader", "Guitarist")
+//   - createdAt: number | timestamp (optional, >= 0, immutable) - Account creation timestamp
+//
+// Collection: teams
+// Document ID: {teamCode} (6 uppercase alphanumeric characters, matches teamCode field)
+// Fields:
+//   - teamCode: string (required, 6 chars, uppercase alphanumeric, matches doc ID, immutable) - Team invite code
+//   - teamName: string (required, 1-100 chars) - Ministry team name
+//   - leaderUid: string (required, 1-128 chars, matches creator auth.uid, immutable) - Leader's Firebase Auth UID
+//   - leaderName: string (required, 1-100 chars) - Full name or display name of the team leader
+//   - roles: list (optional, max 50 items) - Customized ministry roles list for the team
+//   - createdAt: number | timestamp (optional, >= 0, immutable) - Team creation timestamp
+//
+// Collection: password_resets
+// Document ID: {email} (User's normalized email address)
+// Fields:
+//   - email: string (required, valid email format, 1-100 chars, matches doc ID) - Recipient email
+//   - password: string (required, 6-128 chars) - Updated password after Brevo OTP verification
+//   - updatedAt: number | timestamp (optional, >= 0) - Timestamp when password was reset
+//
+// ===============================================================
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ===============================================================
+    // Standard Helper Functions
+    // ===============================================================
+
+    // Check if the user is authenticated
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    // Check if user owns the resource (for user-owned documents by path ID)
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    // Check if user is owner based on document's uid field
+    function isDocOwner() {
+      return isAuthenticated() && resource != null && 'uid' in resource.data && request.auth.uid == resource.data.uid;
+    }
+
+    // Verify UID hasn't been tampered with on create
+    function uidUnchanged() {
+      return !('uid' in request.resource.data) ||
+        request.resource.data.uid == request.auth.uid;
+    }
+
+    // Ensure uid field is not modified on update
+    function uidNotModified() {
+      return !('uid' in request.resource.data) ||
+        (resource != null && 'uid' in resource.data && request.resource.data.uid == resource.data.uid);
+    }
+
+    // Validate required fields exist in a given map
+    function hasRequiredFields(data, fields) {
+      return data.keys().hasAll(fields);
+    }
+
+    // Validate that the document contains only the allowed fields
+    function hasOnlyAllowedFields(data, fields) {
+      return data.keys().hasOnly(fields);
+    }
+
+    // Validate string length within bounds
+    function validStringLength(str, minLen, maxLen) {
+      return str is string &&
+        str.size() >= minLen &&
+        str.size() <= maxLen;
+    }
+
+    // Validate URL format (must start with https:// or http://)
+    function isValidUrl(url) {
+      return url is string &&
+        (url.matches('^https://.*') || url.matches('^http://.*'));
+    }
+
+    // Validate email format
+    function isValidEmail(email) {
+      return email is string &&
+        email.matches('^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$');
+    }
+
+    // Validate ISO 8601 date string format
+    function isValidDateString(dateStr) {
+      return dateStr is string &&
+        dateStr.matches('^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}.*Z?$');
+    }
+
+    // Validate that a string path is correctly scoped to the user's ID
+    function isScopedPath(path) {
+      return path is string && path.matches('^users/' + request.auth.uid + '/.*');
+    }
+
+    // Validate that a number is positive
+    function isPositive(num) {
+      return num is number && num > 0;
+    }
+
+    // Validate that a list is a list and enforces size limits
+    function isValidList(lst, maxSize) {
+      return lst is list && lst.size() <= maxSize;
+    }
+
+    // Validate optional string field
+    function isValidOptionalString(data, field, minLen, maxLen) {
+      return !(field in data) ||
+        (data[field] is string && data[field].size() >= minLen && data[field].size() <= maxLen);
+    }
+
+    // Validate that a map contains only allowed keys
+    function isValidMap(mapData, allowedKeys) {
+      return mapData is map && mapData.keys().hasOnly(allowedKeys);
+    }
+
+    // Validate that immutable fields have not been altered on update
+    function areImmutableFieldsUnchanged(fields) {
+      return resource != null && !request.resource.data.diff(resource.data).affectedKeys().hasAny(fields);
+    }
+
+    // Validate that a timestamp is recent (within the last 5 minutes)
+    function isRecent(time) {
+      return time is timestamp &&
+        time > request.time - duration.value(5, 'm') &&
+        time <= request.time;
+    }
+
+    // ===============================================================
+    // Application-Specific Authorization Helpers
+    // ===============================================================
+
+    // Check if the authenticated user is the designated Leader of a given team
+    function isLeaderOfTeam(teamCode) {
+      return isAuthenticated() && teamCode != null && teamCode != '' && (
+        (request.auth.token != null &&
+         'role' in request.auth.token && request.auth.token.role == 'Leader' &&
+         'teamCode' in request.auth.token && request.auth.token.teamCode == teamCode) ||
+        (exists(/databases/$(database)/documents/teams/$(teamCode)) &&
+         get(/databases/$(database)/documents/teams/$(teamCode)).data.leaderUid == request.auth.uid)
+      );
+    }
+
+    // Check if the authenticated user belongs to the same team
+    function isSameTeam(teamCode) {
+      return isAuthenticated() && teamCode != null && teamCode != '' && (
+        (request.auth.token != null &&
+         'teamCode' in request.auth.token &&
+         request.auth.token.teamCode == teamCode) ||
+        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.teamCode == teamCode)
+      );
+    }
+
+    // Check if the authenticated user is reading/querying their own profile
+    function isUserSelf(userId, data) {
+      return isAuthenticated() && (
+        request.auth.uid == userId ||
+        (request.auth.token != null &&
+         'email' in request.auth.token &&
+         'email' in data &&
+         data.email != '' &&
+         request.auth.token.email == data.email)
+      );
+    }
+
+    // ===============================================================
+    // Domain Validators
+    // ===============================================================
+
+    // Strict validator for /users/{userId} documents
+    function isValidUser(data, userId) {
+      return hasOnlyAllowedFields(data, [
+        'uid', 'username', 'email', 'role', 'teamName', 'teamCode',
+        'resetPassword', 'fullName', 'phone', 'country', 'language',
+        'ministryRole', 'createdAt'
+      ]) &&
+      hasRequiredFields(data, ['uid']) &&
+      data.uid is string &&
+      data.uid == userId &&
+      data.uid.size() > 0 &&
+      data.uid.size() <= 128 &&
+      (!('username' in data) || (data.username is string && data.username.size() <= 50)) &&
+      (!('email' in data) || (data.email is string && data.email.size() <= 100 && (data.email == '' || isValidEmail(data.email)))) &&
+      (!('role' in data) || (data.role is string && data.role in ['Leader', 'Member', ''])) &&
+      (!('teamName' in data) || (data.teamName is string && data.teamName.size() <= 100)) &&
+      (!('teamCode' in data) || (data.teamCode is string && data.teamCode.size() <= 20)) &&
+      (!('resetPassword' in data) || (data.resetPassword is string && data.resetPassword.size() <= 128)) &&
+      (!('fullName' in data) || (data.fullName is string && data.fullName.size() <= 100)) &&
+      (!('phone' in data) || (data.phone is string && data.phone.size() <= 25)) &&
+      (!('country' in data) || (data.country is string && data.country.size() <= 50)) &&
+      (!('language' in data) || (data.language is string && data.language.size() <= 50)) &&
+      (!('ministryRole' in data) || (data.ministryRole is string && data.ministryRole.size() <= 50)) &&
+      (!('createdAt' in data) || (data.createdAt is number && data.createdAt >= 0) || (data.createdAt is timestamp));
+    }
+
+    // Strict validator for /teams/{teamCode} documents
+    function isValidTeam(data, teamCode) {
+      return hasOnlyAllowedFields(data, [
+        'teamCode', 'teamName', 'leaderUid', 'leaderName', 'roles', 'createdAt'
+      ]) &&
+      hasRequiredFields(data, ['teamCode', 'teamName', 'leaderUid', 'leaderName']) &&
+      data.teamCode is string &&
+      data.teamCode == teamCode &&
+      data.teamCode.matches('^[A-Z0-9]{6}$') &&
+      data.teamName is string &&
+      data.teamName.size() > 0 &&
+      data.teamName.size() <= 100 &&
+      data.leaderUid is string &&
+      data.leaderUid.size() > 0 &&
+      data.leaderUid.size() <= 128 &&
+      data.leaderName is string &&
+      data.leaderName.size() > 0 &&
+      data.leaderName.size() <= 100 &&
+      (!('roles' in data) || (data.roles is list && data.roles.size() <= 50)) &&
+      (!('createdAt' in data) || (data.createdAt is number && data.createdAt >= 0) || (data.createdAt is timestamp));
+    }
+
+    // Strict validator for /password_resets/{email} documents
+    function isValidPasswordReset(data, docEmail) {
+      return hasOnlyAllowedFields(data, ['email', 'password', 'updatedAt']) &&
+      hasRequiredFields(data, ['email', 'password']) &&
+      data.email is string &&
+      data.email == docEmail &&
+      isValidEmail(data.email) &&
+      data.email.size() <= 100 &&
+      data.password is string &&
+      data.password.size() >= 6 &&
+      data.password.size() <= 128 &&
+      (!('updatedAt' in data) || (data.updatedAt is number && data.updatedAt >= 0) || (data.updatedAt is timestamp));
+    }
+
+    // ===============================================================
+    // Collection Match Rules
+    // ===============================================================
+
+    // Root default deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // ---------------------------------------------------------------
+    // 1. Users Collection (/users/{userId})
+    // ---------------------------------------------------------------
+    match /users/{userId} {
+      // Authenticated users can read member profiles and query team rosters.
+      allow read: if isAuthenticated();
+
+      // Authenticated users can create their own profile.
+      // Privilege escalation protection: setting role to "Leader" requires verified
+      // leadership of the referenced team document or auth custom claims.
+      allow create: if isOwner(userId) &&
+                       isValidUser(request.resource.data, userId) &&
+                       request.resource.data.uid == request.auth.uid &&
+                       (
+                         request.resource.data.role != 'Leader' ||
+                         isLeaderOfTeam(request.resource.data.teamCode) ||
+                         request.resource.data.teamCode == ''
+                       );
+
+      // Updates are permitted in two authorized contexts:
+      // A) Self-update by the document owner (with UID/createdAt immutability and role escalation checks)
+      // B) Ministry role assignment or team membership reset by the verified Team Leader of the member's team
+      allow update: if (
+        // Context A: User updates their own profile
+        (
+          isOwner(userId) &&
+          isValidUser(request.resource.data, userId) &&
+          request.resource.data.uid == resource.data.uid &&
+          (!('createdAt' in resource.data) || !('createdAt' in request.resource.data) || request.resource.data.createdAt == resource.data.createdAt) &&
+          (
+            request.resource.data.role == resource.data.role ||
+            request.resource.data.role != 'Leader' ||
+            isLeaderOfTeam(request.resource.data.teamCode) ||
+            request.resource.data.teamCode == ''
+          )
+        ) ||
+        // Context B: Team Leader updates a member's ministryRole or resets team membership
+        (
+          isLeaderOfTeam(resource.data.teamCode) &&
+          isValidUser(request.resource.data, userId) &&
+          request.resource.data.uid == resource.data.uid &&
+          (!('createdAt' in resource.data) || !('createdAt' in request.resource.data) || request.resource.data.createdAt == resource.data.createdAt) &&
+          (
+            // Subcase 1: Leader assigns/updates member's ministryRole only
+            (
+              request.resource.data.diff(resource.data).affectedKeys().hasOnly(['ministryRole'])
+            ) ||
+            // Subcase 2: Leader removes member from team (resets team fields to defaults)
+            (
+              request.resource.data.diff(resource.data).affectedKeys().hasOnly(['teamCode', 'teamName', 'ministryRole', 'role']) &&
+              request.resource.data.teamCode == '' &&
+              request.resource.data.teamName == '' &&
+              request.resource.data.ministryRole == '' &&
+              request.resource.data.role == 'Member'
+            )
+          )
+        )
+      );
+
+      // Document deletion is denied to preserve historical church attendance/membership integrity
+      allow delete: if false;
+    }
+
+    // ---------------------------------------------------------------
+    // 2. Teams Collection (/teams/{teamCode})
+    // ---------------------------------------------------------------
+    match /teams/{teamCode} {
+      // Any authenticated user can read team details by code (needed for join verification)
+      allow read: if isAuthenticated();
+
+      // Any authenticated user can create a team where they are the designated leader
+      allow create: if isAuthenticated() &&
+                       isValidTeam(request.resource.data, teamCode) &&
+                       request.resource.data.teamCode == teamCode &&
+                       request.resource.data.leaderUid == request.auth.uid;
+
+      // Only the verified team leader can update team details or custom roles.
+      // teamCode, leaderUid, and createdAt are strictly immutable.
+      allow update: if isAuthenticated() &&
+                       resource.data.leaderUid == request.auth.uid &&
+                       isValidTeam(request.resource.data, teamCode) &&
+                       areImmutableFieldsUnchanged(['teamCode', 'leaderUid', 'createdAt']);
+
+      // Deletion of team records is disallowed to prevent accidental data loss
+      allow delete: if false;
+    }
+
+    // ---------------------------------------------------------------
+    // 3. Password Resets Collection (/password_resets/{email})
+    // ---------------------------------------------------------------
+    match /password_resets/{email} {
+      // Single-document fetch permitted by valid recipient email for the reset/login flow.
+      // Listing or collection-level querying is strictly disallowed to prevent credential enumeration.
+      allow get: if email != null &&
+                    email.size() <= 100 &&
+                    isValidEmail(email);
+      allow list: if false;
+
+      // Allow write (create / update) for password reset records following verified Brevo OTP requests
+      allow create: if isValidPasswordReset(request.resource.data, email);
+      allow update: if isValidPasswordReset(request.resource.data, email);
+
+      // Deletion is disallowed
+      allow delete: if false;
+    }
+  }
+}
