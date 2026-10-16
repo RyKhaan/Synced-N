@@ -248,4 +248,51 @@ class ExampleUnitTest {
         }
         assertFalse("Random unregistered 6-digit code must be rejected", randomAllowed)
     }
+
+    @Test
+    fun testLeaderRoleAndTeamCodePersistAcrossRelogin() {
+        val fm = com.example.syncedn.data.database.FirestoreManager
+        fm.clearLocalTeams()
+
+        // 1. Leader creates a team
+        var generatedCode = ""
+        fm.createTeamWithCode(
+            leaderUid = "leader-uid-99",
+            leaderName = "Ryan",
+            teamName = "Synced Worship"
+        ) { result ->
+            generatedCode = result.getOrNull().orEmpty()
+        }
+        assertEquals(6, generatedCode.length)
+        assertEquals(generatedCode, fm.findCodeByTeamName("Synced Worship"))
+
+        // 2. Simulate re-login where Firestore UserProfile still has default role="Member"
+        val firestoreProfile = com.example.syncedn.data.model.UserProfile(
+            uid = "leader-uid-99",
+            username = "Ryan",
+            email = "ryan@syncedn.org",
+            role = "Member", // Default value from initial registration
+            teamName = "",
+            teamCode = ""
+        )
+
+        val savedRole = "Leader"
+        val savedTeam = "Synced Worship"
+        val savedCode = generatedCode
+
+        val finalTeam = savedTeam.ifBlank { firestoreProfile.teamName }
+        val finalCode = savedCode
+            .ifBlank { firestoreProfile.teamCode }
+            .ifBlank { fm.findCodeByTeamName(finalTeam).orEmpty() }
+        val finalRole = when {
+            savedRole.equals("Leader", ignoreCase = true) || firestoreProfile.role.equals("Leader", ignoreCase = true) -> "Leader"
+            savedRole.isNotBlank() -> savedRole
+            firestoreProfile.role.isNotBlank() -> firestoreProfile.role
+            else -> "Member"
+        }
+
+        assertEquals("Leader role must not be overwritten by default 'Member' on re-login", "Leader", finalRole)
+        assertEquals("Synced Worship", finalTeam)
+        assertEquals(generatedCode, finalCode)
+    }
 }

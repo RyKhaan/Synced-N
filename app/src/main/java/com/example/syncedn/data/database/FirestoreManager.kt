@@ -48,8 +48,9 @@ object FirestoreManager {
         val completed = java.util.concurrent.atomic.AtomicBoolean(false)
         fun finishOnce(profile: UserProfile?) {
             if (completed.compareAndSet(false, true)) {
-                val cachedRoleTeam = localUserRoleTeam[uid]
-                val merged = if (profile != null && cachedRoleTeam != null && profile.teamName.isBlank()) {
+                val emailKey = profile?.email?.trim()?.lowercase().orEmpty()
+                val cachedRoleTeam = localUserRoleTeam[uid] ?: localUserRoleTeamByEmail[emailKey]
+                val merged = if (profile != null && cachedRoleTeam != null) {
                     profile.copy(
                         role = cachedRoleTeam.first,
                         teamName = cachedRoleTeam.second,
@@ -122,6 +123,7 @@ object FirestoreManager {
     private const val TEAM_CODE_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
     private val localTeams = mutableMapOf<String, String>()
     private val localUserRoleTeam = mutableMapOf<String, Triple<String, String, String>>()
+    private val localUserRoleTeamByEmail = mutableMapOf<String, Triple<String, String, String>>()
 
     /**
      * Registers a team code and team name in the local in-memory registry.
@@ -143,10 +145,35 @@ object FirestoreManager {
     }
 
     /**
+     * Looks up a 6-character team code by team name in the local in-memory registry.
+     */
+    fun findCodeByTeamName(teamName: String): String? {
+        val cleanName = teamName.trim()
+        if (cleanName.isBlank()) return null
+        return localTeams.entries.firstOrNull { it.value.equals(cleanName, ignoreCase = true) }?.key
+    }
+
+    /**
+     * Registers a user's role, teamName, and teamCode in the in-memory cache by UID and/or email.
+     */
+    fun cacheUserRoleAndTeam(uid: String, email: String, role: String, teamName: String, teamCode: String) {
+        val entry = Triple(role, teamName, teamCode)
+        if (uid.isNotBlank()) {
+            localUserRoleTeam[uid] = entry
+        }
+        val cleanEmail = email.trim().lowercase()
+        if (cleanEmail.isNotBlank()) {
+            localUserRoleTeamByEmail[cleanEmail] = entry
+        }
+    }
+
+    /**
      * Clears local in-memory teams (used in unit tests).
      */
     fun clearLocalTeams() {
         localTeams.clear()
+        localUserRoleTeam.clear()
+        localUserRoleTeamByEmail.clear()
     }
 
     /**
@@ -182,9 +209,12 @@ object FirestoreManager {
             return
         }
 
-        var generatedCode = generateTeamCode()
-        while (localTeams.containsKey(generatedCode)) {
-            generatedCode = generateTeamCode()
+        val existingCode = findCodeByTeamName(cleanTeamName)
+        var generatedCode = existingCode ?: generateTeamCode()
+        if (existingCode == null) {
+            while (localTeams.containsKey(generatedCode)) {
+                generatedCode = generateTeamCode()
+            }
         }
         registerLocalTeam(generatedCode, cleanTeamName)
 
@@ -294,21 +324,37 @@ object FirestoreManager {
         role: String,
         teamName: String,
         teamCode: String = "",
+        email: String = "",
         onComplete: (Result<Unit>) -> Unit = {}
     ) {
+        cacheUserRoleAndTeam(uid, email, role, teamName, teamCode)
+        val updates = mutableMapOf<String, Any>(
+            "role" to role,
+            "teamName" to teamName
+        )
+        if (teamCode.isNotBlank()) {
+            updates["teamCode"] = teamCode
+        }
         if (uid.isNotBlank()) {
-            localUserRoleTeam[uid] = Triple(role, teamName, teamCode)
             try {
-                val updates = mutableMapOf<String, Any>(
-                    "role" to role,
-                    "teamName" to teamName
-                )
-                if (teamCode.isNotBlank()) {
-                    updates["teamCode"] = teamCode
-                }
                 db.collection(USERS_COLLECTION)
                     .document(uid)
                     .set(updates, com.google.firebase.firestore.SetOptions.merge())
+            } catch (_: Exception) {
+                // Synced in background
+            }
+        }
+        val cleanEmail = email.trim()
+        if (cleanEmail.isNotBlank()) {
+            try {
+                db.collection(USERS_COLLECTION)
+                    .whereEqualTo("email", cleanEmail)
+                    .get()
+                    .addOnSuccessListener { querySnap ->
+                        for (doc in querySnap.documents) {
+                            doc.reference.set(updates, com.google.firebase.firestore.SetOptions.merge())
+                        }
+                    }
             } catch (_: Exception) {
                 // Synced in background
             }
@@ -371,6 +417,21 @@ object FirestoreManager {
             return
         }
 
+        val completed = java.util.concurrent.atomic.AtomicBoolean(false)
+        fun finishOnce(result: Result<String?>) {
+            if (completed.compareAndSet(false, true)) {
+                onComplete(result)
+            }
+        }
+
+        try {
+            android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                finishOnce(Result.success(null))
+            }, 1500L)
+        } catch (_: Exception) {
+            // Ignored in unit tests
+        }
+
         try {
             db.collection(PASSWORD_RESETS_COLLECTION)
                 .document(cleanEmail)
@@ -378,16 +439,16 @@ object FirestoreManager {
                 .addOnSuccessListener { snapshot ->
                     if (snapshot != null && snapshot.exists()) {
                         val pass = snapshot.getString("password")
-                        onComplete(Result.success(pass))
+                        finishOnce(Result.success(pass))
                     } else {
-                        onComplete(Result.success(null))
+                        finishOnce(Result.success(null))
                     }
                 }
-                .addOnFailureListener { exception ->
-                    onComplete(Result.failure(exception))
+                .addOnFailureListener {
+                    finishOnce(Result.success(null))
                 }
-        } catch (e: Exception) {
-            onComplete(Result.failure(e))
+        } catch (_: Exception) {
+            finishOnce(Result.success(null))
         }
     }
 
@@ -401,6 +462,41 @@ object FirestoreManager {
             return
         }
 
+        val completed = java.util.concurrent.atomic.AtomicBoolean(false)
+        fun finishOnce(profile: UserProfile?) {
+            if (completed.compareAndSet(false, true)) {
+                val cached = localUserRoleTeamByEmail[cleanEmail.lowercase()]
+                    ?: profile?.uid?.let { localUserRoleTeam[it] }
+                val merged = if (profile != null && cached != null) {
+                    profile.copy(
+                        role = cached.first,
+                        teamName = cached.second,
+                        teamCode = cached.third
+                    )
+                } else if (profile == null && cached != null) {
+                    UserProfile(
+                        uid = "user_${cleanEmail.hashCode()}",
+                        username = cleanEmail.substringBefore("@"),
+                        email = cleanEmail,
+                        role = cached.first,
+                        teamName = cached.second,
+                        teamCode = cached.third
+                    )
+                } else {
+                    profile
+                }
+                onComplete(Result.success(merged))
+            }
+        }
+
+        try {
+            android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                finishOnce(null)
+            }, 2000L)
+        } catch (_: Exception) {
+            // Ignored in unit tests
+        }
+
         try {
             db.collection(USERS_COLLECTION)
                 .whereEqualTo("email", cleanEmail)
@@ -411,17 +507,17 @@ object FirestoreManager {
                         val doc = querySnap.documents[0]
                         val data = doc.data
                         if (data != null) {
-                            onComplete(Result.success(UserProfile.fromMap(data)))
+                            finishOnce(UserProfile.fromMap(data))
                             return@addOnSuccessListener
                         }
                     }
-                    onComplete(Result.success(null))
+                    finishOnce(null)
                 }
-                .addOnFailureListener { exception ->
-                    onComplete(Result.failure(exception))
+                .addOnFailureListener {
+                    finishOnce(null)
                 }
-        } catch (e: Exception) {
-            onComplete(Result.failure(e))
+        } catch (_: Exception) {
+            finishOnce(null)
         }
     }
 }

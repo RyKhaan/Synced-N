@@ -94,26 +94,24 @@ class AdminActivity : AppCompatActivity() {
                             if (authResult.isSuccess) {
                                 val profile = authResult.getOrNull()
                                 displayName = profile?.username ?: account.displayName ?: "Leader"
+                                val emailStr = account.email.orEmpty().trim()
                                 val uid = profile?.uid.orEmpty()
-                                val emailLower = account.email.orEmpty().trim().lowercase()
-                                val userRole = profile?.role.orEmpty()
-                                    .ifBlank { preferences.getString("user_role_$uid", "").orEmpty() }
-                                    .ifBlank { preferences.getString("email_role_$emailLower", "").orEmpty() }
-                                    .ifBlank { "Leader" }
-                                val userTeam = profile?.teamName.orEmpty()
-                                    .ifBlank { preferences.getString("user_team_$uid", "").orEmpty() }
-                                    .ifBlank { preferences.getString("email_team_$emailLower", "").orEmpty() }
-                                val userTeamCode = profile?.teamCode.orEmpty()
-                                    .ifBlank { preferences.getString("user_code_$uid", "").orEmpty() }
-                                    .ifBlank { preferences.getString("email_code_$emailLower", "").orEmpty() }
+                                val (userRole, userTeam, userTeamCode) = resolveUserTeamSession(profile, emailStr)
                                 teamName = userTeam
                                 preferences.edit {
                                     putString("username", displayName)
-                                    putString("email", account.email.orEmpty())
+                                    putString("email", emailStr)
                                     putString("userId", uid)
-                                    putString("role", userRole)
-                                    putString("teamName", userTeam)
-                                    putString("teamCode", userTeamCode)
+                                }
+                                if (userTeam.isNotBlank()) {
+                                    saveUserTeamState(userRole, userTeam, userTeamCode)
+                                    FirestoreManager.updateUserRoleAndTeam(uid, userRole, userTeam, userTeamCode, emailStr)
+                                } else {
+                                    preferences.edit {
+                                        putString("role", "")
+                                        putString("teamName", "")
+                                        putString("teamCode", "")
+                                    }
                                 }
                                 toast("Welcome, $displayName!")
                                 if (userTeam.isBlank()) {
@@ -153,12 +151,50 @@ class AdminActivity : AppCompatActivity() {
         }
     }
 
+    private fun resolveUserTeamSession(
+        profile: com.example.syncedn.data.model.UserProfile?,
+        email: String
+    ): Triple<String, String, String> {
+        syncLocalTeamsToMemory()
+        val uid = profile?.uid.orEmpty()
+        val emailLower = email.trim().lowercase()
+
+        val savedRole = preferences.getString("email_role_$emailLower", "").orEmpty()
+            .ifBlank { preferences.getString("user_role_$uid", "").orEmpty() }
+        val savedTeam = preferences.getString("email_team_$emailLower", "").orEmpty()
+            .ifBlank { preferences.getString("user_team_$uid", "").orEmpty() }
+        val savedCode = preferences.getString("email_code_$emailLower", "").orEmpty()
+            .ifBlank { preferences.getString("user_code_$uid", "").orEmpty() }
+
+        val remoteRole = profile?.role.orEmpty()
+        val remoteTeam = profile?.teamName.orEmpty()
+        val remoteCode = profile?.teamCode.orEmpty()
+
+        val finalTeam = savedTeam.ifBlank { remoteTeam }
+        val finalCode = savedCode
+            .ifBlank { remoteCode }
+            .ifBlank { preferences.getString("team_leader_code_${finalTeam.trim().lowercase()}", "").orEmpty() }
+            .ifBlank { FirestoreManager.findCodeByTeamName(finalTeam).orEmpty() }
+
+        val finalRole = when {
+            savedRole.equals("Leader", ignoreCase = true) || remoteRole.equals("Leader", ignoreCase = true) -> "Leader"
+            savedRole.isNotBlank() -> savedRole
+            finalTeam.isNotBlank() && preferences.getString("team_leader_email_${finalTeam.trim().lowercase()}", "") == emailLower -> "Leader"
+            remoteRole.isNotBlank() -> remoteRole
+            else -> "Leader"
+        }
+
+        return Triple(finalRole, finalTeam, finalCode)
+    }
+
     private fun saveUserTeamState(role: String, team: String, code: String) {
         val uid = preferences.getString("userId", "").orEmpty()
         val emailLower = preferences.getString("email", "").orEmpty().trim().lowercase()
+        val cleanTeamLower = team.trim().lowercase()
         if (code.isNotBlank() && team.isNotBlank()) {
             FirestoreManager.registerLocalTeam(code, team)
         }
+        FirestoreManager.cacheUserRoleAndTeam(uid, emailLower, role, team, code)
         preferences.edit {
             putBoolean("leftTeam", false)
             putString("role", role)
@@ -166,6 +202,10 @@ class AdminActivity : AppCompatActivity() {
             putString("teamCode", code)
             if (code.isNotBlank() && team.isNotBlank()) {
                 putString("team_registry_$code", team)
+                putString("team_leader_code_$cleanTeamLower", code)
+            }
+            if (role.equals("Leader", ignoreCase = true) && cleanTeamLower.isNotBlank() && emailLower.isNotBlank()) {
+                putString("team_leader_email_$cleanTeamLower", emailLower)
             }
             if (uid.isNotBlank()) {
                 putString("user_role_$uid", role)
@@ -209,6 +249,16 @@ class AdminActivity : AppCompatActivity() {
         profileReturnPage = savedInstanceState?.getString("profileReturnPage") ?: "settings"
         roleMember = savedInstanceState?.getString("roleMember") ?: "Angelo Daniel"
         teamName = savedInstanceState?.getString("teamName") ?: preferences.getString("teamName", "").orEmpty()
+        val uid = preferences.getString("userId", "").orEmpty()
+        val emailLower = preferences.getString("email", "").orEmpty().trim().lowercase()
+        val activeCode = preferences.getString("teamCode", "").orEmpty()
+            .ifBlank { preferences.getString("email_code_$emailLower", "").orEmpty() }
+            .ifBlank { preferences.getString("user_code_$uid", "").orEmpty() }
+            .ifBlank { preferences.getString("team_leader_code_${teamName.trim().lowercase()}", "").orEmpty() }
+            .ifBlank { FirestoreManager.findCodeByTeamName(teamName).orEmpty() }
+        if (teamName.isNotBlank()) {
+            saveUserTeamState("Leader", teamName, activeCode)
+        }
         successFlow = savedInstanceState?.getString("successFlow") ?: "register"
         savedInstanceState?.let { state ->
             scheduleFilter = state.getString("scheduleFilter") ?: "Upcoming"
@@ -327,6 +377,7 @@ class AdminActivity : AppCompatActivity() {
                     val createBtn = findViewById<Button>(UI.createTeamButton)
                     createBtn?.isEnabled = false
                     val uid = preferences.getString("userId", "").orEmpty()
+                    val emailStr = preferences.getString("email", "").orEmpty()
                     FirestoreManager.createTeamWithCode(uid, displayName, enteredTeamName) { result ->
                         runOnUiThread {
                             createBtn?.isEnabled = true
@@ -334,6 +385,7 @@ class AdminActivity : AppCompatActivity() {
                                 val generatedCode = result.getOrNull().orEmpty()
                                 teamName = enteredTeamName
                                 saveUserTeamState("Leader", enteredTeamName, generatedCode)
+                                FirestoreManager.updateUserRoleAndTeam(uid, "Leader", enteredTeamName, generatedCode, emailStr)
                                 try {
                                     val clipboard = getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager
                                     clipboard.setPrimaryClip(
@@ -370,7 +422,8 @@ class AdminActivity : AppCompatActivity() {
                                 val (validCode, foundTeamName) = result.getOrNull()!!
                                 teamName = foundTeamName
                                 val uid = preferences.getString("userId", "").orEmpty()
-                                FirestoreManager.updateUserRoleAndTeam(uid, "Member", foundTeamName, validCode)
+                                val emailStr = preferences.getString("email", "").orEmpty()
+                                FirestoreManager.updateUserRoleAndTeam(uid, "Member", foundTeamName, validCode, emailStr)
                                 saveUserTeamState("Member", foundTeamName, validCode)
                                 toast("Joined team: $foundTeamName")
                                 startActivity(Intent(this@AdminActivity, MemberActivity::class.java).putExtra("startPage", "home"))
@@ -447,26 +500,23 @@ class AdminActivity : AppCompatActivity() {
                             if (result.isSuccess) {
                                 val profile = result.getOrNull()
                                 val uid = profile?.uid.orEmpty()
-                                val emailLower = emailStr.lowercase()
                                 displayName = profile?.username?.ifBlank { emailStr.substringBefore("@") } ?: "Leader"
-                                val userRole = profile?.role.orEmpty()
-                                    .ifBlank { preferences.getString("user_role_$uid", "").orEmpty() }
-                                    .ifBlank { preferences.getString("email_role_$emailLower", "").orEmpty() }
-                                    .ifBlank { "Leader" }
-                                val userTeam = profile?.teamName.orEmpty()
-                                    .ifBlank { preferences.getString("user_team_$uid", "").orEmpty() }
-                                    .ifBlank { preferences.getString("email_team_$emailLower", "").orEmpty() }
-                                val userTeamCode = profile?.teamCode.orEmpty()
-                                    .ifBlank { preferences.getString("user_code_$uid", "").orEmpty() }
-                                    .ifBlank { preferences.getString("email_code_$emailLower", "").orEmpty() }
+                                val (userRole, userTeam, userTeamCode) = resolveUserTeamSession(profile, emailStr)
                                 teamName = userTeam
                                 preferences.edit {
                                     putString("username", displayName)
                                     putString("email", emailStr)
                                     putString("userId", uid)
-                                    putString("role", userRole)
-                                    putString("teamName", userTeam)
-                                    putString("teamCode", userTeamCode)
+                                }
+                                if (userTeam.isNotBlank()) {
+                                    saveUserTeamState(userRole, userTeam, userTeamCode)
+                                    FirestoreManager.updateUserRoleAndTeam(uid, userRole, userTeam, userTeamCode, emailStr)
+                                } else {
+                                    preferences.edit {
+                                        putString("role", "")
+                                        putString("teamName", "")
+                                        putString("teamCode", "")
+                                    }
                                 }
                                 toast("Welcome, $displayName!")
                                 if (userTeam.isBlank()) {
@@ -1322,7 +1372,7 @@ class AdminActivity : AppCompatActivity() {
         avatar.addView(camera,FrameLayout.LayoutParams(dp(24),dp(24),Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply {leftMargin=dp(48);bottomMargin=dp(2)})
         col.add(avatar,-1,82);col.space(10)
         col.add(text(fullName, 14, Color.BLACK, bold = true, centered = true)); col.space(3)
-        col.add(text("Ministry Member",12,Color.GRAY,centered=true));col.space(26)
+        col.add(text("Ministry Leader",12,Color.GRAY,centered=true));col.space(26)
         col.section(11).apply {
             add(text("Profile",15,Color.BLACK,true));space(12)
             add(profileField(UI.profileName,"Full Name",fullName));space(8)
@@ -2331,12 +2381,15 @@ class AdminActivity : AppCompatActivity() {
             isFocusable = true
         }, 40, 48)
         row.add(image("team_header_badge", "Team badge"), 56, 56)
+        val currentCode = preferences.getString("teamCode", "").orEmpty()
+            .ifBlank { FirestoreManager.findCodeByTeamName(teamName).orEmpty() }
+        val subtitleText = if (currentCode.isNotBlank()) "Music Ministry • Code: $currentCode" else "Music Ministry"
         row.add(vertical().apply {
             setPadding(dp(12), 0, dp(8), 0)
             add(text(teamName.ifBlank { "Worship Team" }, 14, Color.WHITE, true).apply {
                 maxLines = 2; ellipsize = android.text.TextUtils.TruncateAt.END
             })
-            space(4); add(text("Music Ministry", 11, Color.LTGRAY))
+            space(4); add(text(subtitleText, 11, Color.LTGRAY))
         }, 0, -2, 1f)
         row.add(teamLogo(), 76, 64)
         addView(row, FrameLayout.LayoutParams(-1, dp(64)).apply {
@@ -2519,7 +2572,17 @@ class AdminActivity : AppCompatActivity() {
             setPadding(dp(10), 0, dp(10), 0)
         }, -1, 32); col.space(20)
         if (isLeader) {
-            val activeCode = preferences.getString("teamCode", "").orEmpty().ifBlank { "Generating..." }
+            val emailLower = preferences.getString("email", "").orEmpty().trim().lowercase()
+            val uid = preferences.getString("userId", "").orEmpty()
+            val activeCode = preferences.getString("teamCode", "").orEmpty()
+                .ifBlank { preferences.getString("email_code_$emailLower", "").orEmpty() }
+                .ifBlank { preferences.getString("user_code_$uid", "").orEmpty() }
+                .ifBlank { preferences.getString("team_leader_code_${teamName.trim().lowercase()}", "").orEmpty() }
+                .ifBlank { FirestoreManager.findCodeByTeamName(teamName).orEmpty() }
+                .ifBlank { "Generating..." }
+            if (activeCode != "Generating...") {
+                saveUserTeamState("Leader", teamName, activeCode)
+            }
             col.add(text("Invite", 13, Color.BLACK, true)); col.space(8)
             val inviteView = text("$activeCode    ▢", 14, navy, true).apply {
                 background = bg(Color.rgb(217,217,217),9);setPadding(dp(10),0,dp(10),0)
@@ -2539,11 +2602,12 @@ class AdminActivity : AppCompatActivity() {
             }
             col.add(inviteView, -1, 36); col.space(20)
             if (activeCode == "Generating..." && teamName.isNotBlank()) {
-                val uid = preferences.getString("userId", "").orEmpty()
+                val emailStr = preferences.getString("email", "").orEmpty()
                 FirestoreManager.createTeamWithCode(uid, displayName, teamName) { res ->
                     runOnUiThread {
                         res.getOrNull()?.let { newCode ->
-                            preferences.edit().putString("teamCode", newCode).apply()
+                            saveUserTeamState("Leader", teamName, newCode)
+                            FirestoreManager.updateUserRoleAndTeam(uid, "Leader", teamName, newCode, emailStr)
                             inviteView.text = "$newCode    ▢"
                         }
                     }
