@@ -90,21 +90,128 @@ object FirestoreManager {
         }
     }
 
+    const val TEAMS_COLLECTION = "teams"
+    private const val TEAM_CODE_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+
     /**
-     * Updates the user's role and team in Firestore: /users/{uid}
+     * Generates a random 6-character uppercase alphanumeric invite code for a team.
+     */
+    fun generateTeamCode(): String {
+        return (1..6)
+            .map { TEAM_CODE_CHARS.random() }
+            .joinToString("")
+    }
+
+    /**
+     * Checks whether a given team code string matches the expected 6-character alphanumeric format.
+     */
+    fun isValidTeamCodeFormat(code: String): Boolean {
+        val cleaned = code.trim().uppercase()
+        return cleaned.length == 6 && cleaned.all { it.isLetterOrDigit() }
+    }
+
+    /**
+     * Creates a new team document in Firestore under /teams/{teamCode} and updates the leader's user profile.
+     * Returns the generated 6-character teamCode upon completion.
+     */
+    fun createTeamWithCode(
+        leaderUid: String,
+        leaderName: String,
+        teamName: String,
+        onComplete: (Result<String>) -> Unit
+    ) {
+        val cleanTeamName = teamName.trim()
+        if (cleanTeamName.isBlank()) {
+            onComplete(Result.failure(IllegalArgumentException("Team name cannot be blank.")))
+            return
+        }
+
+        val generatedCode = generateTeamCode()
+        val teamData = mapOf(
+            "teamCode" to generatedCode,
+            "teamName" to cleanTeamName,
+            "leaderUid" to leaderUid,
+            "leaderName" to leaderName,
+            "createdAt" to System.currentTimeMillis()
+        )
+
+        try {
+            db.collection(TEAMS_COLLECTION)
+                .document(generatedCode)
+                .set(teamData)
+                .addOnSuccessListener {
+                    updateUserRoleAndTeam(leaderUid, "Leader", cleanTeamName, generatedCode) {
+                        onComplete(Result.success(generatedCode))
+                    }
+                }
+                .addOnFailureListener { exception ->
+                    onComplete(Result.failure(exception))
+                }
+        } catch (e: Exception) {
+            onComplete(Result.failure(e))
+        }
+    }
+
+    /**
+     * Verifies if a team code exists in Firestore (/teams/{teamCode}).
+     * If valid, returns Pair(teamCode, teamName). Otherwise returns a failure.
+     */
+    fun getTeamByCode(
+        rawCode: String,
+        onComplete: (Result<Pair<String, String>>) -> Unit
+    ) {
+        val cleanCode = rawCode.trim().uppercase()
+        if (!isValidTeamCodeFormat(cleanCode)) {
+            onComplete(Result.failure(IllegalArgumentException("Enter a valid 6-character team code.")))
+            return
+        }
+
+        try {
+            db.collection(TEAMS_COLLECTION)
+                .document(cleanCode)
+                .get()
+                .addOnSuccessListener { snapshot ->
+                    if (snapshot != null && snapshot.exists()) {
+                        val foundTeamName = snapshot.getString("teamName").orEmpty()
+                        if (foundTeamName.isNotBlank()) {
+                            onComplete(Result.success(cleanCode to foundTeamName))
+                            return@addOnSuccessListener
+                        }
+                    }
+                    onComplete(Result.failure(IllegalArgumentException("Invalid team code. Please check with your Team Leader.")))
+                }
+                .addOnFailureListener { exception ->
+                    onComplete(Result.failure(exception))
+                }
+        } catch (e: Exception) {
+            onComplete(Result.failure(e))
+        }
+    }
+
+    /**
+     * Updates the user's role, team, and optional teamCode in Firestore: /users/{uid}
      * Uses SetOptions.merge() so fields are merged safely without clobbering other data.
      */
-    fun updateUserRoleAndTeam(uid: String, role: String, teamName: String, onComplete: (Result<Unit>) -> Unit = {}) {
+    fun updateUserRoleAndTeam(
+        uid: String,
+        role: String,
+        teamName: String,
+        teamCode: String = "",
+        onComplete: (Result<Unit>) -> Unit = {}
+    ) {
         if (uid.isBlank()) {
             onComplete(Result.success(Unit))
             return
         }
 
         try {
-            val updates = mapOf(
+            val updates = mutableMapOf<String, Any>(
                 "role" to role,
                 "teamName" to teamName
             )
+            if (teamCode.isNotBlank()) {
+                updates["teamCode"] = teamCode
+            }
             db.collection(USERS_COLLECTION)
                 .document(uid)
                 .set(updates, com.google.firebase.firestore.SetOptions.merge())

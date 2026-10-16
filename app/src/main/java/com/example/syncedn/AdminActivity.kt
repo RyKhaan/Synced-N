@@ -96,12 +96,15 @@ class AdminActivity : AppCompatActivity() {
                                 displayName = profile?.username ?: account.displayName ?: "Leader"
                                 val userRole = profile?.role.orEmpty().ifBlank { "Leader" }
                                 val userTeam = profile?.teamName.orEmpty()
+                                val userTeamCode = profile?.teamCode.orEmpty()
+                                teamName = userTeam
                                 preferences.edit {
                                     putString("username", displayName)
                                     putString("email", account.email.orEmpty())
                                     putString("userId", profile?.uid.orEmpty())
                                     putString("role", userRole)
                                     putString("teamName", userTeam)
+                                    putString("teamCode", userTeamCode)
                                 }
                                 toast("Welcome, $displayName!")
                                 if (userTeam.isBlank()) {
@@ -135,7 +138,7 @@ class AdminActivity : AppCompatActivity() {
         fullName = preferences.getString("fullName", "Ryan Lloyd Genturo").orEmpty()
         profileReturnPage = savedInstanceState?.getString("profileReturnPage") ?: "settings"
         roleMember = savedInstanceState?.getString("roleMember") ?: "Angelo Daniel"
-        teamName = savedInstanceState?.getString("teamName") ?: ""
+        teamName = savedInstanceState?.getString("teamName") ?: preferences.getString("teamName", "").orEmpty()
         successFlow = savedInstanceState?.getString("successFlow") ?: "register"
         savedInstanceState?.let { state ->
             scheduleFilter = state.getString("scheduleFilter") ?: "Upcoming"
@@ -245,33 +248,80 @@ class AdminActivity : AppCompatActivity() {
                 val name = input(UI.teamName)
                 if (name.text.isBlank()) invalid(name, "Enter a team name.")
                 else {
-                    teamName = name.text.toString().trim()
+                    val enteredTeamName = name.text.toString().trim()
+                    val createBtn = findViewById<Button>(UI.createTeamButton)
+                    createBtn?.isEnabled = false
+                    toast("Creating team...")
                     val uid = preferences.getString("userId", "").orEmpty()
-                    FirestoreManager.updateUserRoleAndTeam(uid, "Leader", teamName)
-                    preferences.edit {
-                        putBoolean("leftTeam", false)
-                        putString("role", "Leader")
-                        putString("teamName", teamName)
+                    FirestoreManager.createTeamWithCode(uid, displayName, enteredTeamName) { result ->
+                        runOnUiThread {
+                            createBtn?.isEnabled = true
+                            if (result.isSuccess) {
+                                val generatedCode = result.getOrNull().orEmpty()
+                                teamName = enteredTeamName
+                                preferences.edit {
+                                    putBoolean("leftTeam", false)
+                                    putString("role", "Leader")
+                                    putString("teamName", enteredTeamName)
+                                    putString("teamCode", generatedCode)
+                                }
+                                AlertDialog.Builder(this@AdminActivity)
+                                    .setTitle("Team Created!")
+                                    .setMessage("Your team \"$enteredTeamName\" has been created.\n\nTeam Invite Code: $generatedCode\n\nShare this 6-character code with your members so they can join your team.")
+                                    .setCancelable(false)
+                                    .setPositiveButton("Copy Code & Continue") { _, _ ->
+                                        val clipboard = getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                                        clipboard.setPrimaryClip(
+                                            android.content.ClipData.newPlainText("Team Invite Code", generatedCode)
+                                        )
+                                        toast("Team invite code copied: $generatedCode")
+                                        navigate("home")
+                                    }
+                                    .show()
+                            } else {
+                                val err = result.exceptionOrNull()?.localizedMessage ?: "Failed to create team."
+                                invalid(name, err)
+                                toast(err)
+                            }
+                        }
                     }
-                    toast("Team created: $teamName")
-                    navigate("home")
                 }
             }
             "joinTeam" -> click(UI.joinTeamButton) {
                 val code = input(UI.teamCode)
-                if (code.text.isBlank()) invalid(code, "Enter a team code.")
-                else {
-                    teamName = "Worship Ministry Team"
-                    val uid = preferences.getString("userId", "").orEmpty()
-                    FirestoreManager.updateUserRoleAndTeam(uid, "Member", teamName)
-                    preferences.edit {
-                        putBoolean("leftTeam", false)
-                        putString("role", "Member")
-                        putString("teamName", teamName)
+                val enteredCode = code.text.toString().trim().uppercase()
+                if (enteredCode.isBlank()) {
+                    invalid(code, "Enter a team code.")
+                } else if (!FirestoreManager.isValidTeamCodeFormat(enteredCode)) {
+                    invalid(code, "Enter a valid 6-character team code.")
+                } else {
+                    val joinBtn = findViewById<Button>(UI.joinTeamButton)
+                    joinBtn?.isEnabled = false
+                    toast("Verifying team code...")
+                    FirestoreManager.getTeamByCode(enteredCode) { result ->
+                        runOnUiThread {
+                            joinBtn?.isEnabled = true
+                            if (result.isSuccess) {
+                                val (validCode, foundTeamName) = result.getOrNull()!!
+                                teamName = foundTeamName
+                                val uid = preferences.getString("userId", "").orEmpty()
+                                FirestoreManager.updateUserRoleAndTeam(uid, "Member", foundTeamName, validCode)
+                                preferences.edit {
+                                    putBoolean("leftTeam", false)
+                                    putString("role", "Member")
+                                    putString("teamName", foundTeamName)
+                                    putString("teamCode", validCode)
+                                }
+                                toast("Joined team: $foundTeamName")
+                                startActivity(Intent(this@AdminActivity, MemberActivity::class.java).putExtra("startPage", "home"))
+                                finish()
+                            } else {
+                                val err = result.exceptionOrNull()?.localizedMessage ?: "Invalid team code. Please check with your Team Leader."
+                                invalid(code, err)
+                                toast(err)
+                            }
+                        }
                     }
-                    toast("Joined team: $teamName")
-                    startActivity(Intent(this, MemberActivity::class.java).putExtra("startPage", "home"))
-                    finish()
                 }
             }
             "home" -> setupHome()
@@ -339,12 +389,15 @@ class AdminActivity : AppCompatActivity() {
                                 displayName = profile?.username?.ifBlank { emailStr.substringBefore("@") } ?: "Leader"
                                 val userRole = profile?.role.orEmpty().ifBlank { "Leader" }
                                 val userTeam = profile?.teamName.orEmpty()
+                                val userTeamCode = profile?.teamCode.orEmpty()
+                                teamName = userTeam
                                 preferences.edit {
                                     putString("username", displayName)
                                     putString("email", emailStr)
                                     putString("userId", profile?.uid.orEmpty())
                                     putString("role", userRole)
                                     putString("teamName", userTeam)
+                                    putString("teamCode", userTeamCode)
                                 }
                                 toast("Welcome, $displayName!")
                                 if (userTeam.isBlank()) {
@@ -398,6 +451,7 @@ class AdminActivity : AppCompatActivity() {
                                     putString("userId", result.getOrNull()?.uid.orEmpty())
                                     putString("role", "")
                                     putString("teamName", "")
+                                    putString("teamCode", "")
                                 }
                                 successFlow = "register"
                                 toast("Account created successfully!")
@@ -2396,18 +2450,36 @@ class AdminActivity : AppCompatActivity() {
             setPadding(dp(10), 0, dp(10), 0)
         }, -1, 32); col.space(20)
         if (isLeader) {
+            val activeCode = preferences.getString("teamCode", "").orEmpty().ifBlank { "Generating..." }
             col.add(text("Invite", 13, Color.BLACK, true)); col.space(8)
-            col.add(text("DF432DE    ▢", 14, navy, true).apply {
+            val inviteView = text("$activeCode    ▢", 14, navy, true).apply {
                 background = bg(Color.rgb(217,217,217),9);setPadding(dp(10),0,dp(10),0)
-                contentDescription = "Copy demo invite code"
+                contentDescription = "Copy team invite code"
                 setOnClickListener {
-                    val clipboard = getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager
-                    clipboard.setPrimaryClip(
-                        android.content.ClipData.newPlainText("Demo team invite", "DF432DE")
-                    )
-                    toast("Demo invite code copied; it is not a live invitation.")
+                    val currentCode = preferences.getString("teamCode", "").orEmpty()
+                    if (currentCode.isNotBlank()) {
+                        val clipboard = getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                        clipboard.setPrimaryClip(
+                            android.content.ClipData.newPlainText("Team Invite Code", currentCode)
+                        )
+                        toast("Team invite code copied: $currentCode")
+                    } else {
+                        toast("Generating team invite code, please wait...")
+                    }
                 }
-            }, -1, 36); col.space(20)
+            }
+            col.add(inviteView, -1, 36); col.space(20)
+            if (activeCode == "Generating..." && teamName.isNotBlank()) {
+                val uid = preferences.getString("userId", "").orEmpty()
+                FirestoreManager.createTeamWithCode(uid, displayName, teamName) { res ->
+                    runOnUiThread {
+                        res.getOrNull()?.let { newCode ->
+                            preferences.edit().putString("teamCode", newCode).apply()
+                            inviteView.text = "$newCode    ▢"
+                        }
+                    }
+                }
+            }
             col.add(teamDetailAction("teams", "Remove Member") { removeTeamMember() })
             col.add(teamDetailAction("music", "Add Role") { navigate("teamRoles") }); col.space(8)
         }

@@ -177,4 +177,39 @@ class ExampleUnitTest {
         // 3. Member who joined a team
         assertEquals("MemberActivity", resolveDashboard(role = "Member", teamName = "Worship Ministry Team"))
     }
+
+    @Test
+    fun testTeamCodeGenerationAndValidation() {
+        val fm = com.example.syncedn.data.database.FirestoreManager
+
+        // 1. Generated codes must be 6 uppercase alphanumeric characters
+        repeat(10) {
+            val code = fm.generateTeamCode()
+            assertEquals(6, code.length)
+            assertTrue("Generated code $code should be valid format", fm.isValidTeamCodeFormat(code))
+            assertEquals(code, code.uppercase())
+        }
+
+        // 2. Format validation checks
+        assertTrue(fm.isValidTeamCodeFormat("A7K9P2"))
+        assertTrue(fm.isValidTeamCodeFormat("  a7k9p2  "))
+        assertFalse(fm.isValidTeamCodeFormat(""))
+        assertFalse(fm.isValidTeamCodeFormat("ABC12")) // too short
+        assertFalse(fm.isValidTeamCodeFormat("ABC1234")) // too long
+        assertFalse(fm.isValidTeamCodeFormat("AB-123")) // non-alphanumeric
+
+        // 3. UserProfile teamCode serialization
+        val leaderProfile = com.example.syncedn.data.model.UserProfile(
+            uid = "leader-1",
+            username = "LeaderRyan",
+            email = "ryan@syncedn.org",
+            role = "Leader",
+            teamName = "Youth Ministry",
+            teamCode = "K7M9P2"
+        )
+        val map = leaderProfile.toMap()
+        assertEquals("K7M9P2", map["teamCode"])
+        val restored = com.example.syncedn.data.model.UserProfile.fromMap(map)
+        assertEquals("K7M9P2", restored.teamCode)
+    }
 }
