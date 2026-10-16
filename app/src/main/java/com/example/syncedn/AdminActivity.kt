@@ -8,6 +8,7 @@ import com.example.syncedn.data.auth.SessionManager
 import com.example.syncedn.data.database.FirestoreManager
 import com.example.syncedn.data.database.TeamRepository
 import com.example.syncedn.data.model.TeamMember
+import com.example.syncedn.data.model.UnavailableRange
 import com.example.syncedn.data.util.ValidationUtils
 import android.text.InputFilter
 import androidx.activity.result.contract.ActivityResultContracts
@@ -1692,19 +1693,52 @@ class AdminActivity : AppCompatActivity() {
     private fun draftSongs(): org.json.JSONArray = leaderDraft.optJSONArray("songs") ?: org.json.JSONArray().also {
         leaderDraft.put("songs", it)
     }
-    private fun leaderRoster(): List<Triple<String, String, String>> {
-        val base = ministryMembers.map { Triple(it.first, it.second, "Available") } +
-                listOf(Triple("John Doe", "Drummer", "Available"), Triple("Kristin Santos", "Vocalist", "Available"),
-                    Triple("Jose Sotto", "Guitarist", "Unavailable"), Triple("Jojo Kulambo", "Sound Operator", "No Response"))
-        val roles = try { org.json.JSONObject(preferences.getString("memberRoles", "{}").orEmpty()) } catch (_: Exception) { org.json.JSONObject() }
+    data class MemberAvailabilityItem(
+        val member: TeamMember,
+        val name: String,
+        val role: String,
+        val status: String,
+        val conflictReason: String = "",
+        val conflictRange: String = ""
+    )
+
+    private fun leaderMemberAvailability(): List<MemberAvailabilityItem> {
+        val roster = getActiveRoster()
         val removed = preferences.getStringSet("removedMembers", emptySet()).orEmpty()
-        val start = preferences.getString("unavailableStart", "").orEmpty()
-        val end = preferences.getString("unavailableEnd", "").orEmpty()
         val date = leaderDraft.optString("date")
-        return base.filter { it.first !in removed }.map {
-            val status = if(it.first == fullName && start.isNotBlank() && date >= start && date <= end) "Unavailable" else it.third
-            Triple(it.first, roles.optString(it.first, it.second), status)
+        val legacyStart = preferences.getString("unavailableStart", "").orEmpty()
+        val legacyEnd = preferences.getString("unavailableEnd", "").orEmpty()
+        val legacyReason = preferences.getString("unavailableReason", "").orEmpty()
+
+        return roster.filter { it.fullName !in removed && it.username !in removed }.map { member ->
+            val name = member.fullName.ifBlank { member.username.ifBlank { "Member" } }
+            val role = member.ministryRole.ifBlank { if (member.role.equals("Leader", true)) "Worship Leader" else "Member" }
+            val ranges = if (member.unavailableRanges.isNotEmpty()) {
+                member.unavailableRanges
+            } else {
+                TeamRepository.getMemberUnavailableRanges(member.uid, preferences)
+            }
+            val conflict = ranges.find { it.includes(date) }
+            val isLegacyUnavailable = (name == fullName || member.uid == preferences.getString("userId", "")) &&
+                    legacyStart.isNotBlank() && date >= legacyStart && date <= legacyEnd
+            val isUnavailable = conflict != null || isLegacyUnavailable
+            val status = if (isUnavailable) "Unavailable" else "Available"
+            val reason = conflict?.reason?.ifBlank { "Unavailable" } ?: if (isLegacyUnavailable) legacyReason.ifBlank { "Unavailable" } else ""
+            val rangeStr = if (conflict != null) "${conflict.startDate} – ${conflict.endDate}" else if (isLegacyUnavailable) "$legacyStart – $legacyEnd" else ""
+
+            MemberAvailabilityItem(
+                member = member,
+                name = name,
+                role = role,
+                status = status,
+                conflictReason = reason,
+                conflictRange = rangeStr
+            )
         }
+    }
+
+    private fun leaderRoster(): List<Triple<String, String, String>> {
+        return leaderMemberAvailability().map { Triple(it.name, it.role, it.status) }
     }
     private fun leaderTime(value: String): String = try {
         val pieces = value.split(":"); val hour = pieces[0].toInt()
@@ -1765,22 +1799,36 @@ class AdminActivity : AppCompatActivity() {
     }
     private fun memberAvailabilityView(): View = memberPage("Member Availability", "createService") { col ->
         col.add(serviceSummary()); col.space(20)
-        val roster = leaderRoster()
+        val items = leaderMemberAvailability()
+        val availableCount = items.count { it.status == "Available" }
+        val unavailableCount = items.count { it.status == "Unavailable" }
         col.add(horizontal().apply {
-            listOf("Available", "Unavailable", "No Response").forEach { status ->
-                val color = when (status) { "Available" -> Color.rgb(40, 135, 15); "Unavailable" -> Color.RED; else -> Color.GRAY }
+            listOf("Available" to availableCount, "Unavailable" to unavailableCount).forEach { (status, count) ->
+                val color = if (status == "Available") Color.rgb(40, 135, 15) else Color.RED
                 add(panel().apply {
                     setPadding(dp(5), dp(12), dp(5), dp(12))
-                    add(text(roster.count { it.third == status }.toString(), 22, color, bold = true, centered = true))
-                    space(4); add(text(status, 10, color, bold = true, centered = true))
+                    add(text(count.toString(), 22, color, bold = true, centered = true))
+                    space(4); add(text(status, 11, color, bold = true, centered = true))
                 }, 0, -2, 1f)
             }
         }); col.space(20)
-        col.add(text("Sample member responses", 11, Color.GRAY)); col.space(12)
-        roster.sortedBy { if (it.first in listOf("John Doe", "Kristin Santos", "Jose Sotto", "Jojo Kulambo")) 0 else 1 }
-            .forEach { (name, role, status) ->
-                col.add(panel().apply { add(memberRow(name, "$role • $status")) }); col.space(12)
+        col.add(text("Team Member Responses", 12, navy, true)); col.space(12)
+        if (items.isEmpty()) {
+            col.add(text("No members in team roster yet.", 13, Color.GRAY)); col.space(12)
+        } else {
+            items.sortedBy { if (it.status == "Available") 0 else 1 }.forEach { item ->
+                val subtitle = if (item.status == "Available") {
+                    "${item.role} • Available"
+                } else {
+                    "${item.role} • Unavailable: ${item.conflictReason}${if (item.conflictRange.isNotBlank()) " (${item.conflictRange})" else ""}"
+                }
+                col.add(panel(if (item.status == "Unavailable") Color.RED else Color.rgb(215, 215, 220)).apply {
+                    add(memberRow(item.name, subtitle, if (item.status == "Available") "Ready" else "Absent"))
+                })
+                col.space(10)
             }
+        }
+        col.space(12)
         col.add(memberButton("Assign Roles") { navigate("serviceAssignments") }, -1, 48)
     }
     private fun chooseAssignment() {
@@ -1808,11 +1856,15 @@ class AdminActivity : AppCompatActivity() {
         col.add(memberButton("+ Assign Member", navy) { chooseAssignment() }, -1, 48); col.space(20)
         val assigned = draftAssignments()
         if (assigned.length() == 0) col.add(text("Choose available members and assign their roles.", 14, Color.GRAY))
+        val availabilityMap = leaderMemberAvailability().associateBy { it.name }
         repeat(assigned.length()) { index ->
             val member = assigned.getJSONObject(index)
             val name = member.optString("name"); val role = member.optString("role")
-            col.add(panel().apply {
-                add(memberRow(name, role, onClick = {
+            val status = availabilityMap[name]?.status ?: "Available"
+            val isUnavailable = status == "Unavailable"
+            val badge = if (isUnavailable) "Conflict" else null
+            col.add(panel(if (isUnavailable) Color.RED else Color.rgb(215, 215, 220)).apply {
+                add(memberRow(name, "$role${if (isUnavailable) " • Unavailable on service date" else ""}", badge, onClick = {
                     AlertDialog.Builder(this@AdminActivity).setTitle(name).setItems(arrayOf("Change Role", "Remove Assignment")) { _, choice ->
                         if (choice == 0) chooseRole(name, role) {
                             member.put("role", it); saveLeaderDraft(); navigate("serviceAssignments")
@@ -2420,8 +2472,9 @@ class AdminActivity : AppCompatActivity() {
         val first = date.get(java.util.Calendar.DAY_OF_WEEK) - 1
         val count = date.getActualMaximum(java.util.Calendar.DAY_OF_MONTH)
         val rows = (first + count + 6) / 7
-        val start = preferences.getString("unavailableStart", "").orEmpty()
-        val end = preferences.getString("unavailableEnd", "").orEmpty()
+        val uid = preferences.getString(SessionManager.KEY_USER_ID, "").orEmpty()
+            .ifBlank { AuthManager.currentUser?.uid.orEmpty() }
+        val activeRanges = TeamRepository.getMemberUnavailableRanges(uid, preferences)
         repeat(rows) { week ->
             col.add(horizontal().apply {
                 repeat(7) { weekday ->
@@ -2433,7 +2486,7 @@ class AdminActivity : AppCompatActivity() {
                             if (day == calendarDay) Color.WHITE else navy, centered = true).apply {
                             if (day == calendarDay) background = bg(purple, 24)
                         }, -1, 36)
-                        val marked = key in start..end && start.isNotBlank()
+                        val marked = activeRanges.any { it.includes(key) }
                         cell.add(text(if (marked || day in listOf(4, 8, 9, 10)) "•" else "", 12,
                             if (marked) Color.RED else Color.rgb(0, 175, 125), centered = true), -1, 12)
                         cell.isClickable = true; cell.isFocusable = true; cell.contentDescription = key
@@ -2460,18 +2513,21 @@ class AdminActivity : AppCompatActivity() {
                 });col.space(12)
             }
         }
-        val unavailable = calendarKey() in start..end && start.isNotBlank()
+        val selectedKey = calendarKey()
+        val matchingRange = activeRanges.find { it.includes(selectedKey) }
+        val unavailable = matchingRange != null
         col.add(panel(if (unavailable) Color.RED else Color.rgb(0, 190, 70)).apply {
             add(text(if (unavailable) "Unavailable" else "Service", 14, navy, true)); space(8)
-            add(text(if (unavailable) "$start – $end" else "8:00AM – 11:00AM • Main Sanctuary", 12, Color.DKGRAY))
-            if (unavailable) { space(6); add(text(preferences.getString("unavailableReason", "").orEmpty(), 12, Color.GRAY)) }
+            add(text(if (unavailable) "${matchingRange?.startDate} – ${matchingRange?.endDate}" else "8:00AM – 11:00AM • Main Sanctuary", 12, Color.DKGRAY))
+            if (unavailable) { space(6); add(text(matchingRange?.reason.orEmpty(), 12, Color.GRAY)) }
         })
         col.space(16)
-        col.add(memberButton("Set Unavailable") { navigate("availability") }, -1, 48)
-        if (unavailable) {
+        col.add(memberButton("Manage Availability") { navigate("availability") }, -1, 48)
+        if (matchingRange != null) {
             col.space(12)
-            col.add(memberButton("Clear Unavailability", navy) {
-                preferences.edit().remove("unavailableStart").remove("unavailableEnd").remove("unavailableReason").apply()
+            col.add(memberButton("Clear This Unavailability", navy) {
+                TeamRepository.removeUnavailableRange(uid, matchingRange.id, preferences)
+                toast("Unavailability removed")
                 navigate("calendar")
             }, -1, 48)
         }
@@ -2502,27 +2558,73 @@ class AdminActivity : AppCompatActivity() {
         gravity = if (multiline) Gravity.TOP or Gravity.START else Gravity.CENTER_VERTICAL
     }
     private fun availabilityView(): View = memberPage("Manage Schedule", "calendar") { col ->
+        val uid = preferences.getString(SessionManager.KEY_USER_ID, "").orEmpty()
+            .ifBlank { AuthManager.currentUser?.uid.orEmpty() }
         col.add(text("Set your unavailable dates", 18, navy, true)); col.space(8)
-        col.add(text("Your availability is saved on this phone.", 12, Color.GRAY)); col.space(24)
-        val reason = plainInput("Reason, e.g. family bonding", true)
-        reason.setText(preferences.getString("unavailableReason", ""))
-        col.add(text("Reason", 12, navy, true)); col.space(8); col.add(reason, -1, 96); col.space(20)
-        val start = dateField(preferences.getString("unavailableStart", calendarKey()).orEmpty())
-        val end = dateField(preferences.getString("unavailableEnd", calendarKey()).orEmpty())
-        col.add(text("Starts", 12, navy, true)); col.space(8); col.add(start, -1, 48); col.space(20)
-        col.add(text("Ends", 12, navy, true)); col.space(8); col.add(end, -1, 48); col.space(28)
-        col.add(memberButton("Save", navy) {
+        col.add(text("Your unavailable dates sync with your team calendar.", 12, Color.GRAY)); col.space(20)
+
+        val reason = plainInput("Reason, e.g. family bonding", true).apply {
+            filters = arrayOf(InputFilter.LengthFilter(ValidationUtils.MAX_TITLE_LENGTH))
+        }
+        col.add(text("Reason", 12, navy, true)); col.space(8); col.add(reason, -1, 80); col.space(16)
+
+        val start = dateField(calendarKey())
+        val end = dateField(calendarKey())
+        col.add(text("Starts", 12, navy, true)); col.space(8); col.add(start, -1, 48); col.space(16)
+        col.add(text("Ends", 12, navy, true)); col.space(8); col.add(end, -1, 48); col.space(24)
+
+        col.add(memberButton("+ Add Unavailable Dates", navy) {
+            val rText = reason.text.toString().trim()
+            val sText = start.text.toString().trim()
+            val eText = end.text.toString().trim()
             when {
-                reason.text.isBlank() -> invalid(reason, "Enter a reason.")
-                end.text.toString() < start.text.toString() -> toast("End date must be on or after the start date.")
+                rText.isBlank() -> invalid(reason, "Enter a reason.")
+                rText.length > ValidationUtils.MAX_TITLE_LENGTH -> invalid(reason, "Reason cannot exceed ${ValidationUtils.MAX_TITLE_LENGTH} characters.")
+                eText < sText -> toast("End date must be on or after the start date.")
                 else -> {
-                    preferences.edit().putString("unavailableStart", start.text.toString())
-                        .putString("unavailableEnd", end.text.toString())
-                        .putString("unavailableReason", reason.text.toString().trim()).apply()
-                    toast("Availability saved locally"); navigate("calendar")
+                    val range = UnavailableRange(
+                        id = "range_${System.currentTimeMillis()}",
+                        startDate = sText,
+                        endDate = eText,
+                        reason = rText
+                    )
+                    TeamRepository.addUnavailableRange(uid, range, preferences)
+                    toast("Unavailable range added")
+                    navigate("availability")
                 }
             }
         }, -1, 48)
+
+        col.space(28)
+        col.add(text("Your Scheduled Unavailabilities", 15, navy, true)); col.space(12)
+        val currentRanges = TeamRepository.getMemberUnavailableRanges(uid, preferences)
+        if (currentRanges.isEmpty()) {
+            col.add(text("No unavailable dates set. You are available for services.", 13, Color.GRAY))
+        } else {
+            currentRanges.forEach { r ->
+                col.add(panel().apply {
+                    val row = horizontal()
+                    row.add(vertical().apply {
+                        add(text("📅 ${r.startDate} – ${r.endDate}", 14, navy, true))
+                        space(4)
+                        add(text("Reason: ${r.reason}", 12, Color.DKGRAY))
+                    }, 0, -2, 1f)
+                    val delBtn = text("✕", 18, Color.RED, bold = true, centered = true).apply {
+                        setPadding(dp(8), dp(4), dp(8), dp(4))
+                        isClickable = true; isFocusable = true
+                        contentDescription = "Remove unavailability"
+                        setOnClickListener {
+                            TeamRepository.removeUnavailableRange(uid, r.id, preferences)
+                            toast("Removed unavailability")
+                            navigate("availability")
+                        }
+                    }
+                    row.add(delBtn, 40, 40)
+                    add(row)
+                })
+                col.space(10)
+            }
+        }
     }
     private fun announcementsView(): View = memberPage("Announcement", "home") { col ->
         if (isLeader) {
