@@ -2165,9 +2165,20 @@ open class MemberActivity : AppCompatActivity() {
         }); col.space(4)
         col.add(teamDetailAction("logout", "Leave") {
             AlertDialog.Builder(this).setTitle("Leave Team?")
-                .setMessage("This changes your demo membership on this phone.")
+                .setMessage("Are you sure you want to leave this team?")
                 .setNegativeButton("Cancel", null).setPositiveButton("Leave") { _, _ ->
-                    preferences.edit().putBoolean("leftTeam", true).apply(); navigate("teams")
+                    val uid = preferences.getString("userId", "").orEmpty()
+                    if (uid.isNotBlank()) {
+                        TeamRepository.leaveTeam(uid) {}
+                    }
+                    preferences.edit()
+                        .remove("teamName")
+                        .remove("teamCode")
+                        .putBoolean("leftTeam", true)
+                        .apply()
+                    teamName = ""
+                    toast("You left the team.")
+                    navigate("teamChoice")
                 }.show()
         })
         return root

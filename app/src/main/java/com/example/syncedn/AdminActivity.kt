@@ -1963,14 +1963,41 @@ class AdminActivity : AppCompatActivity() {
         }
     }
     private fun removeTeamMember() {
-        val roster = leaderRoster().filter { it.first != "Joshua Lagare" }
-        AlertDialog.Builder(this).setTitle("Remove Member").setItems(roster.map { it.first }.toTypedArray()) { _, index ->
-            val name = roster[index].first
-            AlertDialog.Builder(this).setTitle("Remove $name?").setMessage("This updates the local demo team.")
-                .setNegativeButton("Cancel", null).setPositiveButton("Remove") { _, _ ->
+        val currentUid = preferences.getString("userId", "").orEmpty()
+        val currentName = fullName.ifBlank { displayName }
+        val roster = getActiveRoster().filter { it.uid != currentUid && it.fullName != currentName }
+        if (roster.isEmpty()) {
+            toast("No members to remove.")
+            return
+        }
+        val names = roster.map { it.fullName.ifBlank { it.username.ifBlank { "Member" } } }.toTypedArray()
+        AlertDialog.Builder(this).setTitle("Remove Member").setItems(names) { _, index ->
+            val selectedMember = roster[index]
+            val name = names[index]
+            AlertDialog.Builder(this).setTitle("Remove $name?")
+                .setMessage("Are you sure you want to remove $name from the team?")
+                .setNegativeButton("Cancel", null)
+                .setPositiveButton("Remove") { _, _ ->
                     val removed = preferences.getStringSet("removedMembers", emptySet()).orEmpty().toMutableSet()
                     removed.add(name); preferences.edit().putStringSet("removedMembers", removed).apply()
-                    navigate("teamDetails")
+                    if (selectedMember.uid.isNotBlank()) {
+                        TeamRepository.removeMemberFromTeam(selectedMember.uid) { result ->
+                            runOnUiThread {
+                                if (result.isSuccess) {
+                                    toast("$name removed from team.")
+                                    refreshTeamRoster()
+                                    navigate("teamDetails")
+                                } else {
+                                    val err = result.exceptionOrNull()?.localizedMessage ?: "Failed to remove member."
+                                    toast(err)
+                                    navigate("teamDetails")
+                                }
+                            }
+                        }
+                    } else {
+                        toast("$name removed.")
+                        navigate("teamDetails")
+                    }
                 }.show()
         }.setNegativeButton("Cancel", null).show()
     }
@@ -2006,9 +2033,18 @@ class AdminActivity : AppCompatActivity() {
             val selected = radios.findViewById<android.widget.RadioButton>(radios.checkedRadioButtonId)
             if (selected == null) toast("Choose a role.")
             else {
+                val selectedRole = selected.text.toString()
                 val map = org.json.JSONObject(preferences.getString("memberRoles", "{}").orEmpty())
-                map.put(roleMember, selected.text.toString()); preferences.edit().putString("memberRoles", map.toString()).apply()
-                toast("Member role saved locally"); navigate("teams")
+                map.put(roleMember, selectedRole); preferences.edit().putString("memberRoles", map.toString()).apply()
+                val targetUid = roleMemberUid.ifBlank {
+                    getActiveRoster().find { it.fullName == roleMember || it.username == roleMember }?.uid.orEmpty()
+                }
+                if (targetUid.isNotBlank()) {
+                    TeamRepository.updateMemberMinistryRole(targetUid, selectedRole) {
+                        runOnUiThread { refreshTeamRoster() }
+                    }
+                }
+                toast("Member role updated to $selectedRole"); navigate("teams")
             }
         }, -1, 48)
         return root
@@ -2023,7 +2059,12 @@ class AdminActivity : AppCompatActivity() {
             else {
                 leaderRoles.clear(); leaderRoles.addAll(roles)
                 preferences.edit().putString("leaderRoles", org.json.JSONArray(roles).toString()).apply()
-                toast("Team roles saved locally"); navigate("teamDetails")
+                val currentCode = preferences.getString("teamCode", "").orEmpty()
+                    .ifBlank { FirestoreManager.findCodeByTeamName(teamName).orEmpty() }
+                if (currentCode.isNotBlank()) {
+                    TeamRepository.saveTeamCustomRoles(currentCode, roles) { }
+                }
+                toast("Team roles saved"); navigate("teamDetails")
             }
         }, -1, 48)
     }
@@ -2743,9 +2784,20 @@ class AdminActivity : AppCompatActivity() {
         }); col.space(4)
         col.add(teamDetailAction("logout", "Leave") {
             AlertDialog.Builder(this).setTitle("Leave Team?")
-                .setMessage("This changes your demo membership on this phone.")
+                .setMessage("Are you sure you want to leave this team?")
                 .setNegativeButton("Cancel", null).setPositiveButton("Leave") { _, _ ->
-                    preferences.edit().putBoolean("leftTeam", true).apply(); navigate("teams")
+                    val uid = preferences.getString("userId", "").orEmpty()
+                    if (uid.isNotBlank()) {
+                        TeamRepository.leaveTeam(uid) {}
+                    }
+                    preferences.edit()
+                        .remove("teamName")
+                        .remove("teamCode")
+                        .putBoolean("leftTeam", true)
+                        .apply()
+                    teamName = ""
+                    toast("You left the team.")
+                    navigate("teamChoice")
                 }.show()
         })
         return root
