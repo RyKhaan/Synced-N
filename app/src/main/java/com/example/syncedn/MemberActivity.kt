@@ -406,7 +406,11 @@ open class MemberActivity : AppCompatActivity() {
                     }
                 }
             }
-            "home" -> setupHome()
+            "home" -> {
+                refreshTeamRoster()
+                setupHome()
+            }
+            "teams" -> refreshTeamRoster()
             "settings" -> setupSettings()
             "profile" -> setupProfile()
         }
@@ -1110,7 +1114,8 @@ open class MemberActivity : AppCompatActivity() {
                     setPadding(dp(16),0,0,0)
                 },0,-2,1f)
                 add(titleRow);space(8)
-                add(text("10 Members",11,Color.rgb(84,91,116),true))
+                val memberCount = getActiveRoster().size
+                add(text("$memberCount Member${if (memberCount == 1) "" else "s"}",11,Color.rgb(84,91,116),true))
             }
             team.addView(teamInfo,FrameLayout.LayoutParams(-1,-1))
             val teamArrow=FrameLayout(this@MemberActivity).apply {background=bg(Color.WHITE,24,navy)}
@@ -1210,9 +1215,10 @@ open class MemberActivity : AppCompatActivity() {
         col.section(12).apply {
             add(text("Teams",15,Color.BLACK,true));space(8)
             val team=horizontal().apply {id=UI.settingsTeam; background=bg(Color.rgb(217,217,217),4);setPadding(dp(5),0,dp(10),0);isClickable=true;isFocusable=true}
+            val memberCount = getActiveRoster().size
             team.add(vertical().apply {
                 add(text(teamName.ifBlank {"Worship Team"},14,Color.BLACK,true))
-                add(text("15 members",12,Color.GRAY))
+                add(text("$memberCount member${if (memberCount == 1) "" else "s"}",12,Color.GRAY))
             },0,-2,1f)
             team.add(Symbol(this@MemberActivity,"teams",Color.rgb(90,188,248)),36,28)
             add(team,-1,52);space(50)
@@ -1421,6 +1427,56 @@ open class MemberActivity : AppCompatActivity() {
     private var songsReturnPage = "home"
     private val chatMessages = mutableListOf<String>()
     private val lineupSongs = mutableListOf("Amazing Grace", "Way Maker", "Goodness of God", "Build My Life")
+    private var teamRoster: List<TeamMember> = emptyList()
+
+    private fun getActiveRoster(): List<TeamMember> {
+        val currentCode = preferences.getString("teamCode", "").orEmpty()
+            .ifBlank { FirestoreManager.findCodeByTeamName(teamName).orEmpty() }
+        val cached = TeamRepository.getCachedRoster(currentCode)
+        if (cached.isNotEmpty()) return cached
+        if (teamRoster.isNotEmpty()) return teamRoster
+        val currentUid = preferences.getString("userId", "").orEmpty()
+        val currentName = fullName.ifBlank { displayName }
+        val userRole = preferences.getString("userRole", "Member").orEmpty()
+        val ministry = preferences.getString("ministryRole", "Member").orEmpty()
+        if (currentName.isNotBlank() && currentCode.isNotBlank()) {
+            val self = TeamMember(
+                uid = currentUid,
+                fullName = currentName,
+                username = displayName,
+                email = preferences.getString("email", "").orEmpty(),
+                role = userRole,
+                ministryRole = ministry,
+                teamCode = currentCode
+            )
+            return listOf(self)
+        }
+        return ministryMembers.map { (name, role, badge) ->
+            TeamMember(
+                uid = name.lowercase().replace(" ", "_"),
+                fullName = name,
+                username = name.split(" ").firstOrNull() ?: name,
+                email = "${name.lowercase().replace(" ", "")}@syncedn.org",
+                role = if (badge == "Admin") "Leader" else "Member",
+                ministryRole = role,
+                teamCode = currentCode
+            )
+        }
+    }
+
+    private fun refreshTeamRoster() {
+        val currentCode = preferences.getString("teamCode", "").orEmpty()
+            .ifBlank { FirestoreManager.findCodeByTeamName(teamName).orEmpty() }
+        if (currentCode.isBlank()) return
+        TeamRepository.getTeamRoster(currentCode) { result ->
+            result.getOrNull()?.let { list ->
+                if (list.isNotEmpty()) {
+                    teamRoster = list
+                }
+            }
+        }
+    }
+
     private val ministryMembers = listOf(
         Triple("Joshua Lagare", "Worship Leader", "Admin"),
         Triple("Ryan Lloyd Genturo", "Keyboardist", "Member"),
@@ -1943,17 +1999,24 @@ open class MemberActivity : AppCompatActivity() {
         val col = vertical().apply { setPadding(dp(20), dp(16), dp(20), dp(20)) }
         scroll.addView(col, FrameLayout.LayoutParams(-1, -2)); root.add(scroll, -1, 0, 1f)
         when (teamTab) {
-            "Members" -> ministryMembers.forEach { (name, role, badge) -> col.add(memberRow(name, role, badge)); col.space(4) }
+            "Members" -> {
+                val roster = getActiveRoster()
+                roster.forEach { member ->
+                    val name = member.fullName.ifBlank { member.username.ifBlank { "Member" } }
+                    val role = member.ministryRole.ifBlank { if (member.role.equals("Leader", true)) "Worship Leader" else "Member" }
+                    val badge = if (member.role.equals("Leader", true)) "Admin" else "Member"
+                    col.add(memberRow(name, role, badge))
+                    col.space(4)
+                }
+            }
             "Role" -> {
                 col.setPadding(0, dp(24), 0, 0)
-                val roles = expandedRole?.let { listOf(it) }
-                    ?: listOf("Worship Leader", "Keyboardist", "Bassist", "Vocalist", "Guitarist")
+                val roster = getActiveRoster()
+                val baseRoles = listOf("Worship Leader", "Keyboardist", "Bassist", "Vocalist", "Guitarist")
+                val activeRoles = (baseRoles + roster.map { it.ministryRole }).filter { it.isNotBlank() }.distinct()
+                val roles = expandedRole?.let { listOf(it) } ?: activeRoles
                 roles.forEach { role ->
-                    val people = when (role) {
-                        "Guitarist" -> listOf("Angelo Daniel", "Ralph Lauren Gregorio", "John Lloyd")
-                        "Vocalist" -> listOf("Ramirez John Micheal", "Jessa Mae Dizon", "John Michael")
-                        else -> ministryMembers.filter { it.second == role }.map { it.first }
-                    }
+                    val people = roster.filter { it.ministryRole.equals(role, ignoreCase = true) }
                     col.add(horizontal().apply {
                         setPadding(dp(40), 0, dp(20), 0)
                         add(Symbol(this@MemberActivity, "music", Color.BLACK), 56, 52)
@@ -1972,22 +2035,27 @@ open class MemberActivity : AppCompatActivity() {
                         col.space(8)
                         val members = vertical().apply {
                             setPadding(dp(20), dp(28), dp(20), dp(24))
-                            minimumHeight = dp(people.size * 68 + 52)
+                            minimumHeight = dp(maxOf(1, people.size) * 68 + 52)
                             background = GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,
                                 intArrayOf(Color.rgb(21, 28, 50), Color.rgb(57, 79, 150))).apply {
                                 cornerRadii = floatArrayOf(dp(40).toFloat(), dp(40).toFloat(),
                                     dp(40).toFloat(), dp(40).toFloat(), 0f, 0f, 0f, 0f)
                             }
-                            people.forEach { name ->
-                                add(horizontal().apply {
-                                    setPadding(0, dp(8), 0, dp(8))
-                                    add(memberAvatar(), 52, 52)
-                                    add(vertical().apply {
-                                        setPadding(dp(16), 0, 0, 0)
-                                        add(text(name, 14, Color.WHITE, true)); space(4)
-                                        add(text(role, 12, Color.WHITE))
-                                    }, 0, -2, 1f)
-                                })
+                            if (people.isEmpty()) {
+                                add(text("No members assigned to this role yet", 13, Color.LTGRAY))
+                            } else {
+                                people.forEach { member ->
+                                    val memberName = member.fullName.ifBlank { member.username.ifBlank { "Member" } }
+                                    add(horizontal().apply {
+                                        setPadding(0, dp(8), 0, dp(8))
+                                        add(memberAvatar(), 52, 52)
+                                        add(vertical().apply {
+                                            setPadding(dp(16), 0, 0, 0)
+                                            add(text(memberName, 14, Color.WHITE, true)); space(4)
+                                            add(text(role, 12, Color.WHITE))
+                                        }, 0, -2, 1f)
+                                    })
+                                }
                             }
                         }
                         col.add(members, -1, 0, 1f)

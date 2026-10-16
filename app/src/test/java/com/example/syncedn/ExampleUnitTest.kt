@@ -393,4 +393,21 @@ class ExampleUnitTest {
         assertEquals("Philippines", profile.country)
         assertEquals("English", profile.language)
     }
+
+    @Test
+    fun testRosterGroupingByMinistryRole() {
+        val members = listOf(
+            com.example.syncedn.data.model.TeamMember(uid = "1", fullName = "Joshua Lagare", ministryRole = "Worship Leader", role = "Leader"),
+            com.example.syncedn.data.model.TeamMember(uid = "2", fullName = "Ryan Lloyd Genturo", ministryRole = "Keyboardist", role = "Member"),
+            com.example.syncedn.data.model.TeamMember(uid = "3", fullName = "Angelo Daniel", ministryRole = "Guitarist", role = "Member"),
+            com.example.syncedn.data.model.TeamMember(uid = "4", fullName = "Ralph Lauren", ministryRole = "Guitarist", role = "Member"),
+            com.example.syncedn.data.model.TeamMember(uid = "5", fullName = "Jessa Mae Dizon", ministryRole = "Vocalist", role = "Member")
+        )
+        val grouped = members.groupBy { it.ministryRole }
+        assertEquals(4, grouped.size)
+        assertEquals(2, grouped["Guitarist"]?.size)
+        assertEquals(1, grouped["Worship Leader"]?.size)
+        assertEquals(1, grouped["Keyboardist"]?.size)
+        assertEquals(1, grouped["Vocalist"]?.size)
+    }
 }
