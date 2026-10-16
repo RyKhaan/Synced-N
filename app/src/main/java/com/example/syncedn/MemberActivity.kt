@@ -257,11 +257,15 @@ open class MemberActivity : AppCompatActivity() {
         profileReturnPage = savedInstanceState?.getString("profileReturnPage") ?: "settings"
         teamName = savedInstanceState?.getString("teamName") ?: preferences.getString("teamName", "").orEmpty()
         successFlow = savedInstanceState?.getString("successFlow") ?: "register"
+        savedInstanceState?.getString("selectedSheetService")?.let { value ->
+            selectedSheetService = try { org.json.JSONObject(value) } catch(_:Exception) { null }
+        }
         savedInstanceState?.let { state ->
             scheduleFilter = state.getString("scheduleFilter", "Upcoming") ?: "Upcoming"
             teamTab = state.getString("teamTab", "Team Chat") ?: "Team Chat"
             expandedRole = state.getString("expandedRole")
             selectedSong = state.getString("selectedSong", "Trust in God") ?: "Trust in God"
+            songDetailsBack = state.getString("songDetailsBack", "songs") ?: "songs"
             selectedService = state.getString("selectedService", "Sunday Worship Service") ?: "Sunday Worship Service"
             serviceReturnPage = state.getString("serviceReturnPage", "schedule") ?: "schedule"
             calendarYear = state.getInt("calendarYear", 2026)
@@ -290,7 +294,7 @@ open class MemberActivity : AppCompatActivity() {
                     "service" -> serviceReturnPage
                     "substitution", "lineup" -> "service"
                     "songs" -> songsReturnPage
-                    "songDetails" -> "songs"
+                    "songDetails" -> songDetailsBack
                     "teamDetails" -> "teams"
                     else -> null
                 }
@@ -310,6 +314,8 @@ open class MemberActivity : AppCompatActivity() {
         outState.putString("teamTab", teamTab)
         outState.putString("expandedRole", expandedRole)
         outState.putString("selectedSong", selectedSong)
+        outState.putString("songDetailsBack", songDetailsBack)
+        outState.putString("selectedSheetService", selectedSheetService?.toString())
         outState.putString("selectedService", selectedService)
         outState.putString("serviceReturnPage", serviceReturnPage)
         outState.putString("substitute", substitute)
@@ -703,6 +709,7 @@ open class MemberActivity : AppCompatActivity() {
         applyProfilePhoto(UI.profileButton)
         click(UI.profileButton) { openProfile("home") }
         click(UI.worshipCard) {
+            selectSheetService(sampleSheetService())
             selectedService = "Sunday Worship Service"; serviceReturnPage = "home"
             preferences.edit().putString("serviceDate", "May 18, 2025").putString("serviceTime", "9:00AM").putString("serviceVenue", "Main Sanctuary").apply()
             navigate("service")
@@ -715,7 +722,7 @@ open class MemberActivity : AppCompatActivity() {
         click(UI.teamHubButton) { navigate("teams") }
         click(UI.announcementsButton) { navigate("announcements") }
         click(UI.calendarButton) { navigate("calendar") }
-        click(UI.songsButton) { songsReturnPage = "home"; navigate("songs") }
+        click(UI.songsButton) { selectedSheetService = null; songsReturnPage = "home"; navigate("songs") }
         click(UI.scheduleCard) { openHomeUpcoming() }
         click(UI.homeTab) { toast("You are on Home.") }
         click(UI.scheduleTab) { schedule() }
@@ -1072,6 +1079,7 @@ open class MemberActivity : AppCompatActivity() {
     } catch (_: Exception) { value }
     private fun openHomeUpcoming() {
         val record=homeUpcomingRecord();serviceReturnPage="home"
+        selectSheetService(record ?: sampleSheetService())
         selectedService=record?.optString("title") ?: "Sunday Worship Service"
         preferences.edit().putString("serviceDate",record?.optString("date") ?: "May 18, 2025")
             .putString("serviceTime", if(record!=null) formatServiceTime(record.optString("start")) + " – " + formatServiceTime(record.optString("end")) else "6:00AM – 11:00AM")
@@ -1492,6 +1500,8 @@ open class MemberActivity : AppCompatActivity() {
     private var teamTab = "Team Chat"
     private var expandedRole: String? = null
     private var selectedSong = "Trust in God"
+    private var songDetailsBack = "songs"
+    private var selectedSheetService: org.json.JSONObject? = null
     private var selectedService = "Sunday Worship Service"
     private var serviceReturnPage = "schedule"
     private var calendarYear = 2026
@@ -1707,6 +1717,7 @@ open class MemberActivity : AppCompatActivity() {
                 add(Symbol(this@MemberActivity, "arrow", Color.GRAY), 18, 24)
                 isClickable = true; isFocusable = true
                 setOnClickListener {
+                    selectSheetService(sampleSheetService())
                     selectedService = title; serviceReturnPage = "schedule"
                     preferences.edit().putString("serviceTime", time).putString("serviceDate", date.replace("\n", " ")).putString("serviceVenue", if(title == "Team Meeting") "Fellowship Hall" else "Main Sanctuary").apply()
                     navigate("service")
@@ -2018,7 +2029,7 @@ open class MemberActivity : AppCompatActivity() {
                     }, 0, -2, 1f)
                     row.add(Symbol(this@MemberActivity, "arrow", Color.GRAY), 18, 24)
                     add(row); isClickable = true; isFocusable = true
-                    setOnClickListener { selectedSong = title; navigate("songDetails") }
+                    setOnClickListener { songDetailsBack = "songs"; selectedSong = title; navigate("songDetails") }
                 }); results.space(16)
             }
         }
@@ -2029,41 +2040,136 @@ open class MemberActivity : AppCompatActivity() {
             override fun afterTextChanged(s: android.text.Editable?) {}
         })
     }
-    private fun songDetailsView(): View = memberPage("Song Details", "songs") { col ->
+    private fun sampleSheetService(): org.json.JSONObject {
+        val rows = org.json.JSONArray()
+        ministryMembers.take(4).forEach { (name,role,_) ->
+            rows.put(org.json.JSONObject().put("name",name).put("role",role))
+        }
+        return org.json.JSONObject().put("assignments",rows)
+    }
+    private fun selectSheetService(record: org.json.JSONObject) {
+        selectedSheetService = org.json.JSONObject(record.toString())
+        record.optJSONArray("songs")?.let { songs ->
+            lineupSongs.clear()
+            repeat(songs.length()) { lineupSongs.add(songs.getString(it)) }
+        }
+    }
+    private fun songAssignedRoles(): String {
+        val uid = preferences.getString("userId", "").orEmpty()
+        val email = preferences.getString("email", "").orEmpty()
+        val name = preferences.getString("fullName", "").orEmpty()
+        val username = preferences.getString("username", displayName).orEmpty()
+        val selected = selectedSheetService
+        if (selected != null) {
+            // Refresh a published record so reassignment is reflected when the sheet reopens.
+            val current = storedServices().find { record ->
+                if(selected.optString("id").isNotBlank()) record.optString("id") == selected.optString("id")
+                else selected.optString("title").isNotBlank() &&
+                    record.optString("title") == selected.optString("title") &&
+                    record.optString("date") == selected.optString("date") &&
+                    record.optString("start") == selected.optString("start") &&
+                    record.optString("venue") == selected.optString("venue")
+            } ?: selected
+            val assignments = current.optJSONArray("assignments") ?: org.json.JSONArray()
+            val rows = (0 until assignments.length()).map { index ->
+                val row=assignments.getJSONObject(index)
+                mapOf("uid" to row.optString("uid").ifBlank { row.optString("userId").ifBlank { row.optString("memberId") } },
+                    "email" to row.optString("email"), "name" to row.optString("name"),
+                    "role" to row.optString("role"))
+            }
+            // An explicit service assignment (or lack of one) wins over a general team role.
+            return ChordSheet.assignedRoles(uid,email,name,username,rows)
+        }
+        val roles = try { org.json.JSONObject(preferences.getString("memberRoles","{}").orEmpty()) }
+            catch(_:Exception) { org.json.JSONObject() }
+        val identities = listOf(uid,email,name,username).filter { it.isNotBlank() }
+        val rows = roles.keys().asSequence().map { key -> key to roles.optString(key) }.toList()
+        return identities.firstNotNullOfOrNull { identity ->
+            rows.find { it.first.trim().equals(identity.trim(),true) }?.second?.takeIf { it.isNotBlank() }
+        }.orEmpty()
+    }
+    private fun songDetailsView(): View = memberPage("Song Details", songDetailsBack) { col ->
+        val savedSong = try { org.json.JSONObject(preferences.getString("songData_$selectedSong", "{}").orEmpty()) }
+            catch (_: Exception) { org.json.JSONObject() }
+        val originalKey = savedSong.optString("key", "C")
+        val basePitch = ChordSheet.keyPitch(originalKey).coerceAtLeast(0)
+        val roots = listOf("C", "Db", "D", "Eb", "E", "F", "F#", "G", "Ab", "A", "Bb", "B")
+        val minor = originalKey.endsWith("m") || originalKey.endsWith(" minor")
+        val showChords = ChordSheet.isInstrumentalist(songAssignedRoles())
+        val sheet = savedSong.optString("sheet", savedSong.optString("lyrics")).ifBlank {
+            "[Verse]\n[C]Add your licensed lyrics here.\n\n[Chorus]\n[Am]Add chorus lyrics here [F][G]"
+        }
+        val tempo = savedSong.optString("bpm", "74")
+        var offset = ((preferences.getInt("chord_transpose_$selectedSong", 0) % 12) + 12) % 12
+        val key = text("", 13, purple, true)
+        val sheetText = text("", 13, navy).apply {
+            if (showChords) typeface = Typeface.MONOSPACE
+            setTextIsSelectable(true)
+        }
+        fun renderTarget(target: Int) {
+            offset = (target - basePitch + 12) % 12
+            val root = roots[target]
+            key.text = "Key: $root${if(minor) "m" else ""}    •    $tempo BPM"
+            sheetText.text = ChordSheet.render(sheet, offset, !showChords, root.contains('b') || root == "F")
+            preferences.edit().putInt("chord_transpose_$selectedSong", offset).apply()
+        }
+        
         col.add(panel().apply {
             add(text(selectedSong, 18, navy, true)); space(6)
-            add(text(if (selectedSong == "Way Maker") "By Sinach" else if (selectedSong == "Gratitude") "By Brandon Lake" else "By Elevation Worship", 13, Color.GRAY))
+            add(text("By " + savedSong.optString("artist", if (selectedSong == "Way Maker") "Sinach" else if (selectedSong == "Gratitude") "Brandon Lake" else "Elevation Worship"), 13, Color.GRAY))
             space(16)
-            val key = text("Key: C    •    74 BPM", 13, purple, true); add(key); space(16)
-            add(text("Transpose preview", 12, Color.GRAY)); space(8)
-            add(horizontal().apply {
-                listOf("C", "Db", "D", "Eb", "E", "F").forEach { chord ->
-                    add(text(chord, 12, navy, true, true).apply {
-                        background = bg(Color.rgb(224, 215, 230), 6)
-                        setOnClickListener { key.text = "Key: $chord    •    74 BPM"; toast("Key preview only; add a chord sheet to transpose music.") }
-                        isFocusable = true
-                    }, 0, 44, 1f)
+            add(key); space(16)
+            if(showChords) {
+                key.contentDescription = "Song key. Tap to choose any of twelve keys."
+                key.isFocusable = true
+                key.setOnClickListener {
+                    AlertDialog.Builder(this@MemberActivity).setTitle("Transpose to key")
+                        .setSingleChoiceItems(roots.map { it + if(minor) "m" else "" }.toTypedArray(),
+                            (basePitch + offset) % 12) { dialog, position ->
+                            renderTarget(position); dialog.dismiss()
+                        }.setNeutralButton("Original") { _,_ -> renderTarget(basePitch) }
+                        .setNegativeButton("Cancel",null).show()
                 }
-            })
+                add(text("Transpose preview", 12, Color.GRAY)); space(8)
+                add(horizontal().apply {
+                    listOf("C", "Db", "D", "Eb", "E", "F").forEach { chord ->
+                        add(text(chord, 12, navy, true, true).apply {
+                            background = bg(Color.rgb(224, 215, 230), 6)
+                            setOnClickListener { renderTarget(ChordSheet.pitch(chord)) }
+                            isFocusable = true
+                        }, 0, 44, 1f)
+                    }
+                })
+            }
         }); col.space(24)
-        col.add(text("Lyrics & Chords Sheet", 13, navy, true)); col.space(10)
+        col.add(text(if(showChords) "Lyrics & Chords Sheet" else "Lyrics", 13, navy, true)); col.space(10)
         col.add(panel().apply {
-            add(text("Add your licensed lyrics and chords here.\n\n[Verse]\nC      F      G\n\n[Chorus]\nAm     F      C      G\n\nSample chord sheet for UI preview.", 13, navy))
+            if(showChords) {
+                add(android.widget.HorizontalScrollView(this@MemberActivity).apply {
+                    addView(sheetText, FrameLayout.LayoutParams(-2,-2))
+                })
+            } else add(sheetText)
         }); col.space(24)
+        renderTarget((basePitch + offset) % 12)
         col.add(text("Reference Link", 13, navy, true)); col.space(10)
         col.add(memberButton("Find song on YouTube", navy) {
-            val url = "https://www.youtube.com/results?search_query=" + Uri.encode("$selectedSong worship")
+            val reference = savedSong.optString("link")
+            val url = if (reference.startsWith("https://") || reference.startsWith("http://")) reference
+                else "https://www.youtube.com/results?search_query=" + Uri.encode("$selectedSong worship")
             try { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }
             catch (_: Exception) { toast("No browser available.") }
         }, -1, 48)
     }
+
     private fun lineupView(): View = memberPage("Song Lineup", "service") { col ->
         col.add(text("Sunday Worship Service", 13, navy, true)); col.space(20)
         lineupSongs.forEachIndexed { index, title ->
             col.add(panel().apply {
                 val row = horizontal()
                 row.add(text((index + 1).toString() + ".", 14, navy, true), 28, 48)
-                row.add(text(title, 14, navy, true), 0, -2, 1f)
+                row.add(text(title, 14, navy, true).apply {
+                    setOnClickListener { songDetailsBack="lineup";selectedSong=title;navigate("songDetails") }
+                }, 0, -2, 1f)
                 row.add(text("⋮", 24, navy, centered = true).apply {
                     contentDescription = "Reorder $title"; isFocusable = true
                     setOnClickListener {

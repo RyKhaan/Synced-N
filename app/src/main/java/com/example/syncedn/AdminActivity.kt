@@ -288,6 +288,7 @@ class AdminActivity : AppCompatActivity() {
             teamTab = state.getString("teamTab", "Team Chat") ?: "Team Chat"
             expandedRole = state.getString("expandedRole")
             selectedSong = state.getString("selectedSong", "Trust in God") ?: "Trust in God"
+            songDetailsBack = state.getString("songDetailsBack", "songs") ?: "songs"
             selectedService = state.getString("selectedService", "Sunday Worship Service") ?: "Sunday Worship Service"
             serviceReturnPage = state.getString("serviceReturnPage", "schedule") ?: "schedule"
             calendarYear = state.getInt("calendarYear", 2026)
@@ -322,7 +323,7 @@ class AdminActivity : AppCompatActivity() {
                     "service" -> serviceReturnPage
                     "lineup" -> "service"
                     "songs" -> songsReturnPage
-                    "songDetails" -> "songs"
+                    "songDetails" -> songDetailsBack
                     "teamDetails", "roleEdit" -> "teams"
                     "teamRoles" -> "teamDetails"
                     "createService" -> "home"
@@ -355,6 +356,7 @@ class AdminActivity : AppCompatActivity() {
         outState.putString("teamTab", teamTab)
         outState.putString("expandedRole", expandedRole)
         outState.putString("selectedSong", selectedSong)
+        outState.putString("songDetailsBack", songDetailsBack)
         outState.putString("selectedService", selectedService)
         outState.putString("serviceReturnPage", serviceReturnPage)
         outState.putString("substitute", substitute)
@@ -1917,7 +1919,9 @@ class AdminActivity : AppCompatActivity() {
             col.add(panel().apply {
                 add(horizontal().apply {
                     add(text("${index + 1}.", 14, navy, true), 28, 48)
-                    add(text(title, 14, navy, true), 0, -2, 1f)
+                    add(text(title, 14, navy, true).apply {
+                        setOnClickListener { songDetailsBack="adminLineup";selectedSong=title;navigate("songDetails") }
+                    }, 0, -2, 1f)
                     add(text("⋮", 24, navy, centered = true).apply {
                         contentDescription = "Edit $title"
                         setOnClickListener {
@@ -2070,7 +2074,7 @@ class AdminActivity : AppCompatActivity() {
         val artist = plainInput("Artist").apply { setText(data.optString("artist", songCatalog().find { it.first == selectedSong }?.second ?: "")) }
         val key = plainInput("Key, e.g. C").apply { setText(data.optString("key", "C")) }
         val bpm = plainInput("BPM").apply { inputType = InputType.TYPE_CLASS_NUMBER; setText(data.optString("bpm", "74")) }
-        val lyrics = plainInput("Your licensed lyrics / chords", true).apply { setText(data.optString("lyrics")) }
+        val lyrics = plainInput("Your licensed lyrics / chords", true).apply { setText(data.optString("sheet", data.optString("lyrics"))) }
         val link = plainInput("Reference URL").apply { setText(data.optString("link")) }
         listOf("Title*" to title, "Artist*" to artist, "Key" to key, "BPM" to bpm).forEach { (label, field) ->
             col.add(text(label, 12, navy, true)); col.space(8); col.add(field, -1, 48); col.space(16)
@@ -2082,6 +2086,7 @@ class AdminActivity : AppCompatActivity() {
             when {
                 name.isBlank() -> invalid(title, "Enter a title.")
                 artist.text.isBlank() -> invalid(artist, "Enter an artist.")
+                ChordSheet.keyPitch(key.text.toString().trim()) < 0 -> invalid(key, "Enter a key such as C, Eb, F# or Am.")
                 tempo == null || tempo !in 1..400 -> invalid(bpm, "Enter BPM from 1 to 400.")
                 else -> {
                     if (songCatalog().none { it.first.equals(name, true) }) {
@@ -2090,7 +2095,7 @@ class AdminActivity : AppCompatActivity() {
                         preferences.edit().putString("customSongs", catalog.toString()).apply()
                     }
                     preferences.edit().putString("songData_$name", org.json.JSONObject().put("artist", artist.text.toString().trim())
-                        .put("key", key.text.toString().trim()).put("bpm", tempo).put("lyrics", lyrics.text.toString())
+                        .put("key", key.text.toString().trim()).put("bpm", tempo).put("lyrics", lyrics.text.toString()).put("sheet", lyrics.text.toString())
                         .put("link", link.text.toString().trim()).toString()).apply()
                     selectedSong = name; toast("Song saved locally"); navigate("songDetails")
                 }
@@ -2288,6 +2293,7 @@ class AdminActivity : AppCompatActivity() {
     private var teamTab = "Team Chat"
     private var expandedRole: String? = null
     private var selectedSong = "Trust in God"
+    private var songDetailsBack = "songs"
     private var selectedService = "Sunday Worship Service"
     private var serviceReturnPage = "schedule"
     private var calendarYear = 2026
@@ -2702,7 +2708,7 @@ class AdminActivity : AppCompatActivity() {
                     }, 0, -2, 1f)
                     row.add(Symbol(this@AdminActivity, "arrow", Color.GRAY), 18, 24)
                     add(row); isClickable = true; isFocusable = true
-                    setOnClickListener { selectedSong = title; navigate("songDetails") }
+                    setOnClickListener { songDetailsBack = "songs"; selectedSong = title; navigate("songDetails") }
                 }); results.space(16)
             }
         }
@@ -2713,9 +2719,31 @@ class AdminActivity : AppCompatActivity() {
             override fun afterTextChanged(s: android.text.Editable?) {}
         })
     }
-    private fun songDetailsView(): View = memberPage("Song Details", "songs") { col ->
+    private fun songDetailsView(): View = memberPage("Song Details", songDetailsBack) { col ->
         val savedSong = try { org.json.JSONObject(preferences.getString("songData_$selectedSong", "{}").orEmpty()) }
-        catch (_: Exception) { org.json.JSONObject() }
+            catch (_: Exception) { org.json.JSONObject() }
+        val originalKey = savedSong.optString("key", "C")
+        val basePitch = ChordSheet.keyPitch(originalKey).coerceAtLeast(0)
+        val roots = listOf("C", "Db", "D", "Eb", "E", "F", "F#", "G", "Ab", "A", "Bb", "B")
+        val minor = originalKey.endsWith("m") || originalKey.endsWith(" minor")
+        val showChords = true
+        val sheet = savedSong.optString("sheet", savedSong.optString("lyrics")).ifBlank {
+            "[Verse]\n[C]Add your licensed lyrics here.\n\n[Chorus]\n[Am]Add chorus lyrics here [F][G]"
+        }
+        val tempo = savedSong.optString("bpm", "74")
+        var offset = ((preferences.getInt("chord_transpose_$selectedSong", 0) % 12) + 12) % 12
+        val key = text("", 13, purple, true)
+        val sheetText = text("", 13, navy).apply {
+            if (showChords) typeface = Typeface.MONOSPACE
+            setTextIsSelectable(true)
+        }
+        fun renderTarget(target: Int) {
+            offset = (target - basePitch + 12) % 12
+            val root = roots[target]
+            key.text = "Key: $root${if(minor) "m" else ""}    •    $tempo BPM"
+            sheetText.text = ChordSheet.render(sheet, offset, !showChords, root.contains('b') || root == "F")
+            preferences.edit().putInt("chord_transpose_$selectedSong", offset).apply()
+        }
         if (isLeader) {
             col.add(memberButton("Edit Song", navy) { navigate("songEdit") }, -1, 48); col.space(16)
         }
@@ -2723,32 +2751,49 @@ class AdminActivity : AppCompatActivity() {
             add(text(selectedSong, 18, navy, true)); space(6)
             add(text("By " + savedSong.optString("artist", if (selectedSong == "Way Maker") "Sinach" else if (selectedSong == "Gratitude") "Brandon Lake" else "Elevation Worship"), 13, Color.GRAY))
             space(16)
-            val tempo = savedSong.optString("bpm", "74")
-            val key = text("Key: " + savedSong.optString("key", "C") + "    •    $tempo BPM", 13, purple, true); add(key); space(16)
-            add(text("Transpose preview", 12, Color.GRAY)); space(8)
-            add(horizontal().apply {
-                listOf("C", "Db", "D", "Eb", "E", "F").forEach { chord ->
-                    add(text(chord, 12, navy, true, true).apply {
-                        background = bg(Color.rgb(224, 215, 230), 6)
-                        setOnClickListener { key.text = "Key: $chord    •    $tempo BPM"; toast("Key preview only; add a chord sheet to transpose music.") }
-                        isFocusable = true
-                    }, 0, 44, 1f)
+            add(key); space(16)
+            if(showChords) {
+                key.contentDescription = "Song key. Tap to choose any of twelve keys."
+                key.isFocusable = true
+                key.setOnClickListener {
+                    AlertDialog.Builder(this@AdminActivity).setTitle("Transpose to key")
+                        .setSingleChoiceItems(roots.map { it + if(minor) "m" else "" }.toTypedArray(),
+                            (basePitch + offset) % 12) { dialog, position ->
+                            renderTarget(position); dialog.dismiss()
+                        }.setNeutralButton("Original") { _,_ -> renderTarget(basePitch) }
+                        .setNegativeButton("Cancel",null).show()
                 }
-            })
+                add(text("Transpose preview", 12, Color.GRAY)); space(8)
+                add(horizontal().apply {
+                    listOf("C", "Db", "D", "Eb", "E", "F").forEach { chord ->
+                        add(text(chord, 12, navy, true, true).apply {
+                            background = bg(Color.rgb(224, 215, 230), 6)
+                            setOnClickListener { renderTarget(ChordSheet.pitch(chord)) }
+                            isFocusable = true
+                        }, 0, 44, 1f)
+                    }
+                })
+            }
         }); col.space(24)
-        col.add(text("Lyrics & Chords Sheet", 13, navy, true)); col.space(10)
+        col.add(text(if(showChords) "Lyrics & Chords Sheet" else "Lyrics", 13, navy, true)); col.space(10)
         col.add(panel().apply {
-            add(text(savedSong.optString("lyrics").ifBlank { "Add your licensed lyrics and chords here.\n\n[Verse]\nC      F      G\n\n[Chorus]\nAm     F      C      G\n\nSample chord sheet for UI preview." }, 13, navy))
+            if(showChords) {
+                add(android.widget.HorizontalScrollView(this@AdminActivity).apply {
+                    addView(sheetText, FrameLayout.LayoutParams(-2,-2))
+                })
+            } else add(sheetText)
         }); col.space(24)
+        renderTarget((basePitch + offset) % 12)
         col.add(text("Reference Link", 13, navy, true)); col.space(10)
         col.add(memberButton("Find song on YouTube", navy) {
             val reference = savedSong.optString("link")
             val url = if (reference.startsWith("https://") || reference.startsWith("http://")) reference
-            else "https://www.youtube.com/results?search_query=" + Uri.encode("$selectedSong worship")
+                else "https://www.youtube.com/results?search_query=" + Uri.encode("$selectedSong worship")
             try { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }
             catch (_: Exception) { toast("No browser available.") }
         }, -1, 48)
     }
+
     private fun teamHeader(showDetails: Boolean = false): View = FrameLayout(this).apply {
         background = GradientDrawable(GradientDrawable.Orientation.TL_BR,
             intArrayOf(Color.rgb(8, 7, 32), navy))
