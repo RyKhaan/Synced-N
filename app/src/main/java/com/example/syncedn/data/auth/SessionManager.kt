@@ -104,6 +104,7 @@ object SessionManager {
 
             // Cache user-scoped copies to preserve data offline per email
             if (emailLower.isNotBlank()) {
+                if (uid.isNotBlank()) putString("email_uid_$emailLower", uid)
                 if (username.isNotBlank()) putString("email_username_$emailLower", username)
                 if (fullName.isNotBlank()) putString("email_fullname_$emailLower", fullName)
                 if (phone.isNotBlank()) putString("email_phone_$emailLower", phone)

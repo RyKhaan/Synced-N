@@ -29,20 +29,78 @@ object TeamRepository {
 
     /**
      * Adds or updates a member in the local in-memory roster cache.
+     * Matches by UID or email, and optionally persists the member record to SharedPreferences.
      */
     @Synchronized
-    fun cacheMember(member: TeamMember) {
+    fun cacheMember(member: TeamMember, preferences: android.content.SharedPreferences? = null) {
         val code = member.teamCode.trim().uppercase()
         if (code.isBlank() || member.uid.isBlank()) return
         val list = cachedRosters.getOrPut(code) { java.util.Collections.synchronizedList(mutableListOf()) }
         synchronized(list) {
-            val index = list.indexOfFirst { it.uid == member.uid }
+            val index = list.indexOfFirst {
+                it.uid == member.uid || (it.email.isNotBlank() && it.email.equals(member.email, ignoreCase = true))
+            }
             if (index >= 0) {
                 list[index] = member
             } else {
                 list.add(member)
             }
             sortRoster(list)
+        }
+
+        if (preferences != null) {
+            val emailLower = member.email.trim().lowercase()
+            if (emailLower.isNotBlank()) {
+                preferences.edit()
+                    .putString("email_code_$emailLower", code)
+                    .putString("email_role_$emailLower", member.role)
+                    .putString("email_uid_$emailLower", member.uid)
+                    .apply()
+                if (member.fullName.isNotBlank()) {
+                    preferences.edit().putString("email_fullname_$emailLower", member.fullName).apply()
+                }
+                if (member.username.isNotBlank()) {
+                    preferences.edit().putString("email_username_$emailLower", member.username).apply()
+                }
+                if (member.ministryRole.isNotBlank()) {
+                    preferences.edit().putString("email_ministry_$emailLower", member.ministryRole).apply()
+                }
+            }
+        }
+    }
+
+    /**
+     * Synchronizes and restores any known team members for this teamCode from SharedPreferences
+     * into the in-memory cache, ensuring members are preserved across logout/login and offline scenarios.
+     */
+    @Synchronized
+    fun syncFromPreferences(preferences: android.content.SharedPreferences, teamCode: String) {
+        val code = teamCode.trim().uppercase()
+        if (code.isBlank()) return
+
+        val all = preferences.all
+        for ((key, value) in all) {
+            if (key.startsWith("email_code_") && value is String && value.trim().uppercase() == code) {
+                val emailLower = key.removePrefix("email_code_").trim().lowercase()
+                val role = (all["email_role_$emailLower"] as? String).orEmpty().ifBlank { "Member" }
+                val fullName = (all["email_fullname_$emailLower"] as? String).orEmpty()
+                val username = (all["email_username_$emailLower"] as? String).orEmpty().ifBlank { emailLower.substringBefore("@") }
+                val ministry = (all["email_ministry_$emailLower"] as? String).orEmpty()
+                val uid = (all["email_uid_$emailLower"] as? String).orEmpty().ifBlank { "user_${emailLower.hashCode()}" }
+                val memberName = fullName.ifBlank { username }
+                if (memberName.isNotBlank()) {
+                    val member = TeamMember(
+                        uid = uid,
+                        fullName = memberName,
+                        username = username,
+                        email = emailLower,
+                        role = role,
+                        ministryRole = ministry,
+                        teamCode = code
+                    )
+                    cacheMember(member)
+                }
+            }
         }
     }
 
@@ -85,6 +143,7 @@ object TeamRepository {
         }
 
         val updates = mutableMapOf<String, Any>(
+            "uid" to profile.uid,
             "fullName" to profile.fullName,
             "username" to profile.username,
             "phone" to profile.phone,

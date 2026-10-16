@@ -328,10 +328,17 @@ object FirestoreManager {
         onComplete: (Result<Unit>) -> Unit = {}
     ) {
         cacheUserRoleAndTeam(uid, email, role, teamName, teamCode)
+        val cleanEmail = email.trim()
         val updates = mutableMapOf<String, Any>(
             "role" to role,
             "teamName" to teamName
         )
+        if (uid.isNotBlank()) {
+            updates["uid"] = uid
+        }
+        if (cleanEmail.isNotBlank()) {
+            updates["email"] = cleanEmail
+        }
         if (teamCode.isNotBlank()) {
             updates["teamCode"] = teamCode
         }
@@ -344,7 +351,6 @@ object FirestoreManager {
                 // Synced in background
             }
         }
-        val cleanEmail = email.trim()
         if (cleanEmail.isNotBlank()) {
             try {
                 db.collection(USERS_COLLECTION)

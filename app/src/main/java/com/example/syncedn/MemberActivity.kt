@@ -158,6 +158,9 @@ open class MemberActivity : AppCompatActivity() {
         if (activeCode.isNotBlank() && activeTeam.isNotBlank()) {
             FirestoreManager.registerLocalTeam(activeCode, activeTeam)
         }
+        if (activeCode.isNotBlank()) {
+            com.example.syncedn.data.database.TeamRepository.syncFromPreferences(preferences, activeCode)
+        }
     }
 
     private fun resolveUserTeamSession(
@@ -198,10 +201,23 @@ open class MemberActivity : AppCompatActivity() {
 
     private fun saveUserTeamState(role: String, team: String, code: String) {
         val uid = preferences.getString("userId", "").orEmpty()
+            .ifBlank { com.example.syncedn.data.auth.AuthManager.currentUser?.uid.orEmpty() }
         val emailLower = preferences.getString("email", "").orEmpty().trim().lowercase()
         val cleanTeamLower = team.trim().lowercase()
         if (code.isNotBlank() && team.isNotBlank()) {
             FirestoreManager.registerLocalTeam(code, team)
+            val currentName = fullName.ifBlank { displayName }
+            val ministry = preferences.getString("ministryRole", if (role.equals("Leader", true)) "Worship Leader" else "Member").orEmpty()
+            val member = com.example.syncedn.data.model.TeamMember(
+                uid = uid.ifBlank { "user_${emailLower.hashCode()}" },
+                fullName = currentName,
+                username = displayName,
+                email = emailLower,
+                role = role,
+                ministryRole = ministry,
+                teamCode = code
+            )
+            TeamRepository.cacheMember(member, preferences)
         }
         FirestoreManager.cacheUserRoleAndTeam(uid, emailLower, role, team, code)
         preferences.edit {
@@ -225,6 +241,7 @@ open class MemberActivity : AppCompatActivity() {
                 putString("email_role_$emailLower", role)
                 putString("email_team_$emailLower", team)
                 putString("email_code_$emailLower", code)
+                if (uid.isNotBlank()) putString("email_uid_$emailLower", uid)
             }
         }
     }
@@ -339,7 +356,14 @@ open class MemberActivity : AppCompatActivity() {
                     val createBtn = findViewById<Button>(UI.createTeamButton)
                     createBtn?.isEnabled = false
                     val uid = preferences.getString("userId", "").orEmpty()
+                        .ifBlank { com.example.syncedn.data.auth.AuthManager.currentUser?.uid.orEmpty() }
+                        .ifBlank { "user_${displayName.hashCode()}" }
                     val emailStr = preferences.getString("email", "").orEmpty()
+                        .ifBlank { com.example.syncedn.data.auth.AuthManager.currentUser?.email.orEmpty() }
+                    preferences.edit {
+                        putString("userId", uid)
+                        putString("email", emailStr)
+                    }
                     FirestoreManager.createTeamWithCode(uid, displayName, enteredTeamName) { result ->
                         runOnUiThread {
                             createBtn?.isEnabled = true
@@ -348,6 +372,17 @@ open class MemberActivity : AppCompatActivity() {
                                 teamName = enteredTeamName
                                 saveUserTeamState("Leader", enteredTeamName, generatedCode)
                                 FirestoreManager.updateUserRoleAndTeam(uid, "Leader", enteredTeamName, generatedCode, emailStr)
+                                val leaderName = fullName.ifBlank { displayName }
+                                val leaderMember = com.example.syncedn.data.model.TeamMember(
+                                    uid = uid,
+                                    fullName = leaderName,
+                                    username = displayName,
+                                    email = emailStr,
+                                    role = "Leader",
+                                    ministryRole = preferences.getString("ministryRole", "Worship Leader").orEmpty().ifBlank { "Worship Leader" },
+                                    teamCode = generatedCode
+                                )
+                                TeamRepository.cacheMember(leaderMember, preferences)
                                 try {
                                     val clipboard = getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager
                                     clipboard.setPrimaryClip(
@@ -388,9 +423,27 @@ open class MemberActivity : AppCompatActivity() {
                                 val (validCode, foundTeamName) = result.getOrNull()!!
                                 teamName = foundTeamName
                                 val uid = preferences.getString("userId", "").orEmpty()
+                                    .ifBlank { com.example.syncedn.data.auth.AuthManager.currentUser?.uid.orEmpty() }
+                                    .ifBlank { "user_${displayName.hashCode()}" }
                                 val emailStr = preferences.getString("email", "").orEmpty()
-                                FirestoreManager.updateUserRoleAndTeam(uid, "Member", foundTeamName, validCode, emailStr)
+                                    .ifBlank { com.example.syncedn.data.auth.AuthManager.currentUser?.email.orEmpty() }
+                                preferences.edit {
+                                    putString("userId", uid)
+                                    putString("email", emailStr)
+                                }
                                 saveUserTeamState("Member", foundTeamName, validCode)
+                                FirestoreManager.updateUserRoleAndTeam(uid, "Member", foundTeamName, validCode, emailStr)
+                                val memberName = fullName.ifBlank { displayName }
+                                val newMember = com.example.syncedn.data.model.TeamMember(
+                                    uid = uid,
+                                    fullName = memberName,
+                                    username = displayName,
+                                    email = emailStr,
+                                    role = "Member",
+                                    ministryRole = preferences.getString("ministryRole", "Member").orEmpty().ifBlank { "Member" },
+                                    teamCode = validCode
+                                )
+                                TeamRepository.cacheMember(newMember, preferences)
                                 toast("Joined team: $foundTeamName")
                                 if (javaClass == MainActivity::class.java) {
                                     startActivity(Intent(this@MemberActivity, MemberActivity::class.java).putExtra("startPage", "home"))
@@ -540,10 +593,11 @@ open class MemberActivity : AppCompatActivity() {
                         runOnUiThread {
                             regBtn?.isEnabled = true
                             if (result.isSuccess) {
+                                val registeredProfile = result.getOrNull()
                                 displayName = nameStr
                                 fullName = ""
                                 SessionManager.clearSession(preferences)
-                                SessionManager.saveSessionProfile(preferences, null, displayName, emailStr)
+                                SessionManager.saveSessionProfile(preferences, registeredProfile, displayName, emailStr)
                                 preferences.edit {
                                     putString("role", "")
                                     putString("teamName", "")
@@ -1466,6 +1520,9 @@ open class MemberActivity : AppCompatActivity() {
             }
         }
 
+        if (currentCode.isNotBlank()) {
+            TeamRepository.syncFromPreferences(preferences, currentCode)
+        }
         val cached = TeamRepository.getCachedRoster(currentCode)
         if (cached.isNotEmpty()) return applyOverrides(cached)
         if (teamRoster.isNotEmpty()) return applyOverrides(teamRoster)
@@ -1502,10 +1559,16 @@ open class MemberActivity : AppCompatActivity() {
         val currentCode = preferences.getString("teamCode", "").orEmpty()
             .ifBlank { FirestoreManager.findCodeByTeamName(teamName).orEmpty() }
         if (currentCode.isBlank()) return
+        TeamRepository.syncFromPreferences(preferences, currentCode)
         TeamRepository.getTeamRoster(currentCode) { result ->
             result.getOrNull()?.let { list ->
                 if (list.isNotEmpty()) {
                     teamRoster = list
+                    runOnUiThread {
+                        if (page == "teams" || page == "home") {
+                            navigate(page)
+                        }
+                    }
                 }
             }
         }

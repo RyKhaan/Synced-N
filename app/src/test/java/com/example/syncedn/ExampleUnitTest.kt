@@ -575,6 +575,53 @@ class ExampleUnitTest {
         assertEquals("Vocalist", resolvedRole)
     }
 
+    @Test
+    fun testTeamRosterSyncFromPreferencesAndMultiMemberRoster() {
+        val repo = com.example.syncedn.data.database.TeamRepository
+        repo.clearCache()
+
+        val mockPrefs = FakePreferences().apply {
+            edit()
+                // Leader
+                .putString("email_code_ryanlloydgenturo@gmail.com", "MVBRWM")
+                .putString("email_role_ryanlloydgenturo@gmail.com", "Leader")
+                .putString("email_fullname_ryanlloydgenturo@gmail.com", "Ryan Lloyd Genturo")
+                .putString("email_username_ryanlloydgenturo@gmail.com", "ryanlloydgenturo")
+                .putString("email_ministry_ryanlloydgenturo@gmail.com", "Worship Leader")
+                .putString("email_uid_ryanlloydgenturo@gmail.com", "uid_leader_1")
+                // Member
+                .putString("email_code_rlgenturo@gmail.com", "MVBRWM")
+                .putString("email_role_rlgenturo@gmail.com", "Member")
+                .putString("email_fullname_rlgenturo@gmail.com", "RL Gents")
+                .putString("email_username_rlgenturo@gmail.com", "RL")
+                .putString("email_ministry_rlgenturo@gmail.com", "Vocalist")
+                .putString("email_uid_rlgenturo@gmail.com", "uid_member_2")
+                .apply()
+        }
+
+        // Initially empty
+        assertEquals(0, repo.getCachedRoster("MVBRWM").size)
+
+        // Sync from preferences
+        repo.syncFromPreferences(mockPrefs, "MVBRWM")
+
+        // Roster must now contain both Leader and Member
+        val roster = repo.getCachedRoster("MVBRWM")
+        assertEquals(2, roster.size)
+
+        // Leader is sorted first
+        val leader = roster[0]
+        assertEquals("Leader", leader.role)
+        assertEquals("Ryan Lloyd Genturo", leader.fullName)
+        assertEquals("Worship Leader", leader.ministryRole)
+
+        // Member is sorted second
+        val member = roster[1]
+        assertEquals("Member", member.role)
+        assertEquals("RL Gents", member.fullName)
+        assertEquals("Vocalist", member.ministryRole)
+    }
+
     private class FakePreferences : android.content.SharedPreferences {
         private val map = mutableMapOf<String, Any?>()
 
