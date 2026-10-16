@@ -410,4 +410,24 @@ class ExampleUnitTest {
         assertEquals(1, grouped["Keyboardist"]?.size)
         assertEquals(1, grouped["Vocalist"]?.size)
     }
+
+    @Test
+    fun testTeamRepositoryConcurrentAccessAndRoleRetrieval() {
+        val repo = com.example.syncedn.data.database.TeamRepository
+        repo.clearCache()
+        val threads = (1..10).map { i ->
+            Thread {
+                repo.cacheMember(com.example.syncedn.data.model.TeamMember(
+                    uid = "uid_$i",
+                    fullName = "Member $i",
+                    teamCode = "CONCURRENT"
+                ))
+                repo.getCachedRoster("CONCURRENT")
+            }
+        }
+        threads.forEach { it.start() }
+        threads.forEach { it.join() }
+        val roster = repo.getCachedRoster("CONCURRENT")
+        assertEquals(10, roster.size)
+    }
 }

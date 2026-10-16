@@ -104,6 +104,14 @@ class AdminActivity : AppCompatActivity() {
                                     putString("username", displayName)
                                     putString("email", emailStr)
                                     putString("userId", uid)
+                                    if (!profile?.fullName.isNullOrBlank()) putString("fullName", profile?.fullName)
+                                    if (!profile?.phone.isNullOrBlank()) putString("phone", profile?.phone)
+                                    if (!profile?.country.isNullOrBlank()) putString("country", profile?.country)
+                                    if (!profile?.language.isNullOrBlank()) putString("language", profile?.language)
+                                    if (!profile?.ministryRole.isNullOrBlank()) putString("ministryRole", profile?.ministryRole)
+                                }
+                                if (!profile?.fullName.isNullOrBlank()) {
+                                    fullName = profile?.fullName.orEmpty()
                                 }
                                 if (userTeam.isNotBlank()) {
                                     saveUserTeamState(userRole, userTeam, userTeamCode)
@@ -513,6 +521,14 @@ class AdminActivity : AppCompatActivity() {
                                     putString("username", displayName)
                                     putString("email", emailStr)
                                     putString("userId", uid)
+                                    if (!profile?.fullName.isNullOrBlank()) putString("fullName", profile?.fullName)
+                                    if (!profile?.phone.isNullOrBlank()) putString("phone", profile?.phone)
+                                    if (!profile?.country.isNullOrBlank()) putString("country", profile?.country)
+                                    if (!profile?.language.isNullOrBlank()) putString("language", profile?.language)
+                                    if (!profile?.ministryRole.isNullOrBlank()) putString("ministryRole", profile?.ministryRole)
+                                }
+                                if (!profile?.fullName.isNullOrBlank()) {
+                                    fullName = profile?.fullName.orEmpty()
                                 }
                                 if (userTeam.isNotBlank()) {
                                     saveUserTeamState(userRole, userTeam, userTeamCode)
@@ -1370,6 +1386,8 @@ class AdminActivity : AppCompatActivity() {
         return row
     }
     private fun profileView(): View {
+        fullName = preferences.getString("fullName", fullName).orEmpty()
+        displayName = preferences.getString("username", displayName).orEmpty()
         val root=vertical().apply {setBackgroundColor(Color.WHITE)}
         root.add(settingsHeader("Profile",true))
         val scroll=ScrollView(this).apply {isFillViewport=true; clipToPadding=true}
@@ -1440,7 +1458,7 @@ class AdminActivity : AppCompatActivity() {
                         phone = phoneStr,
                         country = countryStr,
                         language = langStr,
-                        ministryRole = "Worship Leader"
+                        ministryRole = preferences.getString("ministryRole", "Worship Leader").orEmpty().ifBlank { "Worship Leader" }
                     )
                     TeamRepository.updateUserProfile(profileObj)
                     toast("Profile saved successfully");navigate(profileReturnPage)
@@ -1488,7 +1506,7 @@ class AdminActivity : AppCompatActivity() {
         if (teamRoster.isNotEmpty()) return teamRoster
         val currentUid = preferences.getString("userId", "").orEmpty()
         val currentName = fullName.ifBlank { displayName }
-        val userRole = preferences.getString("userRole", if (isLeader) "Leader" else "Member").orEmpty()
+        val userRole = preferences.getString("role", if (isLeader) "Leader" else "Member").orEmpty()
         val ministry = preferences.getString("ministryRole", if (isLeader) "Worship Leader" else "Member").orEmpty()
         if (currentName.isNotBlank() && currentCode.isNotBlank()) {
             val self = TeamMember(
@@ -1523,6 +1541,16 @@ class AdminActivity : AppCompatActivity() {
             result.getOrNull()?.let { list ->
                 if (list.isNotEmpty()) {
                     teamRoster = list
+                }
+            }
+        }
+        TeamRepository.getTeamCustomRoles(currentCode) { result ->
+            result.getOrNull()?.let { roles ->
+                if (roles.isNotEmpty()) {
+                    runOnUiThread {
+                        leaderRoles.clear()
+                        leaderRoles.addAll(roles)
+                    }
                 }
             }
         }
@@ -2791,8 +2819,10 @@ class AdminActivity : AppCompatActivity() {
                         TeamRepository.leaveTeam(uid) {}
                     }
                     preferences.edit()
+                        .putString("role", "")
                         .remove("teamName")
                         .remove("teamCode")
+                        .remove("ministryRole")
                         .putBoolean("leftTeam", true)
                         .apply()
                     teamName = ""

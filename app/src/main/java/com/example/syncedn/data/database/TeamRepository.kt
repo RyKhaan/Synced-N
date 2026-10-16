@@ -15,12 +15,13 @@ object TeamRepository {
     private const val TEAMS_COLLECTION = "teams"
 
     // In-memory cache for fast UI updates, offline fallback, and unit tests
-    private val cachedRosters = mutableMapOf<String, MutableList<TeamMember>>()
-    private val cachedRoles = mutableMapOf<String, MutableList<String>>()
+    private val cachedRosters = java.util.concurrent.ConcurrentHashMap<String, MutableList<TeamMember>>()
+    private val cachedRoles = java.util.concurrent.ConcurrentHashMap<String, MutableList<String>>()
 
     /**
      * Clears all in-memory roster and role caches (primarily for unit tests).
      */
+    @Synchronized
     fun clearCache() {
         cachedRosters.clear()
         cachedRoles.clear()
@@ -29,25 +30,30 @@ object TeamRepository {
     /**
      * Adds or updates a member in the local in-memory roster cache.
      */
+    @Synchronized
     fun cacheMember(member: TeamMember) {
         val code = member.teamCode.trim().uppercase()
         if (code.isBlank() || member.uid.isBlank()) return
-        val list = cachedRosters.getOrPut(code) { mutableListOf() }
-        val index = list.indexOfFirst { it.uid == member.uid }
-        if (index >= 0) {
-            list[index] = member
-        } else {
-            list.add(member)
+        val list = cachedRosters.getOrPut(code) { java.util.Collections.synchronizedList(mutableListOf()) }
+        synchronized(list) {
+            val index = list.indexOfFirst { it.uid == member.uid }
+            if (index >= 0) {
+                list[index] = member
+            } else {
+                list.add(member)
+            }
+            sortRoster(list)
         }
-        sortRoster(list)
     }
 
     /**
      * Retrieves the current in-memory roster for a team code.
      */
+    @Synchronized
     fun getCachedRoster(teamCode: String): List<TeamMember> {
         val code = teamCode.trim().uppercase()
-        return cachedRosters[code]?.toList() ?: emptyList()
+        val list = cachedRosters[code] ?: return emptyList()
+        return synchronized(list) { list.toList() }
     }
 
     private fun sortRoster(list: MutableList<TeamMember>) {
@@ -78,21 +84,25 @@ object TeamRepository {
             cacheMember(member)
         }
 
+        val updates = mutableMapOf<String, Any>(
+            "fullName" to profile.fullName,
+            "username" to profile.username,
+            "phone" to profile.phone,
+            "country" to profile.country,
+            "language" to profile.language,
+            "ministryRole" to profile.ministryRole
+        )
+        if (profile.email.isNotBlank()) updates["email"] = profile.email
+        if (profile.teamCode.isNotBlank()) updates["teamCode"] = profile.teamCode
+        if (profile.teamName.isNotBlank()) updates["teamName"] = profile.teamName
+        if (profile.role.isNotBlank()) updates["role"] = profile.role
+
         try {
             db.collection(USERS_COLLECTION)
                 .document(profile.uid)
-                .update(profile.toMap())
-                .addOnSuccessListener {
-                    onComplete(Result.success(Unit))
-                }
-                .addOnFailureListener { e ->
-                    // Set document if update fails (e.g. document does not exist yet)
-                    db.collection(USERS_COLLECTION)
-                        .document(profile.uid)
-                        .set(profile.toMap())
-                        .addOnSuccessListener { onComplete(Result.success(Unit)) }
-                        .addOnFailureListener { setEx -> onComplete(Result.failure(setEx)) }
-                }
+                .set(updates, com.google.firebase.firestore.SetOptions.merge())
+                .addOnSuccessListener { onComplete(Result.success(Unit)) }
+                .addOnFailureListener { onComplete(Result.failure(it)) }
         } catch (e: Exception) {
             onComplete(Result.failure(e))
         }
@@ -116,11 +126,11 @@ object TeamRepository {
             }
         }
 
-        // Safety timeout guard (2 seconds)
+        // Safety timeout guard (5 seconds)
         try {
             android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
                 finishOnce(Result.success(getCachedRoster(code)))
-            }, 2000L)
+            }, 5000L)
         } catch (_: Exception) {}
 
         try {
@@ -136,13 +146,12 @@ object TeamRepository {
                         }
                     }
                     if (members.isNotEmpty()) {
-                        cachedRosters[code] = members
+                        synchronized(cachedRosters) {
+                            cachedRosters[code] = java.util.Collections.synchronizedList(members)
+                        }
                         sortRoster(members)
-                        finishOnce(Result.success(members))
-                    } else {
-                        // Fallback to cached roster if remote returned empty
-                        finishOnce(Result.success(getCachedRoster(code)))
                     }
+                    finishOnce(Result.success(members.ifEmpty { getCachedRoster(code) }))
                 }
                 .addOnFailureListener {
                     finishOnce(Result.success(getCachedRoster(code)))
@@ -155,6 +164,7 @@ object TeamRepository {
     /**
      * Updates a member's ministry role (e.g. "Vocalist", "Guitarist") in Firestore and local cache.
      */
+    @Synchronized
     fun updateMemberMinistryRole(memberUid: String, newRole: String, onComplete: (Result<Unit>) -> Unit = {}) {
         if (memberUid.isBlank()) {
             onComplete(Result.success(Unit))
@@ -163,11 +173,13 @@ object TeamRepository {
 
         // Update in-memory caches
         for ((_, roster) in cachedRosters) {
-            val member = roster.find { it.uid == memberUid }
-            if (member != null) {
-                val updated = member.copy(ministryRole = newRole)
-                val idx = roster.indexOf(member)
-                roster[idx] = updated
+            synchronized(roster) {
+                val member = roster.find { it.uid == memberUid }
+                if (member != null) {
+                    val updated = member.copy(ministryRole = newRole)
+                    val idx = roster.indexOf(member)
+                    roster[idx] = updated
+                }
             }
         }
 
@@ -228,7 +240,7 @@ object TeamRepository {
         try {
             db.collection(TEAMS_COLLECTION)
                 .document(code)
-                .update("roles", roles)
+                .set(mapOf("roles" to roles), com.google.firebase.firestore.SetOptions.merge())
                 .addOnSuccessListener { onComplete(Result.success(Unit)) }
                 .addOnFailureListener { onComplete(Result.failure(it)) }
         } catch (e: Exception) {
@@ -239,6 +251,7 @@ object TeamRepository {
     /**
      * Removes a member from a team, resetting their team fields in Firestore and cache.
      */
+    @Synchronized
     fun removeMemberFromTeam(memberUid: String, onComplete: (Result<Unit>) -> Unit = {}) {
         if (memberUid.isBlank()) {
             onComplete(Result.success(Unit))
@@ -247,7 +260,9 @@ object TeamRepository {
 
         // Remove from local cache
         for ((_, roster) in cachedRosters) {
-            roster.removeAll { it.uid == memberUid }
+            synchronized(roster) {
+                roster.removeAll { it.uid == memberUid }
+            }
         }
 
         val updates = mapOf(
