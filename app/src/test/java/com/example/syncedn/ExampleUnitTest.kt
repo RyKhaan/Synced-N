@@ -212,4 +212,40 @@ class ExampleUnitTest {
         val restored = com.example.syncedn.data.model.UserProfile.fromMap(map)
         assertEquals("K7M9P2", restored.teamCode)
     }
+
+    @Test
+    fun testCreateTeamAndVerifyCodeFlow() {
+        val fm = com.example.syncedn.data.database.FirestoreManager
+        fm.clearLocalTeams()
+
+        // 1. Creating a team completes immediately and generates a valid 6-character code
+        var createdCode = ""
+        fm.createTeamWithCode(
+            leaderUid = "leader-uid-1",
+            leaderName = "Leader Ryan",
+            teamName = "Praise Ministry"
+        ) { result ->
+            assertTrue("Team creation should succeed immediately", result.isSuccess)
+            createdCode = result.getOrNull().orEmpty()
+        }
+        assertEquals(6, createdCode.length)
+        assertEquals("Praise Ministry", fm.getLocalTeamName(createdCode))
+
+        // 2. Member joining with the valid code (even lowercase/with spaces) succeeds immediately
+        var joinedTeam: Pair<String, String>? = null
+        fm.getTeamByCode("  ${createdCode.lowercase()}  ") { result ->
+            assertTrue("Valid team code should succeed", result.isSuccess)
+            joinedTeam = result.getOrNull()
+        }
+        assertNotNull(joinedTeam)
+        assertEquals(createdCode, joinedTeam?.first)
+        assertEquals("Praise Ministry", joinedTeam?.second)
+
+        // 3. Member entering a random unregistered 6-character code is rejected
+        var randomAllowed = true
+        fm.getTeamByCode("123456") { result ->
+            randomAllowed = result.isSuccess
+        }
+        assertFalse("Random unregistered 6-digit code must be rejected", randomAllowed)
+    }
 }

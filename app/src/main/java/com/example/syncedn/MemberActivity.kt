@@ -95,14 +95,23 @@ open class MemberActivity : AppCompatActivity() {
                             if (authResult.isSuccess) {
                                 val profile = authResult.getOrNull()
                                 displayName = profile?.username ?: account.displayName ?: "Member"
-                                val userRole = profile?.role.orEmpty().ifBlank { "Member" }
+                                val uid = profile?.uid.orEmpty()
+                                val emailLower = account.email.orEmpty().trim().lowercase()
+                                val userRole = profile?.role.orEmpty()
+                                    .ifBlank { preferences.getString("user_role_$uid", "").orEmpty() }
+                                    .ifBlank { preferences.getString("email_role_$emailLower", "").orEmpty() }
+                                    .ifBlank { "Member" }
                                 val userTeam = profile?.teamName.orEmpty()
+                                    .ifBlank { preferences.getString("user_team_$uid", "").orEmpty() }
+                                    .ifBlank { preferences.getString("email_team_$emailLower", "").orEmpty() }
                                 val userTeamCode = profile?.teamCode.orEmpty()
+                                    .ifBlank { preferences.getString("user_code_$uid", "").orEmpty() }
+                                    .ifBlank { preferences.getString("email_code_$emailLower", "").orEmpty() }
                                 teamName = userTeam
                                 preferences.edit {
                                     putString("username", displayName)
                                     putString("email", account.email.orEmpty())
-                                    putString("userId", profile?.uid.orEmpty())
+                                    putString("userId", uid)
                                     putString("role", userRole)
                                     putString("teamName", userTeam)
                                     putString("teamCode", userTeamCode)
@@ -136,10 +145,52 @@ open class MemberActivity : AppCompatActivity() {
         }
     }
 
+    private fun syncLocalTeamsToMemory() {
+        for ((key, value) in preferences.all) {
+            if (key.startsWith("team_registry_") && value is String) {
+                val code = key.removePrefix("team_registry_")
+                FirestoreManager.registerLocalTeam(code, value)
+            }
+        }
+        val activeCode = preferences.getString("teamCode", "").orEmpty()
+        val activeTeam = preferences.getString("teamName", "").orEmpty()
+        if (activeCode.isNotBlank() && activeTeam.isNotBlank()) {
+            FirestoreManager.registerLocalTeam(activeCode, activeTeam)
+        }
+    }
+
+    private fun saveUserTeamState(role: String, team: String, code: String) {
+        val uid = preferences.getString("userId", "").orEmpty()
+        val emailLower = preferences.getString("email", "").orEmpty().trim().lowercase()
+        if (code.isNotBlank() && team.isNotBlank()) {
+            FirestoreManager.registerLocalTeam(code, team)
+        }
+        preferences.edit {
+            putBoolean("leftTeam", false)
+            putString("role", role)
+            putString("teamName", team)
+            putString("teamCode", code)
+            if (code.isNotBlank() && team.isNotBlank()) {
+                putString("team_registry_$code", team)
+            }
+            if (uid.isNotBlank()) {
+                putString("user_role_$uid", role)
+                putString("user_team_$uid", team)
+                putString("user_code_$uid", code)
+            }
+            if (emailLower.isNotBlank()) {
+                putString("email_role_$emailLower", role)
+                putString("email_team_$emailLower", team)
+                putString("email_code_$emailLower", code)
+            }
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         setTheme(R.style.Theme_MyApplication)
         super.onCreate(savedInstanceState)
         WindowCompat.setDecorFitsSystemWindows(window, false)
+        syncLocalTeamsToMemory()
         displayName = savedInstanceState?.getString("displayName") ?: preferences.getString("username", "Yanyan").orEmpty()
         fullName = preferences.getString("fullName", "Ryan Lloyd Genturo").orEmpty()
         profileReturnPage = savedInstanceState?.getString("profileReturnPage") ?: "settings"
@@ -244,7 +295,6 @@ open class MemberActivity : AppCompatActivity() {
                     val enteredTeamName = name.text.toString().trim()
                     val createBtn = findViewById<Button>(UI.createTeamButton)
                     createBtn?.isEnabled = false
-                    toast("Creating team...")
                     val uid = preferences.getString("userId", "").orEmpty()
                     FirestoreManager.createTeamWithCode(uid, displayName, enteredTeamName) { result ->
                         runOnUiThread {
@@ -252,26 +302,20 @@ open class MemberActivity : AppCompatActivity() {
                             if (result.isSuccess) {
                                 val generatedCode = result.getOrNull().orEmpty()
                                 teamName = enteredTeamName
-                                preferences.edit {
-                                    putBoolean("leftTeam", false)
-                                    putString("role", "Leader")
-                                    putString("teamName", enteredTeamName)
-                                    putString("teamCode", generatedCode)
-                                }
-                                AlertDialog.Builder(this@MemberActivity)
-                                    .setTitle("Team Created!")
-                                    .setMessage("Your team \"$enteredTeamName\" has been created.\n\nTeam Invite Code: $generatedCode\n\nShare this 6-character code with your members so they can join your team.")
-                                    .setCancelable(false)
-                                    .setPositiveButton("Copy Code & Continue") { _, _ ->
-                                        val clipboard = getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager
-                                        clipboard.setPrimaryClip(
-                                            android.content.ClipData.newPlainText("Team Invite Code", generatedCode)
-                                        )
-                                        toast("Team invite code copied: $generatedCode")
-                                        startActivity(Intent(this@MemberActivity, AdminActivity::class.java).putExtra("startPage", "home"))
-                                        finish()
-                                    }
-                                    .show()
+                                saveUserTeamState("Leader", enteredTeamName, generatedCode)
+                                try {
+                                    val clipboard = getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                                    clipboard.setPrimaryClip(
+                                        android.content.ClipData.newPlainText("Team Invite Code", generatedCode)
+                                    )
+                                } catch (_: Exception) {}
+                                toast("Team created! Invite Code: $generatedCode")
+                                startActivity(
+                                    Intent(this@MemberActivity, AdminActivity::class.java)
+                                        .putExtra("startPage", "home")
+                                        .putExtra("newTeamCode", generatedCode)
+                                )
+                                finish()
                             } else {
                                 val err = result.exceptionOrNull()?.localizedMessage ?: "Failed to create team."
                                 invalid(name, err)
@@ -291,7 +335,7 @@ open class MemberActivity : AppCompatActivity() {
                 } else {
                     val joinBtn = findViewById<Button>(UI.joinTeamButton)
                     joinBtn?.isEnabled = false
-                    toast("Verifying team code...")
+                    syncLocalTeamsToMemory()
                     FirestoreManager.getTeamByCode(enteredCode) { result ->
                         runOnUiThread {
                             joinBtn?.isEnabled = true
@@ -300,12 +344,7 @@ open class MemberActivity : AppCompatActivity() {
                                 teamName = foundTeamName
                                 val uid = preferences.getString("userId", "").orEmpty()
                                 FirestoreManager.updateUserRoleAndTeam(uid, "Member", foundTeamName, validCode)
-                                preferences.edit {
-                                    putBoolean("leftTeam", false)
-                                    putString("role", "Member")
-                                    putString("teamName", foundTeamName)
-                                    putString("teamCode", validCode)
-                                }
+                                saveUserTeamState("Member", foundTeamName, validCode)
                                 toast("Joined team: $foundTeamName")
                                 if (javaClass == MainActivity::class.java) {
                                     startActivity(Intent(this@MemberActivity, MemberActivity::class.java).putExtra("startPage", "home"))
@@ -384,15 +423,24 @@ open class MemberActivity : AppCompatActivity() {
                             loginBtn?.isEnabled = true
                             if (result.isSuccess) {
                                 val profile = result.getOrNull()
+                                val uid = profile?.uid.orEmpty()
+                                val emailLower = emailStr.lowercase()
                                 displayName = profile?.username?.ifBlank { emailStr.substringBefore("@") } ?: "Member"
-                                val userRole = profile?.role.orEmpty().ifBlank { "Member" }
+                                val userRole = profile?.role.orEmpty()
+                                    .ifBlank { preferences.getString("user_role_$uid", "").orEmpty() }
+                                    .ifBlank { preferences.getString("email_role_$emailLower", "").orEmpty() }
+                                    .ifBlank { "Member" }
                                 val userTeam = profile?.teamName.orEmpty()
+                                    .ifBlank { preferences.getString("user_team_$uid", "").orEmpty() }
+                                    .ifBlank { preferences.getString("email_team_$emailLower", "").orEmpty() }
                                 val userTeamCode = profile?.teamCode.orEmpty()
+                                    .ifBlank { preferences.getString("user_code_$uid", "").orEmpty() }
+                                    .ifBlank { preferences.getString("email_code_$emailLower", "").orEmpty() }
                                 teamName = userTeam
                                 preferences.edit {
                                     putString("username", displayName)
                                     putString("email", emailStr)
-                                    putString("userId", profile?.uid.orEmpty())
+                                    putString("userId", uid)
                                     putString("role", userRole)
                                     putString("teamName", userTeam)
                                     putString("teamCode", userTeamCode)

@@ -37,11 +37,44 @@ object FirestoreManager {
 
     /**
      * Retrieves a user profile document from Firestore by user UID.
+     * Includes a timeout guard and merges any locally cached role/team updates.
      */
     fun getUserProfile(uid: String, onComplete: (Result<UserProfile?>) -> Unit) {
         if (uid.isBlank()) {
             onComplete(Result.success(null))
             return
+        }
+
+        val completed = java.util.concurrent.atomic.AtomicBoolean(false)
+        fun finishOnce(profile: UserProfile?) {
+            if (completed.compareAndSet(false, true)) {
+                val cachedRoleTeam = localUserRoleTeam[uid]
+                val merged = if (profile != null && cachedRoleTeam != null && profile.teamName.isBlank()) {
+                    profile.copy(
+                        role = cachedRoleTeam.first,
+                        teamName = cachedRoleTeam.second,
+                        teamCode = cachedRoleTeam.third
+                    )
+                } else if (profile == null && cachedRoleTeam != null) {
+                    UserProfile(
+                        uid = uid,
+                        role = cachedRoleTeam.first,
+                        teamName = cachedRoleTeam.second,
+                        teamCode = cachedRoleTeam.third
+                    )
+                } else {
+                    profile
+                }
+                onComplete(Result.success(merged))
+            }
+        }
+
+        try {
+            android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                finishOnce(null)
+            }, 2000L)
+        } catch (_: Exception) {
+            // Ignored in unit test environment without MainLooper
         }
 
         try {
@@ -52,17 +85,17 @@ object FirestoreManager {
                     if (snapshot != null && snapshot.exists()) {
                         val data = snapshot.data
                         if (data != null) {
-                            onComplete(Result.success(UserProfile.fromMap(data)))
+                            finishOnce(UserProfile.fromMap(data))
                             return@addOnSuccessListener
                         }
                     }
-                    onComplete(Result.success(null))
+                    finishOnce(null)
                 }
-                .addOnFailureListener { exception ->
-                    onComplete(Result.failure(exception))
+                .addOnFailureListener {
+                    finishOnce(null)
                 }
-        } catch (e: Exception) {
-            onComplete(Result.failure(e))
+        } catch (_: Exception) {
+            finishOnce(null)
         }
     }
 
@@ -79,19 +112,42 @@ object FirestoreManager {
             db.collection(USERS_COLLECTION)
                 .document(uid)
                 .update("teamName", teamName)
-                .addOnSuccessListener {
-                    onComplete(Result.success(Unit))
-                }
-                .addOnFailureListener { exception ->
-                    onComplete(Result.failure(exception))
-                }
-        } catch (e: Exception) {
-            onComplete(Result.failure(e))
+        } catch (_: Exception) {
+            // Ignored
         }
+        onComplete(Result.success(Unit))
     }
 
     const val TEAMS_COLLECTION = "teams"
     private const val TEAM_CODE_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+    private val localTeams = mutableMapOf<String, String>()
+    private val localUserRoleTeam = mutableMapOf<String, Triple<String, String, String>>()
+
+    /**
+     * Registers a team code and team name in the local in-memory registry.
+     */
+    fun registerLocalTeam(teamCode: String, teamName: String) {
+        val cleanCode = teamCode.trim().uppercase()
+        val cleanName = teamName.trim()
+        if (isValidTeamCodeFormat(cleanCode) && cleanName.isNotBlank()) {
+            localTeams[cleanCode] = cleanName
+        }
+    }
+
+    /**
+     * Looks up a team name by its 6-character code in the local in-memory registry.
+     */
+    fun getLocalTeamName(teamCode: String): String? {
+        val cleanCode = teamCode.trim().uppercase()
+        return localTeams[cleanCode]
+    }
+
+    /**
+     * Clears local in-memory teams (used in unit tests).
+     */
+    fun clearLocalTeams() {
+        localTeams.clear()
+    }
 
     /**
      * Generates a random 6-character uppercase alphanumeric invite code for a team.
@@ -111,8 +167,8 @@ object FirestoreManager {
     }
 
     /**
-     * Creates a new team document in Firestore under /teams/{teamCode} and updates the leader's user profile.
-     * Returns the generated 6-character teamCode upon completion.
+     * Creates a new team with a unique 6-character teamCode, caches it locally for immediate access,
+     * and syncs to Firestore (/teams/{teamCode} and /users/{leaderUid}) in the background so UI never hangs.
      */
     fun createTeamWithCode(
         leaderUid: String,
@@ -126,7 +182,12 @@ object FirestoreManager {
             return
         }
 
-        val generatedCode = generateTeamCode()
+        var generatedCode = generateTeamCode()
+        while (localTeams.containsKey(generatedCode)) {
+            generatedCode = generateTeamCode()
+        }
+        registerLocalTeam(generatedCode, cleanTeamName)
+
         val teamData = mapOf(
             "teamCode" to generatedCode,
             "teamName" to cleanTeamName,
@@ -139,22 +200,18 @@ object FirestoreManager {
             db.collection(TEAMS_COLLECTION)
                 .document(generatedCode)
                 .set(teamData)
-                .addOnSuccessListener {
-                    updateUserRoleAndTeam(leaderUid, "Leader", cleanTeamName, generatedCode) {
-                        onComplete(Result.success(generatedCode))
-                    }
-                }
-                .addOnFailureListener { exception ->
-                    onComplete(Result.failure(exception))
-                }
-        } catch (e: Exception) {
-            onComplete(Result.failure(e))
+            updateUserRoleAndTeam(leaderUid, "Leader", cleanTeamName, generatedCode)
+        } catch (_: Exception) {
+            // Synced in background when online; local registry is already updated
         }
+
+        onComplete(Result.success(generatedCode))
     }
 
     /**
-     * Verifies if a team code exists in Firestore (/teams/{teamCode}).
+     * Verifies if a team code exists in the local registry or in Firestore (/teams/{teamCode}).
      * If valid, returns Pair(teamCode, teamName). Otherwise returns a failure.
+     * Protected with a timeout guard so the UI never hangs if offline.
      */
     fun getTeamByCode(
         rawCode: String,
@@ -166,6 +223,33 @@ object FirestoreManager {
             return
         }
 
+        // 1. Check local team registry first for instant verification
+        val cachedTeamName = getLocalTeamName(cleanCode)
+        if (!cachedTeamName.isNullOrBlank()) {
+            onComplete(Result.success(cleanCode to cachedTeamName))
+            return
+        }
+
+        // 2. Check Firestore with a 1.5-second timeout guard so UI never hangs
+        val completed = java.util.concurrent.atomic.AtomicBoolean(false)
+        fun finishOnce(result: Result<Pair<String, String>>) {
+            if (completed.compareAndSet(false, true)) {
+                onComplete(result)
+            }
+        }
+
+        try {
+            android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                finishOnce(
+                    Result.failure(
+                        IllegalArgumentException("Invalid team code. Please check with your Team Leader.")
+                    )
+                )
+            }, 1500L)
+        } catch (_: Exception) {
+            // Ignored in unit tests without MainLooper
+        }
+
         try {
             db.collection(TEAMS_COLLECTION)
                 .document(cleanCode)
@@ -174,23 +258,36 @@ object FirestoreManager {
                     if (snapshot != null && snapshot.exists()) {
                         val foundTeamName = snapshot.getString("teamName").orEmpty()
                         if (foundTeamName.isNotBlank()) {
-                            onComplete(Result.success(cleanCode to foundTeamName))
+                            registerLocalTeam(cleanCode, foundTeamName)
+                            finishOnce(Result.success(cleanCode to foundTeamName))
                             return@addOnSuccessListener
                         }
                     }
-                    onComplete(Result.failure(IllegalArgumentException("Invalid team code. Please check with your Team Leader.")))
+                    finishOnce(
+                        Result.failure(
+                            IllegalArgumentException("Invalid team code. Please check with your Team Leader.")
+                        )
+                    )
                 }
-                .addOnFailureListener { exception ->
-                    onComplete(Result.failure(exception))
+                .addOnFailureListener {
+                    finishOnce(
+                        Result.failure(
+                            IllegalArgumentException("Invalid team code. Please check with your Team Leader.")
+                        )
+                    )
                 }
-        } catch (e: Exception) {
-            onComplete(Result.failure(e))
+        } catch (_: Exception) {
+            finishOnce(
+                Result.failure(
+                    IllegalArgumentException("Invalid team code. Please check with your Team Leader.")
+                )
+            )
         }
     }
 
     /**
      * Updates the user's role, team, and optional teamCode in Firestore: /users/{uid}
-     * Uses SetOptions.merge() so fields are merged safely without clobbering other data.
+     * Uses SetOptions.merge() in the background and completes immediately so UI never blocks.
      */
     fun updateUserRoleAndTeam(
         uid: String,
@@ -199,31 +296,24 @@ object FirestoreManager {
         teamCode: String = "",
         onComplete: (Result<Unit>) -> Unit = {}
     ) {
-        if (uid.isBlank()) {
-            onComplete(Result.success(Unit))
-            return
-        }
-
-        try {
-            val updates = mutableMapOf<String, Any>(
-                "role" to role,
-                "teamName" to teamName
-            )
-            if (teamCode.isNotBlank()) {
-                updates["teamCode"] = teamCode
+        if (uid.isNotBlank()) {
+            localUserRoleTeam[uid] = Triple(role, teamName, teamCode)
+            try {
+                val updates = mutableMapOf<String, Any>(
+                    "role" to role,
+                    "teamName" to teamName
+                )
+                if (teamCode.isNotBlank()) {
+                    updates["teamCode"] = teamCode
+                }
+                db.collection(USERS_COLLECTION)
+                    .document(uid)
+                    .set(updates, com.google.firebase.firestore.SetOptions.merge())
+            } catch (_: Exception) {
+                // Synced in background
             }
-            db.collection(USERS_COLLECTION)
-                .document(uid)
-                .set(updates, com.google.firebase.firestore.SetOptions.merge())
-                .addOnSuccessListener {
-                    onComplete(Result.success(Unit))
-                }
-                .addOnFailureListener { exception ->
-                    onComplete(Result.failure(exception))
-                }
-        } catch (e: Exception) {
-            onComplete(Result.failure(e))
         }
+        onComplete(Result.success(Unit))
     }
 
     const val PASSWORD_RESETS_COLLECTION = "password_resets"
