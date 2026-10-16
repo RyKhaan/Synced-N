@@ -19,6 +19,7 @@ rules_version = '2';
 //   - country: string (optional, 0-50 chars) - Country of residence
 //   - language: string (optional, 0-50 chars) - Preferred interface language
 //   - ministryRole: string (optional, 0-50 chars) - Assigned ministry role (e.g., "Worship Leader", "Guitarist")
+//   - unavailableRanges: list (optional, max 100 items) - Member's unavailable date ranges for scheduling
 //   - createdAt: number | timestamp (optional, >= 0, immutable) - Account creation timestamp
 //
 // Collection: teams
@@ -194,7 +195,7 @@ service cloud.firestore {
       return hasOnlyAllowedFields(data, [
         'uid', 'username', 'email', 'role', 'teamName', 'teamCode',
         'resetPassword', 'fullName', 'phone', 'country', 'language',
-        'ministryRole', 'createdAt'
+        'ministryRole', 'unavailableRanges', 'createdAt'
       ]) &&
       hasRequiredFields(data, ['uid']) &&
       data.uid is string &&
@@ -212,6 +213,7 @@ service cloud.firestore {
       (!('country' in data) || (data.country is string && data.country.size() <= 50)) &&
       (!('language' in data) || (data.language is string && data.language.size() <= 50)) &&
       (!('ministryRole' in data) || (data.ministryRole is string && data.ministryRole.size() <= 50)) &&
+      (!('unavailableRanges' in data) || (data.unavailableRanges is list && data.unavailableRanges.size() <= 100)) &&
       (!('createdAt' in data) || (data.createdAt is number && data.createdAt >= 0) || (data.createdAt is timestamp));
     }
 
