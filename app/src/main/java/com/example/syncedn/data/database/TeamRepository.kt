@@ -466,7 +466,7 @@ object TeamRepository {
     ): List<UnavailableRange> {
         if (uid.isBlank()) return emptyList()
         val fromMemory = cachedUserRanges[uid]
-        if (!fromMemory.isNullOrEmpty()) {
+        if (fromMemory != null) {
             return synchronized(fromMemory) { fromMemory.toList() }
         }
 
@@ -547,7 +547,7 @@ object TeamRepository {
             val serialized = current.map { it.toMap() }
             db.collection(USERS_COLLECTION)
                 .document(uid)
-                .set(mapOf("unavailableRanges" to serialized), com.google.firebase.firestore.SetOptions.merge())
+                .set(mapOf("uid" to uid, "unavailableRanges" to serialized), com.google.firebase.firestore.SetOptions.merge())
                 .addOnSuccessListener { onComplete(Result.success(Unit)) }
                 .addOnFailureListener { onComplete(Result.failure(it)) }
         } catch (e: Exception) {
@@ -599,7 +599,7 @@ object TeamRepository {
             val serialized = current.map { it.toMap() }
             db.collection(USERS_COLLECTION)
                 .document(uid)
-                .set(mapOf("unavailableRanges" to serialized), com.google.firebase.firestore.SetOptions.merge())
+                .set(mapOf("uid" to uid, "unavailableRanges" to serialized), com.google.firebase.firestore.SetOptions.merge())
                 .addOnSuccessListener { onComplete(Result.success(Unit)) }
                 .addOnFailureListener { onComplete(Result.failure(it)) }
         } catch (e: Exception) {

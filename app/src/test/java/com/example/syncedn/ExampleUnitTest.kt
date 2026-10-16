@@ -790,6 +790,24 @@ class ExampleUnitTest {
         assertEquals(0, noneUnavailable.size)
     }
 
+    @Test
+    fun testEmptyUnavailableRangesMemoryCacheNotBypassed() {
+        val repo = com.example.syncedn.data.database.TeamRepository
+        val uid = "test_empty_cache_uid"
+        val prefs = FakePreferences()
+
+        // Pre-populate stale data in preferences
+        val staleJson = """[{"id":"range_stale","startDate":"2026-10-10","endDate":"2026-10-12","reason":"Stale"}]"""
+        prefs.edit().putString("user_unavailable_ranges_$uid", staleJson).apply()
+
+        // Simulate user having cleared all ranges (empty list cached in memory)
+        repo.removeUnavailableRange(uid, "non_existent_range", null) // ensures cachedUserRanges has empty list
+
+        // When cachedUserRanges has uid with empty list, fetching with prefs must NOT resurrect stale data from prefs
+        val result = repo.getMemberUnavailableRanges(uid, prefs)
+        assertEquals(0, result.size)
+    }
+
     private class FakePreferences : android.content.SharedPreferences {
         private val map = mutableMapOf<String, Any?>()
 

@@ -1826,7 +1826,7 @@ open class MemberActivity : AppCompatActivity() {
         col.add(text("Your unavailable dates sync with your team calendar.", 12, Color.GRAY)); col.space(20)
 
         val reason = plainInput("Reason, e.g. family bonding", true).apply {
-            filters = arrayOf(InputFilter.LengthFilter(ValidationUtils.MAX_TITLE_LENGTH))
+            filters = arrayOf(InputFilter.LengthFilter(ValidationUtils.MAX_REASON_LENGTH))
         }
         col.add(text("Reason", 12, navy, true)); col.space(8); col.add(reason, -1, 80); col.space(16)
 
@@ -1839,10 +1839,12 @@ open class MemberActivity : AppCompatActivity() {
             val rText = reason.text.toString().trim()
             val sText = start.text.toString().trim()
             val eText = end.text.toString().trim()
+            val currentRanges = TeamRepository.getMemberUnavailableRanges(uid, preferences)
             when {
                 rText.isBlank() -> invalid(reason, "Enter a reason.")
-                rText.length > ValidationUtils.MAX_TITLE_LENGTH -> invalid(reason, "Reason cannot exceed ${ValidationUtils.MAX_TITLE_LENGTH} characters.")
+                rText.length > ValidationUtils.MAX_REASON_LENGTH -> invalid(reason, "Reason cannot exceed ${ValidationUtils.MAX_REASON_LENGTH} characters.")
                 eText < sText -> toast("End date must be on or after the start date.")
+                currentRanges.size >= 100 -> toast("Maximum 100 unavailable ranges reached.")
                 else -> {
                     val range = UnavailableRange(
                         id = "range_${System.currentTimeMillis()}",
