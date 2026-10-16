@@ -11,3 +11,7 @@ Task 3: complete (commits dcddf6b..7676d5a, tests: testDebugUnitTest -> 28/28 pa
 Task 4: complete (commits 7676d5a..6d598d6, build: compileDebugKotlin -> pass)
 Task 5: complete (commits 6d598d6..0af8aeb, tests: testDebugUnitTest -> 28/28 pass)
 Task 6: complete (verification: testDebugUnitTest -> 25/25 pass, git status -> clean)
+Final: fixed memory cache fallthrough & merge uid & reason validation — testEmptyUnavailableRangesMemoryCacheNotBypassed RED→GREEN, suite 26/26
+Final review: approved by Senior Code Reviewer
+Deferred minors:
+- Minor: Direct reuse of checkTeamAvailabilityForDate in AdminActivity
