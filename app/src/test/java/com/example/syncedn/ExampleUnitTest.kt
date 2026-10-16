@@ -375,4 +375,22 @@ class ExampleUnitTest {
         assertEquals(1, afterRemove.size)
         assertEquals("u1", afterRemove[0].uid)
     }
+
+    @Test
+    fun testProfileUpdateCreatesValidUserProfile() {
+        val uid = "test_user_1"
+        val profile = com.example.syncedn.data.model.UserProfile(
+            uid = uid,
+            fullName = "Ryan Lloyd Genturo",
+            username = "Yanyan",
+            phone = "09123456789",
+            country = "Philippines",
+            language = "English"
+        )
+        assertEquals("Ryan Lloyd Genturo", profile.fullName)
+        assertEquals("Yanyan", profile.username)
+        assertEquals("09123456789", profile.phone)
+        assertEquals("Philippines", profile.country)
+        assertEquals("English", profile.language)
+    }
 }

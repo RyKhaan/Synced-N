@@ -3,6 +3,8 @@ package com.example.syncedn
 import com.example.syncedn.data.auth.AuthManager
 import com.example.syncedn.data.auth.EmailOtpService
 import com.example.syncedn.data.database.FirestoreManager
+import com.example.syncedn.data.database.TeamRepository
+import com.example.syncedn.data.model.TeamMember
 import androidx.activity.result.contract.ActivityResultContracts
 import com.google.android.gms.auth.api.signin.GoogleSignIn
 import com.google.android.gms.auth.api.signin.GoogleSignInOptions
@@ -1349,12 +1351,34 @@ open class MemberActivity : AppCompatActivity() {
                 email.text.isNotBlank() && !Patterns.EMAIL_ADDRESS.matcher(email.text.toString().trim()).matches()->invalid(email,"Enter a valid email.")
                 else->{
                     fullName=name.text.toString().trim();displayName=username.text.toString().trim()
+                    val phoneStr = input(UI.profilePhone).text.toString().trim()
+                    val emailStr = email.text.toString().trim()
+                    val countryStr = findViewById<Spinner>(UI.countrySpinner).selectedItem.toString()
+                    val langStr = findViewById<Spinner>(UI.languageSpinner).selectedItem.toString()
                     preferences.edit().putString("fullName",fullName).putString("username",displayName)
-                        .putString("phone",input(UI.profilePhone).text.toString().trim())
-                        .putString("email",email.text.toString().trim())
-                        .putString("country",findViewById<Spinner>(UI.countrySpinner).selectedItem.toString())
-                        .putString("language",findViewById<Spinner>(UI.languageSpinner).selectedItem.toString()).apply()
-                    toast("Profile saved on this phone");navigate(profileReturnPage)
+                        .putString("phone",phoneStr)
+                        .putString("email",emailStr)
+                        .putString("country",countryStr)
+                        .putString("language",langStr).apply()
+                    val uid = preferences.getString("userId", "").orEmpty()
+                    val activeCode = preferences.getString("teamCode", "").orEmpty()
+                    val activeRole = preferences.getString("role", "Member").orEmpty()
+                    val activeMinistry = preferences.getString("ministryRole", "").orEmpty()
+                    val profileObj = com.example.syncedn.data.model.UserProfile(
+                        uid = uid,
+                        username = displayName,
+                        email = emailStr,
+                        role = activeRole,
+                        teamName = teamName,
+                        teamCode = activeCode,
+                        fullName = fullName,
+                        phone = phoneStr,
+                        country = countryStr,
+                        language = langStr,
+                        ministryRole = activeMinistry
+                    )
+                    TeamRepository.updateUserProfile(profileObj)
+                    toast("Profile saved successfully");navigate(profileReturnPage)
                 }
             }
         }
