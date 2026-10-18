@@ -1074,6 +1074,48 @@ class ExampleUnitTest {
         assertEquals(1720000005000L, fromDateService.updatedAt)
     }
 
+    @Test
+    fun testSongDataSerializationAndDeserialization() {
+        val song = com.example.syncedn.data.model.SongData(
+            id = "song_123",
+            teamCode = "UPJAT7",
+            title = "Praise",
+            artist = "Elevation Worship",
+            key = "C",
+            bpm = 74,
+            sheet = "[Verse]\n[C]Praise the Lord\n[Chorus]\n[Am]Hallelujah [F][G]",
+            lyrics = "Praise the Lord\nHallelujah",
+            referenceUrl = "https://youtube.com/watch?v=123",
+            createdBy = "user_1",
+            createdAt = 1000L,
+            updatedAt = 2000L
+        )
+        val map = song.toMap()
+        assertEquals("song_123", map["id"])
+        assertEquals("UPJAT7", map["teamCode"])
+        assertEquals("Praise", map["title"])
+        assertEquals(74, map["bpm"])
+
+        val fromMap = com.example.syncedn.data.model.SongData.fromMap(map)
+        assertEquals(song.id, fromMap.id)
+        assertEquals(song.teamCode, fromMap.teamCode)
+        assertEquals(song.title, fromMap.title)
+        assertEquals(song.artist, fromMap.artist)
+        assertEquals(song.key, fromMap.key)
+        assertEquals(song.bpm, fromMap.bpm)
+        assertEquals(song.sheet, fromMap.sheet)
+        assertEquals(song.lyrics, fromMap.lyrics)
+        assertEquals(song.referenceUrl, fromMap.referenceUrl)
+        assertEquals(song.createdBy, fromMap.createdBy)
+        assertEquals(song.createdAt, fromMap.createdAt)
+        assertEquals(song.updatedAt, fromMap.updatedAt)
+
+        // Test string BPM coercion
+        val mapWithStringBpm = HashMap<String, Any?>(map).apply { put("bpm", "82") }
+        val coerced = com.example.syncedn.data.model.SongData.fromMap(mapWithStringBpm)
+        assertEquals(82, coerced.bpm)
+    }
+
     private class FakePreferences : android.content.SharedPreferences {
         private val map = mutableMapOf<String, Any?>()
 

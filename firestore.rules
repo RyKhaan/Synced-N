@@ -277,6 +277,27 @@ service cloud.firestore {
       (!('updatedAt' in data) || (data.updatedAt is number && data.updatedAt >= 0) || (data.updatedAt is timestamp));
     }
 
+    // Strict validator for /teams/{teamCode}/songs/{songId} documents (Group 4)
+    function isValidSong(data, songId, teamCode) {
+      return hasOnlyAllowedFields(data, [
+        'id', 'teamCode', 'title', 'artist', 'key', 'bpm', 'sheet', 'lyrics',
+        'referenceUrl', 'createdBy', 'createdAt', 'updatedAt'
+      ]) &&
+      hasRequiredFields(data, ['id', 'teamCode', 'title', 'key', 'createdBy']) &&
+      data.id is string && data.id == songId &&
+      data.teamCode is string && data.teamCode == teamCode &&
+      data.title is string && data.title.size() > 0 && data.title.size() <= 120 &&
+      (!('artist' in data) || (data.artist is string && data.artist.size() <= 100)) &&
+      data.key is string && data.key.size() > 0 && data.key.size() <= 10 &&
+      (!('bpm' in data) || data.bpm is number || (data.bpm is string && data.bpm.size() <= 10)) &&
+      (!('sheet' in data) || (data.sheet is string && data.sheet.size() <= 30000)) &&
+      (!('lyrics' in data) || (data.lyrics is string && data.lyrics.size() <= 20000)) &&
+      (!('referenceUrl' in data) || data.referenceUrl == '' || isValidUrl(data.referenceUrl)) &&
+      data.createdBy is string && data.createdBy.size() > 0 &&
+      (!('createdAt' in data) || (data.createdAt is number && data.createdAt >= 0) || (data.createdAt is timestamp)) &&
+      (!('updatedAt' in data) || (data.updatedAt is number && data.updatedAt >= 0) || (data.updatedAt is timestamp));
+    }
+
     // ===============================================================
     // Collection Match Rules
     // ===============================================================
@@ -389,6 +410,25 @@ service cloud.firestore {
 
         allow update: if isLeaderOfTeam(teamCode) &&
                          isValidService(request.resource.data, serviceId, teamCode) &&
+                         areImmutableFieldsUnchanged(['id', 'teamCode', 'createdBy', 'createdAt']);
+
+        allow delete: if isLeaderOfTeam(teamCode);
+      }
+
+      // ---------------------------------------------------------------
+      // Subcollection: Songs (/teams/{teamCode}/songs/{songId})
+      // ---------------------------------------------------------------
+      match /songs/{songId} {
+        // Read: Any authenticated member of the team can view the songs catalog and chord sheets.
+        allow read: if isAuthenticated() && isSameTeam(teamCode);
+
+        // Write: Only verified Team Leaders can create, update, or delete songs.
+        allow create: if isLeaderOfTeam(teamCode) &&
+                         isValidSong(request.resource.data, songId, teamCode) &&
+                         request.resource.data.createdBy == request.auth.uid;
+
+        allow update: if isLeaderOfTeam(teamCode) &&
+                         isValidSong(request.resource.data, songId, teamCode) &&
                          areImmutableFieldsUnchanged(['id', 'teamCode', 'createdBy', 'createdAt']);
 
         allow delete: if isLeaderOfTeam(teamCode);
