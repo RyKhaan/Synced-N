@@ -20,6 +20,8 @@ object TeamRepository {
     private val cachedRosters = java.util.concurrent.ConcurrentHashMap<String, MutableList<TeamMember>>()
     private val cachedRoles = java.util.concurrent.ConcurrentHashMap<String, MutableList<String>>()
     private val cachedUserRanges = java.util.concurrent.ConcurrentHashMap<String, MutableList<UnavailableRange>>()
+    private val lastRosterFetchTimes = java.util.concurrent.ConcurrentHashMap<String, Long>()
+    private val rosterInFlight = java.util.concurrent.ConcurrentHashMap<String, Boolean>()
 
     /**
      * Clears all in-memory roster and role caches (primarily for unit tests).
@@ -29,6 +31,8 @@ object TeamRepository {
         cachedRosters.clear()
         cachedRoles.clear()
         cachedUserRanges.clear()
+        lastRosterFetchTimes.clear()
+        rosterInFlight.clear()
     }
 
     /**
@@ -198,27 +202,49 @@ object TeamRepository {
 
     /**
      * Fetches the real team roster for a given teamCode from Cloud Firestore (/users where teamCode == teamCode).
-     * Protected with a timeout guard and fallback to cached roster.
+     * Protected with a timeout guard, in-flight throttling, and fallback to cached roster.
      */
-    fun getTeamRoster(teamCode: String, onComplete: (Result<List<TeamMember>>) -> Unit) {
+    fun getTeamRoster(
+        teamCode: String,
+        force: Boolean = false,
+        onComplete: (Result<List<TeamMember>>) -> Unit
+    ) {
         val code = teamCode.trim().uppercase()
         if (code.isBlank()) {
             onComplete(Result.success(emptyList()))
             return
         }
 
+        val cached = getCachedRoster(code)
+        val now = System.currentTimeMillis()
+        val lastFetch = lastRosterFetchTimes[code] ?: 0L
+
+        // If not forced and recently fetched with a non-empty cache, return cache immediately
+        if (!force && cached.isNotEmpty() && (now - lastFetch < 15_000L)) {
+            onComplete(Result.success(cached))
+            return
+        }
+
+        // If a request is already in-flight for this team, return cached roster immediately to avoid spam
+        if (rosterInFlight.putIfAbsent(code, true) == true) {
+            onComplete(Result.success(cached))
+            return
+        }
+
         val completed = java.util.concurrent.atomic.AtomicBoolean(false)
         fun finishOnce(result: Result<List<TeamMember>>) {
+            rosterInFlight.remove(code)
+            lastRosterFetchTimes[code] = System.currentTimeMillis()
             if (completed.compareAndSet(false, true)) {
                 onComplete(result)
             }
         }
 
-        // Safety timeout guard (5 seconds)
+        // Safety timeout guard (3 seconds)
         try {
             android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
                 finishOnce(Result.success(getCachedRoster(code)))
-            }, 5000L)
+            }, 3000L)
         } catch (_: Exception) {}
 
         try {
@@ -250,6 +276,10 @@ object TeamRepository {
         } catch (_: Exception) {
             finishOnce(Result.success(getCachedRoster(code)))
         }
+    }
+
+    fun getTeamRoster(teamCode: String, onComplete: (Result<List<TeamMember>>) -> Unit) {
+        getTeamRoster(teamCode, false, onComplete)
     }
 
     /**

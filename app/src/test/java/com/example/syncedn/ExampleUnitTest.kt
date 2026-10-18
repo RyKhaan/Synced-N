@@ -808,6 +808,142 @@ class ExampleUnitTest {
         assertEquals(0, result.size)
     }
 
+    @Test
+    fun testCleanDeviceLoginResolvesLeaderFromRemoteProfile() {
+        val fm = com.example.syncedn.data.database.FirestoreManager
+        fm.clearLocalTeams()
+        val prefs = FakePreferences()
+
+        // Clean device: preferences has 0 keys
+        assertTrue("Prefs must be empty initially on clean device", prefs.getAll().isEmpty())
+
+        // Remote Firestore profile fetched after login
+        val remoteProfile = com.example.syncedn.data.model.UserProfile(
+            uid = "firebase_leader_uid_777",
+            username = "ryanlloydgenturo",
+            email = "ryanlloydgenturo@gmail.com",
+            role = "Leader",
+            teamName = "Ryan",
+            teamCode = "MVBRWM",
+            fullName = "Ryan Lloyd Genturo",
+            ministryRole = "Worship Leader"
+        )
+
+        // SessionManager resolves session from remote profile
+        val (finalRole, finalTeam, finalCode) = com.example.syncedn.data.auth.SessionManager.resolveUserTeamSession(
+            preferences = prefs,
+            profile = remoteProfile,
+            email = "ryanlloydgenturo@gmail.com"
+        )
+
+        assertEquals("Leader", finalRole)
+        assertEquals("Ryan", finalTeam)
+        assertEquals("MVBRWM", finalCode)
+        assertEquals("Ryan", fm.getLocalTeamName("MVBRWM"))
+
+        // Save session profile to clean device
+        com.example.syncedn.data.auth.SessionManager.saveSessionProfile(
+            preferences = prefs,
+            profile = remoteProfile,
+            fallbackUsername = "ryanlloydgenturo",
+            fallbackEmail = "ryanlloydgenturo@gmail.com"
+        )
+
+        assertEquals("firebase_leader_uid_777", prefs.getString("userId", ""))
+        assertEquals("ryanlloydgenturo@gmail.com", prefs.getString("email", ""))
+        assertEquals("Ryan Lloyd Genturo", prefs.getString("fullName", ""))
+        assertEquals("Worship Leader", prefs.getString("ministryRole", ""))
+    }
+
+    @Test
+    fun testSessionManagerPreservesLocalTeamWhenOffline() {
+        val fm = com.example.syncedn.data.database.FirestoreManager
+        fm.clearLocalTeams()
+        val prefs = FakePreferences()
+
+        // Offline device has cached role and team in preferences
+        prefs.edit()
+            .putString("email_role_leader@synced.org", "Leader")
+            .putString("email_team_leader@synced.org", "Worship Team")
+            .putString("email_code_leader@synced.org", "WRSHP1")
+            .apply()
+
+        // Remote profile is null (offline network timeout)
+        val (finalRole, finalTeam, finalCode) = com.example.syncedn.data.auth.SessionManager.resolveUserTeamSession(
+            preferences = prefs,
+            profile = null,
+            email = "leader@synced.org"
+        )
+
+        assertEquals("Leader", finalRole)
+        assertEquals("Worship Team", finalTeam)
+        assertEquals("WRSHP1", finalCode)
+        assertEquals("Worship Team", fm.getLocalTeamName("WRSHP1"))
+    }
+
+    @Test
+    fun testRealFirebaseUidTakesPrecedenceOverDummyHashCodeUid() {
+        val prefs = FakePreferences()
+
+        // Stale preference had a hashCode dummy UID
+        prefs.edit()
+            .putString("userId", "user_1227807481")
+            .putString("email", "ryanlloydgenturo@gmail.com")
+            .apply()
+
+        // Fresh profile with real Firebase Auth UID
+        val realProfile = com.example.syncedn.data.model.UserProfile(
+            uid = "actual_firebase_uid_abc",
+            username = "ryanlloydgenturo",
+            email = "ryanlloydgenturo@gmail.com",
+            role = "Leader",
+            teamName = "Ryan",
+            teamCode = "MVBRWM"
+        )
+
+        com.example.syncedn.data.auth.SessionManager.saveSessionProfile(
+            preferences = prefs,
+            profile = realProfile
+        )
+
+        // Must be updated to the genuine Firebase UID, not the dummy hashCode UID
+        assertEquals("actual_firebase_uid_abc", prefs.getString("userId", ""))
+    }
+
+    @Test
+    fun testTeamRepositoryRosterThrottlingAndInFlightGuard() {
+        val repo = com.example.syncedn.data.database.TeamRepository
+        repo.clearCache()
+
+        val member = com.example.syncedn.data.model.TeamMember(
+            uid = "member_1",
+            fullName = "Joshua Lagare",
+            username = "joshua",
+            email = "joshua@test.com",
+            role = "Leader",
+            ministryRole = "Worship Leader",
+            teamCode = "THROT1"
+        )
+        repo.cacheMember(member)
+
+        var callCount = 0
+        // First call should return cached roster
+        repo.getTeamRoster("THROT1") { result ->
+            callCount++
+            assertTrue(result.isSuccess)
+            assertEquals(1, result.getOrNull()?.size)
+        }
+
+        // Rapid second call should return cached roster immediately via throttling
+        repo.getTeamRoster("THROT1") { result ->
+            callCount++
+            assertTrue(result.isSuccess)
+            assertEquals(1, result.getOrNull()?.size)
+        }
+
+        assertEquals(2, callCount)
+    }
+
     private class FakePreferences : android.content.SharedPreferences {
         private val map = mutableMapOf<String, Any?>()
 

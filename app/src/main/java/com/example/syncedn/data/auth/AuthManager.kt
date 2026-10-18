@@ -108,61 +108,76 @@ object AuthManager {
         val cleanEmail = email.trim()
         val cleanPassword = password.trim()
 
-        // 1. Check if user has an updated password from an OTP reset in Firestore
-        FirestoreManager.getPasswordReset(cleanEmail) { resetResult ->
-            val storedNewPassword = resetResult.getOrNull()
+        // 1. Try Firebase Auth sign-in first (standard, authenticated path)
+        try {
+            auth.signInWithEmailAndPassword(cleanEmail, cleanPassword)
+                .addOnCompleteListener { task ->
+                    if (task.isSuccessful) {
+                        val user = auth.currentUser ?: task.result?.user
+                        if (user != null) {
+                            FirestoreManager.getUserProfile(user.uid) { profileResult ->
+                                val existing = profileResult.getOrNull()
+                                if (existing != null && existing.teamName.isNotBlank()) {
+                                    onComplete(Result.success(existing))
+                                } else {
+                                    // Also check by email to recover any pre-existing team/profile
+                                    FirestoreManager.getUserByEmail(cleanEmail) { emailProfileRes ->
+                                        val emailProf = emailProfileRes.getOrNull()
+                                        val profile = (emailProf ?: existing ?: UserProfile(
+                                            uid = user.uid,
+                                            username = user.displayName ?: cleanEmail.substringBefore("@"),
+                                            email = cleanEmail
+                                        )).copy(uid = user.uid)
+                                        if (emailProf != null && emailProf.teamName.isNotBlank()) {
+                                            FirestoreManager.updateUserRoleAndTeam(
+                                                user.uid,
+                                                emailProf.role.ifBlank { "Member" },
+                                                emailProf.teamName,
+                                                emailProf.teamCode,
+                                                cleanEmail
+                                            )
+                                        }
+                                        onComplete(Result.success(profile))
+                                    }
+                                }
+                            }
+                            return@addOnCompleteListener
+                        }
+                    }
 
-            if (!storedNewPassword.isNullOrBlank()) {
-                if (storedNewPassword == cleanPassword) {
-                    // Password matches the newly reset password!
-                    FirestoreManager.getUserByEmail(cleanEmail) { profileResult ->
-                        val profile = profileResult.getOrNull() ?: UserProfile(
-                            uid = "user_${cleanEmail.hashCode()}",
-                            username = cleanEmail.substringBefore("@"),
-                            email = cleanEmail,
-                            resetPassword = cleanPassword
-                        )
-                        // Ensure background Firebase session if possible
-                        if (auth.currentUser == null) {
-                            auth.signInAnonymously().addOnCompleteListener {
-                                onComplete(Result.success(profile))
+                    // 2. Direct auth failed. Check if user has an OTP reset password in Firestore
+                    FirestoreManager.getPasswordReset(cleanEmail) { resetResult ->
+                        val storedNewPassword = resetResult.getOrNull()
+                        if (!storedNewPassword.isNullOrBlank() && storedNewPassword == cleanPassword) {
+                            // Password matches the newly reset password!
+                            val onAuthReady = {
+                                FirestoreManager.getUserByEmail(cleanEmail) { profileResult ->
+                                    val realUid = auth.currentUser?.uid ?: "user_${cleanEmail.hashCode()}"
+                                    val profile = profileResult.getOrNull() ?: UserProfile(
+                                        uid = realUid,
+                                        username = cleanEmail.substringBefore("@"),
+                                        email = cleanEmail,
+                                        resetPassword = cleanPassword
+                                    )
+                                    onComplete(Result.success(profile.copy(uid = realUid)))
+                                }
+                            }
+
+                            if (auth.currentUser == null) {
+                                auth.signInAnonymously()
+                                    .addOnSuccessListener { onAuthReady() }
+                                    .addOnFailureListener { onAuthReady() }
+                            } else {
+                                onAuthReady()
                             }
                         } else {
-                            onComplete(Result.success(profile))
+                            val error = task.exception ?: Exception("Login failed. Check your email and password.")
+                            onComplete(Result.failure(error))
                         }
                     }
-                    return@getPasswordReset
-                } else {
-                    // Stored reset password exists and user didn't enter it
-                    onComplete(Result.failure(Exception("Incorrect password. Please use your newly reset password.")))
-                    return@getPasswordReset
                 }
-            }
-
-            // 2. Otherwise authenticate directly with Firebase Auth
-            try {
-                auth.signInWithEmailAndPassword(cleanEmail, cleanPassword)
-                    .addOnCompleteListener { task ->
-                        if (task.isSuccessful) {
-                            val user = auth.currentUser ?: task.result?.user
-                            if (user != null) {
-                                FirestoreManager.getUserProfile(user.uid) { profileResult ->
-                                    val profile = profileResult.getOrNull() ?: UserProfile(
-                                        uid = user.uid,
-                                        username = user.displayName ?: cleanEmail.substringBefore("@"),
-                                        email = cleanEmail
-                                    )
-                                    onComplete(Result.success(profile))
-                                }
-                                return@addOnCompleteListener
-                            }
-                        }
-                        val error = task.exception ?: Exception("Login failed. Check your email and password.")
-                        onComplete(Result.failure(error))
-                    }
-            } catch (e: Exception) {
-                onComplete(Result.failure(e))
-            }
+        } catch (e: Exception) {
+            onComplete(Result.failure(e))
         }
     }
 

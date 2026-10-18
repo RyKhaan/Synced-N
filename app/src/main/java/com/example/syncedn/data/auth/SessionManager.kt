@@ -66,7 +66,9 @@ object SessionManager {
         fallbackUsername: String = "",
         fallbackEmail: String = ""
     ) {
-        val uid = profile?.uid.orEmpty()
+        val effectiveUid = AuthManager.currentUser?.uid?.takeIf { it.isNotBlank() }
+            ?: profile?.uid?.takeIf { it.isNotBlank() && !it.startsWith("user_") }
+            ?: profile?.uid.orEmpty()
         val email = profile?.email?.takeIf { it.isNotBlank() } ?: fallbackEmail
         val emailLower = email.trim().lowercase()
 
@@ -93,7 +95,7 @@ object SessionManager {
         } catch (_: Throwable) { null }
 
         val assignedRole = memberRolesMap?.let { map ->
-            val byUid = if (uid.isNotBlank()) map.optString(uid, "") else ""
+            val byUid = if (effectiveUid.isNotBlank()) map.optString(effectiveUid, "") else ""
             val byEmail = if (emailLower.isNotBlank()) map.optString(emailLower, "") else ""
             val byFull = if (fullName.isNotBlank()) map.optString(fullName, "") else ""
             val byUser = if (username.isNotBlank()) map.optString(username, "") else ""
@@ -102,12 +104,12 @@ object SessionManager {
 
         val ministryRole = assignedRole
             ?: preferences.getString("email_ministry_$emailLower", "").orEmpty().takeIf { it.isNotBlank() }
-            ?: (if (uid.isNotBlank()) preferences.getString("user_ministry_$uid", "").orEmpty().takeIf { it.isNotBlank() } else null)
+            ?: (if (effectiveUid.isNotBlank()) preferences.getString("user_ministry_$effectiveUid", "").orEmpty().takeIf { it.isNotBlank() } else null)
             ?: profile?.ministryRole?.takeIf { it.isNotBlank() }
             ?: ""
 
         preferences.edit {
-            putString(KEY_USER_ID, uid)
+            putString(KEY_USER_ID, effectiveUid)
             putString(KEY_EMAIL, email)
             putString(KEY_USERNAME, username)
             putString(KEY_FULL_NAME, fullName)
@@ -120,7 +122,7 @@ object SessionManager {
 
             // Cache user-scoped copies to preserve data offline per email
             if (emailLower.isNotBlank()) {
-                if (uid.isNotBlank()) putString("email_uid_$emailLower", uid)
+                if (effectiveUid.isNotBlank()) putString("email_uid_$emailLower", effectiveUid)
                 if (username.isNotBlank()) putString("email_username_$emailLower", username)
                 if (fullName.isNotBlank()) putString("email_fullname_$emailLower", fullName)
                 if (phone.isNotBlank()) putString("email_phone_$emailLower", phone)
@@ -128,9 +130,58 @@ object SessionManager {
                 putString("email_language_$emailLower", language)
                 if (ministryRole.isNotBlank()) putString("email_ministry_$emailLower", ministryRole)
             }
-            if (uid.isNotBlank() && ministryRole.isNotBlank()) {
-                putString("user_ministry_$uid", ministryRole)
+            if (effectiveUid.isNotBlank() && ministryRole.isNotBlank()) {
+                putString("user_ministry_$effectiveUid", ministryRole)
             }
         }
+    }
+
+    /**
+     * Resolves the user's role, teamName, and teamCode across local SharedPreferences and remote Firestore profile.
+     * Guarantees that on a clean device (empty SharedPreferences), the remote Firestore profile is authoritative
+     * and correctly restores Leader role and team membership.
+     */
+    fun resolveUserTeamSession(
+        preferences: SharedPreferences,
+        profile: UserProfile?,
+        email: String
+    ): Triple<String, String, String> {
+        val uid = AuthManager.currentUser?.uid?.takeIf { it.isNotBlank() }
+            ?: profile?.uid?.takeIf { it.isNotBlank() && !it.startsWith("user_") }
+            ?: profile?.uid.orEmpty()
+        val emailLower = email.trim().lowercase()
+
+        val savedRole = preferences.getString("email_role_$emailLower", "").orEmpty()
+            .ifBlank { if (uid.isNotBlank()) preferences.getString("user_role_$uid", "").orEmpty() else "" }
+        val savedTeam = preferences.getString("email_team_$emailLower", "").orEmpty()
+            .ifBlank { if (uid.isNotBlank()) preferences.getString("user_team_$uid", "").orEmpty() else "" }
+            .ifBlank { preferences.getString(KEY_TEAM_NAME, "").orEmpty() }
+        val savedCode = preferences.getString("email_code_$emailLower", "").orEmpty()
+            .ifBlank { if (uid.isNotBlank()) preferences.getString("user_code_$uid", "").orEmpty() else "" }
+            .ifBlank { preferences.getString(KEY_TEAM_CODE, "").orEmpty() }
+
+        val remoteRole = profile?.role.orEmpty()
+        val remoteTeam = profile?.teamName.orEmpty()
+        val remoteCode = profile?.teamCode.orEmpty()
+
+        // Remote takes priority if local is empty (e.g. clean install/new device), or merges seamlessly
+        val finalTeam = if (remoteTeam.isNotBlank()) remoteTeam else savedTeam
+        val finalCode = (if (remoteCode.isNotBlank()) remoteCode else savedCode)
+            .ifBlank { if (finalTeam.isNotBlank()) preferences.getString("team_leader_code_${finalTeam.trim().lowercase()}", "").orEmpty() else "" }
+            .ifBlank { if (finalTeam.isNotBlank()) com.example.syncedn.data.database.FirestoreManager.findCodeByTeamName(finalTeam).orEmpty() else "" }
+
+        val finalRole = when {
+            remoteRole.equals("Leader", ignoreCase = true) || savedRole.equals("Leader", ignoreCase = true) -> "Leader"
+            savedRole.isNotBlank() -> savedRole
+            finalTeam.isNotBlank() && preferences.getString("team_leader_email_${finalTeam.trim().lowercase()}", "") == emailLower -> "Leader"
+            remoteRole.isNotBlank() -> remoteRole
+            else -> "Member"
+        }
+
+        if (finalCode.isNotBlank() && finalTeam.isNotBlank()) {
+            com.example.syncedn.data.database.FirestoreManager.registerLocalTeam(finalCode, finalTeam)
+        }
+
+        return Triple(finalRole, finalTeam, finalCode)
     }
 }

@@ -73,7 +73,7 @@ object FirestoreManager {
         try {
             android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
                 finishOnce(null)
-            }, 2000L)
+            }, 6000L)
         } catch (_: Exception) {
             // Ignored in unit test environment without MainLooper
         }
@@ -218,10 +218,12 @@ object FirestoreManager {
         }
         registerLocalTeam(generatedCode, cleanTeamName)
 
+        val effectiveLeaderUid = com.example.syncedn.data.auth.AuthManager.currentUser?.uid?.takeIf { it.isNotBlank() } ?: leaderUid
+
         val teamData = mapOf(
             "teamCode" to generatedCode,
             "teamName" to cleanTeamName,
-            "leaderUid" to leaderUid,
+            "leaderUid" to effectiveLeaderUid,
             "leaderName" to leaderName,
             "createdAt" to System.currentTimeMillis()
         )
@@ -230,9 +232,14 @@ object FirestoreManager {
             db.collection(TEAMS_COLLECTION)
                 .document(generatedCode)
                 .set(teamData)
-            updateUserRoleAndTeam(leaderUid, "Leader", cleanTeamName, generatedCode)
+                .addOnSuccessListener {
+                    updateUserRoleAndTeam(effectiveLeaderUid, "Leader", cleanTeamName, generatedCode)
+                }
+                .addOnFailureListener {
+                    updateUserRoleAndTeam(effectiveLeaderUid, "Leader", cleanTeamName, generatedCode)
+                }
         } catch (_: Exception) {
-            // Synced in background when online; local registry is already updated
+            updateUserRoleAndTeam(effectiveLeaderUid, "Leader", cleanTeamName, generatedCode)
         }
 
         onComplete(Result.success(generatedCode))
@@ -327,14 +334,17 @@ object FirestoreManager {
         email: String = "",
         onComplete: (Result<Unit>) -> Unit = {}
     ) {
-        cacheUserRoleAndTeam(uid, email, role, teamName, teamCode)
+        val effectiveUid = com.example.syncedn.data.auth.AuthManager.currentUser?.uid?.takeIf { it.isNotBlank() }
+            ?: uid.takeIf { it.isNotBlank() && !it.startsWith("user_") }
+            ?: uid
+        cacheUserRoleAndTeam(effectiveUid, email, role, teamName, teamCode)
         val cleanEmail = email.trim()
         val updates = mutableMapOf<String, Any>(
             "role" to role,
             "teamName" to teamName
         )
-        if (uid.isNotBlank()) {
-            updates["uid"] = uid
+        if (effectiveUid.isNotBlank()) {
+            updates["uid"] = effectiveUid
         }
         if (cleanEmail.isNotBlank()) {
             updates["email"] = cleanEmail
@@ -342,10 +352,10 @@ object FirestoreManager {
         if (teamCode.isNotBlank()) {
             updates["teamCode"] = teamCode
         }
-        if (uid.isNotBlank()) {
+        if (effectiveUid.isNotBlank()) {
             try {
                 db.collection(USERS_COLLECTION)
-                    .document(uid)
+                    .document(effectiveUid)
                     .set(updates, com.google.firebase.firestore.SetOptions.merge())
             } catch (_: Exception) {
                 // Synced in background
@@ -480,8 +490,10 @@ object FirestoreManager {
                         teamCode = cached.third
                     )
                 } else if (profile == null && cached != null) {
+                    val realUid = com.example.syncedn.data.auth.AuthManager.currentUser?.uid
+                        ?.takeIf { it.isNotBlank() } ?: "user_${cleanEmail.hashCode()}"
                     UserProfile(
-                        uid = "user_${cleanEmail.hashCode()}",
+                        uid = realUid,
                         username = cleanEmail.substringBefore("@"),
                         email = cleanEmail,
                         role = cached.first,
@@ -498,7 +510,7 @@ object FirestoreManager {
         try {
             android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
                 finishOnce(null)
-            }, 2000L)
+            }, 5000L)
         } catch (_: Exception) {
             // Ignored in unit tests
         }

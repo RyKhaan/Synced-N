@@ -163,40 +163,13 @@ class AdminActivity : AppCompatActivity() {
         email: String
     ): Triple<String, String, String> {
         syncLocalTeamsToMemory()
-        val uid = profile?.uid.orEmpty()
-        val emailLower = email.trim().lowercase()
-
-        val savedRole = preferences.getString("email_role_$emailLower", "").orEmpty()
-            .ifBlank { preferences.getString("user_role_$uid", "").orEmpty() }
-        val savedTeam = preferences.getString("email_team_$emailLower", "").orEmpty()
-            .ifBlank { preferences.getString("user_team_$uid", "").orEmpty() }
-        val savedCode = preferences.getString("email_code_$emailLower", "").orEmpty()
-            .ifBlank { preferences.getString("user_code_$uid", "").orEmpty() }
-
-        val remoteRole = profile?.role.orEmpty()
-        val remoteTeam = profile?.teamName.orEmpty()
-        val remoteCode = profile?.teamCode.orEmpty()
-
-        val finalTeam = savedTeam.ifBlank { remoteTeam }
-        val finalCode = savedCode
-            .ifBlank { remoteCode }
-            .ifBlank { preferences.getString("team_leader_code_${finalTeam.trim().lowercase()}", "").orEmpty() }
-            .ifBlank { FirestoreManager.findCodeByTeamName(finalTeam).orEmpty() }
-
-        val finalRole = when {
-            savedRole.equals("Leader", ignoreCase = true) || remoteRole.equals("Leader", ignoreCase = true) -> "Leader"
-            savedRole.isNotBlank() -> savedRole
-            finalTeam.isNotBlank() && preferences.getString("team_leader_email_${finalTeam.trim().lowercase()}", "") == emailLower -> "Leader"
-            remoteRole.isNotBlank() -> remoteRole
-            else -> "Leader"
-        }
-
-        return Triple(finalRole, finalTeam, finalCode)
+        return SessionManager.resolveUserTeamSession(preferences, profile, email)
     }
 
     private fun saveUserTeamState(role: String, team: String, code: String) {
-        val uid = preferences.getString("userId", "").orEmpty()
-            .ifBlank { com.example.syncedn.data.auth.AuthManager.currentUser?.uid.orEmpty() }
+        val uid = com.example.syncedn.data.auth.AuthManager.currentUser?.uid?.takeIf { it.isNotBlank() }
+            ?: preferences.getString("userId", "").orEmpty().takeIf { it.isNotBlank() && !it.startsWith("user_") }
+            ?: preferences.getString("userId", "").orEmpty()
         val emailLower = preferences.getString("email", "").orEmpty().trim().lowercase()
         val cleanTeamLower = team.trim().lowercase()
         if (code.isNotBlank() && team.isNotBlank()) {
@@ -369,7 +342,7 @@ class AdminActivity : AppCompatActivity() {
         super.onSaveInstanceState(outState)
     }
 
-    private fun navigate(next: String) {
+    private fun navigate(next: String, triggerRefresh: Boolean = true) {
         if (next in listOf("start", "login")) {
             startActivity(Intent(this, MainActivity::class.java).putExtra("startPage", next))
             finish()
@@ -403,9 +376,9 @@ class AdminActivity : AppCompatActivity() {
                     val enteredTeamName = name.text.toString().trim()
                     val createBtn = findViewById<Button>(UI.createTeamButton)
                     createBtn?.isEnabled = false
-                    val uid = preferences.getString("userId", "").orEmpty()
-                        .ifBlank { com.example.syncedn.data.auth.AuthManager.currentUser?.uid.orEmpty() }
-                        .ifBlank { "user_${displayName.hashCode()}" }
+                    val uid = com.example.syncedn.data.auth.AuthManager.currentUser?.uid?.takeIf { it.isNotBlank() }
+                        ?: preferences.getString("userId", "").orEmpty().takeIf { it.isNotBlank() && !it.startsWith("user_") }
+                        ?: preferences.getString("userId", "").orEmpty().ifBlank { "user_${displayName.hashCode()}" }
                     val emailStr = preferences.getString("email", "").orEmpty()
                         .ifBlank { com.example.syncedn.data.auth.AuthManager.currentUser?.email.orEmpty() }
                     preferences.edit {
@@ -501,10 +474,10 @@ class AdminActivity : AppCompatActivity() {
                 }
             }
             "home" -> {
-                refreshTeamRoster()
+                if (triggerRefresh) refreshTeamRoster()
                 setupHome()
             }
-            "teams" -> refreshTeamRoster()
+            "teams" -> if (triggerRefresh) refreshTeamRoster()
             "settings" -> setupSettings()
             "profile" -> setupProfile()
         }
@@ -566,7 +539,8 @@ class AdminActivity : AppCompatActivity() {
                             loginBtn?.isEnabled = true
                             if (result.isSuccess) {
                                 val profile = result.getOrNull()
-                                val uid = profile?.uid.orEmpty()
+                                val uid = com.example.syncedn.data.auth.AuthManager.currentUser?.uid?.takeIf { it.isNotBlank() }
+                                    ?: profile?.uid.orEmpty()
                                 displayName = profile?.username?.ifBlank { emailStr.substringBefore("@") } ?: "Leader"
                                 val (userRole, userTeam, userTeamCode) = resolveUserTeamSession(profile, emailStr)
                                 teamName = userTeam
@@ -1617,18 +1591,33 @@ class AdminActivity : AppCompatActivity() {
         })
     }
 
-    private fun refreshTeamRoster() {
+    private var isRefreshingRoster = false
+    private var lastRosterRefreshTime = 0L
+
+    private fun refreshTeamRoster(force: Boolean = false) {
+        val now = System.currentTimeMillis()
+        if (isRefreshingRoster) return
+        if (!force && (now - lastRosterRefreshTime < 15_000L)) return
+
         val currentCode = preferences.getString("teamCode", "").orEmpty()
             .ifBlank { FirestoreManager.findCodeByTeamName(teamName).orEmpty() }
         if (currentCode.isBlank()) return
+
+        isRefreshingRoster = true
+        lastRosterRefreshTime = now
         TeamRepository.syncFromPreferences(preferences, currentCode)
-        TeamRepository.getTeamRoster(currentCode) { result ->
+
+        TeamRepository.getTeamRoster(currentCode, force) { result ->
+            isRefreshingRoster = false
             result.getOrNull()?.let { list ->
                 if (list.isNotEmpty()) {
+                    val changed = (list != teamRoster)
                     teamRoster = list
-                    runOnUiThread {
-                        if (page == "teams" || page == "home") {
-                            navigate(page)
+                    if (changed) {
+                        runOnUiThread {
+                            if (page == "teams" || page == "home") {
+                                navigate(page, triggerRefresh = false)
+                            }
                         }
                     }
                 }
@@ -2157,7 +2146,7 @@ class AdminActivity : AppCompatActivity() {
                             runOnUiThread {
                                 if (result.isSuccess) {
                                     toast("$name removed from team.")
-                                    refreshTeamRoster()
+                                    refreshTeamRoster(force = true)
                                     navigate("teamDetails")
                                 } else {
                                     val err = result.exceptionOrNull()?.localizedMessage ?: "Failed to remove member."
@@ -2261,7 +2250,7 @@ class AdminActivity : AppCompatActivity() {
                     memberEmail = targetEmail,
                     preferences = preferences
                 ) {
-                    runOnUiThread { refreshTeamRoster() }
+                    runOnUiThread { refreshTeamRoster(force = true) }
                 }
                 toast("Member role updated to $selectedRole"); navigate("teams")
             }
