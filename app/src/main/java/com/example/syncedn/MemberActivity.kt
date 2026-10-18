@@ -5,6 +5,7 @@ import com.example.syncedn.data.auth.EmailOtpService
 import com.example.syncedn.data.auth.SessionManager
 import com.example.syncedn.data.database.FirestoreManager
 import com.example.syncedn.data.database.TeamRepository
+import com.example.syncedn.data.model.SongData
 import com.example.syncedn.data.model.TeamMember
 import com.example.syncedn.data.model.UnavailableRange
 import com.example.syncedn.data.util.ValidationUtils
@@ -2141,20 +2142,26 @@ open class MemberActivity : AppCompatActivity() {
         background = bg(navy, 6); outlineProvider = ViewOutlineProvider.BACKGROUND; clipToOutline = true
         (drawable as? android.graphics.drawable.BitmapDrawable)?.setFilterBitmap(true)
     }
+    private fun songCatalog(): List<Pair<String, String>> {
+        val activeCode = preferences.getString("teamCode", "").orEmpty()
+        val songs = TeamRepository.getCachedSongs(activeCode, preferences)
+        return songs.map { it.title to it.artist }
+    }
     private fun songsView(): View = memberPage("Songs", songsReturnPage) { col ->
         val search = plainInput("Search by title or artist")
         col.add(search, -1, 48); col.space(20)
         val results = vertical(); col.add(results)
-        val songs = listOf("Praise" to "Elevation Worship", "Trust in God" to "Elevation Worship",
-            "Way Maker" to "Sinach", "Gratitude" to "Brandon Lake")
+        val activeCode = preferences.getString("teamCode", "").orEmpty()
         fun populate(query: String) {
             results.removeAllViews()
+            val songs = songCatalog()
             val matches = songs.filter { (title, artist) -> "$title $artist".contains(query, true) }
             if (matches.isEmpty()) results.add(text("No songs found.", 14, Color.GRAY))
             matches.forEach { (title, artist) ->
                 results.add(panel().apply {
                     val row = horizontal()
-                    row.add(songCover(title), 104, 60)
+                    row.add(if (title in listOf("Praise", "Trust in God", "Way Maker", "Gratitude")) songCover(title)
+                    else text("♫", 30, navy, centered = true), 104, 60)
                     row.add(vertical().apply {
                         setPadding(dp(14), 0, dp(8), 0)
                         add(text(title, 14, navy, true)); space(5); add(text(artist, 11, Color.GRAY))
@@ -2171,6 +2178,11 @@ open class MemberActivity : AppCompatActivity() {
             override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) { populate(s?.toString().orEmpty()) }
             override fun afterTextChanged(s: android.text.Editable?) {}
         })
+        if (activeCode.isNotBlank()) {
+            TeamRepository.getSongs(activeCode, false, preferences) { _ ->
+                runOnUiThread { populate(search.text?.toString().orEmpty()) }
+            }
+        }
     }
     private fun sampleSheetService(): org.json.JSONObject {
         val rows = org.json.JSONArray()
@@ -2225,17 +2237,19 @@ open class MemberActivity : AppCompatActivity() {
         }.orEmpty()
     }
     private fun songDetailsView(): View = memberPage("Song Details", songDetailsBack) { col ->
+        val activeCode = preferences.getString("teamCode", "").orEmpty()
+        val currentSong = TeamRepository.getCachedSongs(activeCode, preferences).find { it.title.equals(selectedSong, ignoreCase = true) }
         val savedSong = try { org.json.JSONObject(preferences.getString("songData_$selectedSong", "{}").orEmpty()) }
             catch (_: Exception) { org.json.JSONObject() }
-        val originalKey = savedSong.optString("key", "C")
+        val originalKey = currentSong?.key?.ifBlank { savedSong.optString("key", "C") } ?: savedSong.optString("key", "C")
         val basePitch = ChordSheet.keyPitch(originalKey).coerceAtLeast(0)
         val roots = listOf("C", "Db", "D", "Eb", "E", "F", "F#", "G", "Ab", "A", "Bb", "B")
         val minor = originalKey.endsWith("m") || originalKey.endsWith(" minor")
         val showChords = ChordSheet.isInstrumentalist(songAssignedRoles())
-        val sheet = savedSong.optString("sheet", savedSong.optString("lyrics")).ifBlank {
+        val sheet = (currentSong?.sheet?.ifBlank { currentSong.lyrics } ?: savedSong.optString("sheet", savedSong.optString("lyrics"))).ifBlank {
             "[Verse]\n[C]Add your licensed lyrics here.\n\n[Chorus]\n[Am]Add chorus lyrics here [F][G]"
         }
-        val tempo = savedSong.optString("bpm", "74")
+        val tempo = currentSong?.bpm?.toString() ?: savedSong.optString("bpm", "74")
         var offset = ((preferences.getInt("chord_transpose_$selectedSong", 0) % 12) + 12) % 12
         val key = text("", 13, purple, true)
         val sheetText = text("", 13, navy).apply {
@@ -2258,7 +2272,9 @@ open class MemberActivity : AppCompatActivity() {
         
         col.add(panel().apply {
             add(text(selectedSong, 18, navy, true)); space(6)
-            add(text("By " + savedSong.optString("artist", if (selectedSong == "Way Maker") "Sinach" else if (selectedSong == "Gratitude") "Brandon Lake" else "Elevation Worship"), 13, Color.GRAY))
+            val defaultArtist = if (selectedSong == "Way Maker") "Sinach" else if (selectedSong == "Gratitude") "Brandon Lake" else "Elevation Worship"
+            val artistDisplay = currentSong?.artist?.ifBlank { savedSong.optString("artist", defaultArtist) } ?: savedSong.optString("artist", defaultArtist)
+            add(text("By $artistDisplay", 13, Color.GRAY))
             space(16)
             add(key); space(16)
             if(showChords) {
@@ -2301,7 +2317,7 @@ open class MemberActivity : AppCompatActivity() {
         renderTarget((basePitch + offset) % 12)
         col.add(text("Reference Link", 13, navy, true)); col.space(10)
         col.add(memberButton("Find song on YouTube", navy) {
-            val reference = savedSong.optString("link")
+            val reference = currentSong?.referenceUrl ?: savedSong.optString("link")
             val url = if (reference.startsWith("https://") || reference.startsWith("http://")) reference
                 else "https://www.youtube.com/results?search_query=" + Uri.encode("$selectedSong worship")
             try { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }
@@ -2315,9 +2331,7 @@ open class MemberActivity : AppCompatActivity() {
             col.add(panel().apply {
                 val row = horizontal()
                 row.add(text((index + 1).toString() + ".", 14, navy, true), 28, 48)
-                row.add(text(title, 14, navy, true).apply {
-                    setOnClickListener { songDetailsBack="lineup";selectedSong=title;navigate("songDetails") }
-                }, 0, -2, 1f)
+                row.add(text(title, 14, navy, true), 0, -2, 1f)
                 row.add(text("⋮", 24, navy, centered = true).apply {
                     contentDescription = "Reorder $title"; isFocusable = true
                     setOnClickListener {
@@ -2329,8 +2343,17 @@ open class MemberActivity : AppCompatActivity() {
                                 } else toast("Already at the edge of the lineup.")
                             }.show()
                     }
-                }, 48, 48); add(row)
-            }); col.space(12)
+                }, 48, 48)
+                add(row)
+                isClickable = true
+                isFocusable = true
+                setOnClickListener {
+                    songDetailsBack = "lineup"
+                    selectedSong = title
+                    navigate("songDetails")
+                }
+            })
+            col.space(12)
         }
     }
     private fun teamHeader(showDetails: Boolean = false): View = FrameLayout(this).apply {
