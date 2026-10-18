@@ -88,10 +88,13 @@ public final class ChordSheet {
             } else if(chordLine(line)) {
                 if(!lyricsOnly) {
                     Matcher tokens=TOKEN.matcher(line);
-                    StringBuffer transposed=new StringBuffer();
-                    while(tokens.find()) tokens.appendReplacement(transposed,
-                        Matcher.quoteReplacement(transposeChord(tokens.group(), steps, flats)));
-                    tokens.appendTail(transposed); output.add(transposed.toString());
+                    StringBuilder transposed=new StringBuilder();
+                    while(tokens.find()) {
+                        int anchor=Math.max(tokens.start(), transposed.length()==0 ? 0 : transposed.length()+1);
+                        while(transposed.length()<anchor) transposed.append(' ');
+                        transposed.append(transposeChord(tokens.group(), steps, flats));
+                    }
+                    output.add(transposed.toString());
                 }
             } else output.add(line);
         }
