@@ -7,6 +7,7 @@ import com.example.syncedn.data.database.FirestoreManager
 import com.example.syncedn.data.database.TeamRepository
 import com.example.syncedn.data.model.SongData
 import com.example.syncedn.data.model.AnnouncementData
+import com.example.syncedn.data.model.SubstitutionData
 import com.example.syncedn.data.model.TeamMember
 import com.example.syncedn.data.model.UnavailableRange
 import com.example.syncedn.data.util.ValidationUtils
@@ -1576,6 +1577,8 @@ open class MemberActivity : AppCompatActivity() {
     private var calendarMonth = 9 // Calendar months start at zero.
     private var calendarDay = 4
     private var substitute = "John Doe"
+    private var selectedSubstituteUid: String = ""
+    private var selectedSubstituteName: String = ""
     private var songsReturnPage = "home"
     private val chatMessages = mutableListOf<String>()
     private val lineupSongs = mutableListOf("Amazing Grace", "Way Maker", "Goodness of God", "Build My Life")
@@ -2105,36 +2108,138 @@ open class MemberActivity : AppCompatActivity() {
         col.add(memberButton("Request Substitution") { navigate("substitution") }, -1, 48)
     }
     private fun substitutionView(): View = memberPage("Request Substitution", "service") { col ->
+        val activeCode = preferences.getString("teamCode", "").orEmpty()
+        val currentUid = preferences.getString("userId", "").orEmpty()
+        val currentName = preferences.getString("fullName", "").orEmpty().ifBlank {
+            preferences.getString("username", "Member").orEmpty()
+        }
+
+        // Determine current role in selectedSheetService or fallback
+        var assignedRole = ""
+        val selectedServiceObj = selectedSheetService
+        val serviceTitle = selectedServiceObj?.optString("title")?.ifBlank { selectedService } ?: selectedService
+        val serviceDate = selectedServiceObj?.optString("date")?.ifBlank {
+            preferences.getString("serviceDate", "Upcoming Service")
+        } ?: preferences.getString("serviceDate", "Upcoming Service").orEmpty()
+        val serviceVenue = selectedServiceObj?.optString("venue")?.ifBlank {
+            preferences.getString("serviceVenue", if (selectedService == "Team Meeting") "Fellowship Hall" else "Main Sanctuary")
+        } ?: preferences.getString("serviceVenue", "Main Sanctuary").orEmpty()
+        val serviceId = selectedServiceObj?.optString("id").orEmpty()
+
+        val assignments = selectedServiceObj?.optJSONArray("assignments")
+        if (assignments != null) {
+            for (i in 0 until assignments.length()) {
+                val a = assignments.getJSONObject(i)
+                val aUid = a.optString("uid").ifBlank { a.optString("userId") }
+                val aName = a.optString("name")
+                if ((currentUid.isNotBlank() && aUid == currentUid) ||
+                    (currentName.isNotBlank() && aName.equals(currentName, ignoreCase = true))) {
+                    assignedRole = a.optString("role")
+                    break
+                }
+            }
+        }
+        if (assignedRole.isBlank()) {
+            assignedRole = preferences.getString("ministryRole", "Keyboardist").orEmpty().ifBlank { "Keyboardist" }
+        }
+
         col.add(text("Current Assignment", 12, purple, true)); col.space(8)
         col.add(panel().apply {
-            add(text("Keyboardist", 15, navy, true)); space(5)
-            add(text("$selectedService\nMain Sanctuary", 12, navy))
+            add(text(assignedRole, 15, navy, true)); space(5)
+            add(text("$serviceTitle\n$serviceVenue • $serviceDate", 12, navy))
         }); col.space(20)
+
         col.add(text("Reason", 12, purple, true)); col.space(8)
-        val reason = plainInput("e.g. School examination", true)
+        val reason = plainInput("e.g. School examination", true).apply {
+            filters = arrayOf(android.text.InputFilter.LengthFilter(500))
+        }
         col.add(reason, -1, 80); col.space(20)
+
         col.add(text("Select Substitute", 12, purple, true)); col.space(8)
-        val selection = text("Selected: $substitute", 13, navy, true)
-        listOf("Kid Gamboa", "John Doe").forEach { name ->
+        val selection = text(
+            if (selectedSubstituteName.isNotBlank()) "Selected: $selectedSubstituteName" else "Selected: None (tap a teammate below)",
+            13, navy, true
+        )
+
+        // Real team roster choices (excluding the current user)
+        val cachedRoster = TeamRepository.getCachedRoster(activeCode).filter { member ->
+            val memberName = member.fullName.ifBlank { member.username }
+            (currentUid.isBlank() || member.uid != currentUid) &&
+            (currentName.isBlank() || !memberName.equals(currentName, ignoreCase = true))
+        }
+
+        val rosterToDisplay: List<Pair<String, Pair<String, String>>> = if (cachedRoster.isNotEmpty()) {
+            cachedRoster.map { member ->
+                val mName = member.fullName.ifBlank { member.username }
+                val mRole = member.ministryRole.ifBlank { member.role }
+                Triple(member.uid, mName, mRole)
+            }.map { it.first to (it.second to it.third) }
+        } else {
+            // Fallback to sample ministry members if roster is not loaded yet
+            ministryMembers.filter { (name, _, _) -> !name.equals(currentName, ignoreCase = true) }
+                .map { (name, role, _) -> "seed_${name.hashCode()}" to (name to role) }
+        }
+
+        rosterToDisplay.forEach { (mUid, nameAndRole) ->
+            val (mName, mRole) = nameAndRole
+            val isCurrentRoleMatch = mRole.equals(assignedRole, ignoreCase = true)
+            val subLabel = if (isCurrentRoleMatch) "$mRole • Recommended" else mRole.ifBlank { "Team Member" }
             col.add(panel().apply {
-                add(memberRow(name, "Keyboardist • Available", onClick = {
-                    substitute = name; selection.text = "Selected: $name"
+                add(memberRow(mName, subLabel, onClick = {
+                    selectedSubstituteUid = mUid
+                    selectedSubstituteName = mName
+                    substitute = mName
+                    selection.text = "Selected: $mName"
                 }))
             }); col.space(12)
         }
         col.add(selection); col.space(24)
+
         col.add(memberButton("Submit Request") {
-            if (reason.text.isBlank()) invalid(reason, "Enter a reason.")
-            else {
-                preferences.edit().putString("requestStatus", "Waiting for substitute")
-                    .putString("requestReason", reason.text.toString().trim())
-                    .putString("requestSubstitute", substitute)
-                    .putString("requestServiceName", selectedService)
-                    .putString("requestRequester", fullName).putString("requestRole", "Keyboardist").apply()
-                toast("Demo request saved locally"); navigate("announcements")
+            val reasonText = reason.text.toString().trim()
+            if (reasonText.isBlank()) {
+                invalid(reason, "Enter a reason.")
+                return@memberButton
+            }
+            if (selectedSubstituteName.isBlank() && substitute.isNotBlank() && substitute != "John Doe") {
+                selectedSubstituteName = substitute
+            }
+            if (selectedSubstituteName.isBlank()) {
+                toast("Please select a substitute teammate.")
+                return@memberButton
+            }
+
+            val newSub = SubstitutionData(
+                id = java.util.UUID.randomUUID().toString(),
+                teamCode = activeCode,
+                serviceId = serviceId,
+                serviceTitle = serviceTitle,
+                serviceDate = serviceDate,
+                requesterUid = currentUid,
+                requesterName = currentName,
+                role = assignedRole,
+                substituteUid = selectedSubstituteUid.ifBlank { "sub_${selectedSubstituteName.hashCode()}" },
+                substituteName = selectedSubstituteName,
+                reason = reasonText,
+                status = "Pending",
+                createdBy = currentUid,
+                createdAt = System.currentTimeMillis(),
+                updatedAt = System.currentTimeMillis()
+            )
+
+            TeamRepository.createSubstitutionRequest(newSub, preferences) { result ->
+                runOnUiThread {
+                    if (result.isSuccess) {
+                        toast("Substitution request submitted")
+                    } else {
+                        toast("Saved offline: ${result.exceptionOrNull()?.message ?: ""}")
+                    }
+                    navigate("announcements")
+                }
             }
         }, -1, 48)
     }
+
     private fun formatAnnouncementDate(timestamp: Long): String {
         return try {
             val date = java.util.Date(timestamp)
@@ -2216,33 +2321,143 @@ open class MemberActivity : AppCompatActivity() {
             }
         }
     }
+
+    private fun substitutionFeed(col: LinearLayout) {
+        col.add(text("Substitution Requests", 13, purple, true)); col.space(12)
+        val subCol = vertical()
+        col.addView(subCol)
+
+        val activeCode = preferences.getString("teamCode", "").orEmpty()
+        val currentUid = preferences.getString("userId", "").orEmpty()
+        val currentName = preferences.getString("fullName", "").orEmpty().ifBlank {
+            preferences.getString("username", "").orEmpty()
+        }
+
+        // Migrate legacy demo substitution if needed
+        val legacyServiceName = preferences.getString("requestServiceName", null)
+        val cached = TeamRepository.getCachedSubstitutions(activeCode, preferences)
+        if (!legacyServiceName.isNullOrBlank() && cached.isEmpty()) {
+            val legacySub = SubstitutionData(
+                id = "legacy_demo_sub",
+                teamCode = activeCode,
+                serviceTitle = legacyServiceName,
+                requesterUid = "demo_requester",
+                requesterName = preferences.getString("requestRequester", "Angelo Daniel").orEmpty(),
+                role = preferences.getString("requestRole", "Guitarist").orEmpty(),
+                substituteUid = "demo_substitute",
+                substituteName = preferences.getString("requestSubstitute", "Ryan Lloyd Genturo").orEmpty(),
+                reason = preferences.getString("requestReason", "Family emergency out of town").orEmpty(),
+                status = preferences.getString("requestStatus", "Waiting for substitute").orEmpty().let {
+                    if (it == "Waiting for substitute") "Pending" else it
+                },
+                createdBy = "demo_requester"
+            )
+            TeamRepository.saveSubstitutionLocally(activeCode, legacySub, preferences)
+        }
+
+        fun populateSubstitutions() {
+            subCol.removeAllViews()
+            val list = TeamRepository.getCachedSubstitutions(activeCode, preferences)
+            if (list.isEmpty()) {
+                subCol.add(panel().apply {
+                    add(text("No substitution requests.", 13, Color.GRAY, centered = true))
+                }); subCol.space(24)
+                return
+            }
+
+            for (sub in list) {
+                subCol.add(panel().apply {
+                    add(text(sub.serviceTitle.ifBlank { "Sunday Worship Service" }, 14, purple, true)); space(6)
+
+                    val statusColor = when (sub.status.lowercase()) {
+                        "accepted" -> Color.rgb(40, 167, 69)
+                        "declined" -> Color.rgb(220, 53, 69)
+                        "cancelled" -> Color.GRAY
+                        else -> purple
+                    }
+                    val statusText = when (sub.status.lowercase()) {
+                        "pending" -> "Waiting for substitute"
+                        else -> sub.status
+                    }
+                    val statusBadge = text(statusText, 11, statusColor, true)
+                    add(statusBadge); space(8)
+
+                    add(text("Requesting: ${sub.requesterName} (${sub.role})", 12, navy)); space(4)
+                    add(text("Proposed Substitute: ${sub.substituteName}", 12, navy, true)); space(4)
+                    add(text("Reason: ${sub.reason}", 12, navy))
+
+                    val isTargetSubstitute = (currentUid.isNotBlank() && sub.substituteUid == currentUid) ||
+                            (currentName.isNotBlank() && sub.substituteName.equals(currentName, ignoreCase = true))
+                    val isRequester = (currentUid.isNotBlank() && sub.requesterUid == currentUid) ||
+                            (currentName.isNotBlank() && sub.requesterName.equals(currentName, ignoreCase = true))
+
+                    if (sub.status.equals("Pending", ignoreCase = true) && isTargetSubstitute) {
+                        space(16)
+                        val actions = horizontal()
+                        listOf("Accept", "Decline").forEach { label ->
+                            actions.add(memberButton(label, if (label == "Accept") purple else navy) {
+                                AlertDialog.Builder(this@MemberActivity).setTitle("$label substitution?")
+                                    .setMessage("Are you sure you want to $label this substitution request for ${sub.role}?")
+                                    .setNegativeButton("Cancel", null)
+                                    .setPositiveButton(label) { _, _ ->
+                                        if (label == "Accept") {
+                                            TeamRepository.acceptSubstitutionAndUpdateService(activeCode, sub, preferences) { res ->
+                                                runOnUiThread {
+                                                    if (res.isSuccess) toast("Substitution accepted!")
+                                                    populateSubstitutions()
+                                                }
+                                            }
+                                        } else {
+                                            TeamRepository.updateSubstitutionStatus(activeCode, sub.id, "Declined", preferences) { res ->
+                                                runOnUiThread {
+                                                    if (res.isSuccess) toast("Substitution declined.")
+                                                    populateSubstitutions()
+                                                }
+                                            }
+                                        }
+                                    }.show()
+                            }, 0, 48, 1f)
+                            if (label == "Accept") actions.add(View(this@MemberActivity), 12, 1)
+                        }
+                        add(actions)
+                    } else if (sub.status.equals("Pending", ignoreCase = true) && isRequester) {
+                        space(14)
+                        val cancelBtn = memberButton("Cancel Request", Color.rgb(180, 50, 50)) {
+                            AlertDialog.Builder(this@MemberActivity).setTitle("Cancel substitution request?")
+                                .setMessage("Are you sure you want to cancel your request for ${sub.role}?")
+                                .setNegativeButton("No", null)
+                                .setPositiveButton("Yes, Cancel") { _, _ ->
+                                    TeamRepository.updateSubstitutionStatus(activeCode, sub.id, "Cancelled", preferences) { res ->
+                                        runOnUiThread {
+                                            if (res.isSuccess) toast("Request cancelled.")
+                                            populateSubstitutions()
+                                        }
+                                    }
+                                }.show()
+                        }
+                        add(cancelBtn, -1, 44)
+                    }
+                }); subCol.space(16)
+            }
+            subCol.space(8)
+        }
+
+        populateSubstitutions()
+
+        if (activeCode.isNotBlank()) {
+            TeamRepository.getSubstitutions(activeCode, false, preferences) { result ->
+                runOnUiThread {
+                    if (result.isSuccess && page == "announcements") {
+                        populateSubstitutions()
+                    }
+                }
+            }
+        }
+    }
+
     private fun announcementsView(): View = memberPage("Announcement", "home") { col ->
         leaderPosts(col)
-        col.add(text("Substitution Request", 13, purple, true)); col.space(12)
-        col.add(panel().apply {
-            add(text(preferences.getString("requestServiceName", "Sunday Worship Service").orEmpty(), 14, purple, true)); space(10)
-            val status = text(preferences.getString("requestStatus", "Waiting for substitute").orEmpty(), 11, purple, true)
-            add(status); space(10)
-            add(text("Requesting: " + preferences.getString("requestRequester", "Angelo Daniel") +
-                    " (" + preferences.getString("requestRole", "Guitarist") + ")", 12, navy)); space(5)
-            add(text("Proposed Substitute: " + preferences.getString("requestSubstitute", "Ryan Lloyd Genturo"), 12, navy, true))
-            space(5); add(text("Reason: " + preferences.getString("requestReason", "Family emergency out of town"), 12, navy))
-            space(16)
-            val actions = horizontal()
-            listOf("Accept", "Decline").forEach { label ->
-                actions.add(memberButton(label, if (label == "Accept") purple else navy) {
-                    AlertDialog.Builder(this@MemberActivity).setTitle("$label substitution?")
-                        .setMessage("This updates the demo request on this phone.")
-                        .setNegativeButton("Cancel", null).setPositiveButton(label) { _, _ ->
-                            val value = if (label == "Accept") "Accepted" else "Declined"
-                            preferences.edit().putString("requestStatus", value).apply()
-                            status.text = value
-                        }.show()
-                }, 0, 48, 1f)
-                if (label == "Accept") actions.add(View(this@MemberActivity), 12, 1)
-            }
-            add(actions)
-        }); col.space(24)
+        substitutionFeed(col)
         col.add(text("Recent Notifications", 13, purple, true)); col.space(12)
         listOf("New Service Scheduled" to "Sunday Worship Service scheduled for Oct 18, 2026 at 8:00AM.",
             "Duty Assigned" to "You are assigned as Keyboardist for Sunday Worship Service on Oct 11, 2026.",
