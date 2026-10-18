@@ -1023,6 +1023,57 @@ class ExampleUnitTest {
         assertEquals("Sunday Service", forMembers[0].title)
     }
 
+    @Test
+    fun testServiceDataUpdatePreservesImmutableFields() {
+        val initialCreatedAt = 1715000000000L
+        val originalService = com.example.syncedn.data.model.ServiceData(
+            id = "service_immutable_01",
+            teamCode = "PRAISE_A",
+            title = "Initial Draft Service",
+            date = "2026-10-25",
+            start = "09:00",
+            end = "11:00",
+            venue = "Main Hall",
+            status = "Draft",
+            createdBy = "leader_uid_original",
+            createdAt = initialCreatedAt,
+            updatedAt = initialCreatedAt
+        )
+
+        // Simulate update: change status to "Published", change venue, update title
+        val newUpdatedAt = System.currentTimeMillis()
+        val updatedService = originalService.copy(
+            title = "Finalized Sunday Service",
+            venue = "New Sanctuary",
+            status = "Published",
+            updatedAt = newUpdatedAt
+        )
+
+        // Strict validation: Immutable fields must match exactly
+        assertEquals("service_immutable_01", updatedService.id)
+        assertEquals("PRAISE_A", updatedService.teamCode)
+        assertEquals("leader_uid_original", updatedService.createdBy)
+        assertEquals(initialCreatedAt, updatedService.createdAt)
+
+        // Mutable fields are updated
+        assertEquals("Finalized Sunday Service", updatedService.title)
+        assertEquals("New Sanctuary", updatedService.venue)
+        assertEquals("Published", updatedService.status)
+
+        // Test Date / Timestamp reflection parsing in fromMap
+        val testDate = java.util.Date(1720000000000L)
+        val mapWithDate = mapOf<String, Any?>(
+            "id" to "date_test_srv",
+            "teamCode" to "TEAM_D",
+            "title" to "Date Test",
+            "createdAt" to testDate,
+            "updatedAt" to 1720000005000L
+        )
+        val fromDateService = com.example.syncedn.data.model.ServiceData.fromMap(mapWithDate)
+        assertEquals(1720000000000L, fromDateService.createdAt)
+        assertEquals(1720000005000L, fromDateService.updatedAt)
+    }
+
     private class FakePreferences : android.content.SharedPreferences {
         private val map = mutableMapOf<String, Any?>()
 

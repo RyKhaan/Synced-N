@@ -1675,11 +1675,11 @@ class AdminActivity : AppCompatActivity() {
                         }
                         obj
                     }
-                    val changed = (newRecords.toString() != localServices.toString())
-                    localServices.clear()
-                    localServices.addAll(newRecords)
-                    if (changed) {
-                        runOnUiThread {
+                    runOnUiThread {
+                        val changed = (newRecords.toString() != localServices.toString())
+                        localServices.clear()
+                        localServices.addAll(newRecords)
+                        if (changed) {
                             if (page == "schedule" || page == "home") {
                                 navigate(page, triggerRefresh = false)
                             }
@@ -2107,6 +2107,16 @@ class AdminActivity : AppCompatActivity() {
                     bpm = songData.optInt("bpm", 74)
                 ))
             }
+            val draftCreatedAt = leaderDraft.optLong("createdAt", 0L)
+            val existingCreatedAt = if (draftCreatedAt > 0L) draftCreatedAt
+            else (localServices.find { it.optString("id") == srvId }?.optLong("createdAt", 0L)?.takeIf { it > 0L } ?: System.currentTimeMillis())
+            val existingCreatedBy = leaderDraft.optString("createdBy").ifBlank {
+                localServices.find { it.optString("id") == srvId }?.optString("createdBy").orEmpty().ifBlank { activeUid }
+            }
+            leaderDraft.put("createdAt", existingCreatedAt)
+            leaderDraft.put("createdBy", existingCreatedBy)
+            leaderDraft.put("updatedAt", System.currentTimeMillis())
+
             val serviceObj = com.example.syncedn.data.model.ServiceData(
                 id = srvId,
                 teamCode = activeCode,
@@ -2119,7 +2129,9 @@ class AdminActivity : AppCompatActivity() {
                 assignments = assignmentsList,
                 rehearsal = rehearsalData,
                 songs = songsList,
-                createdBy = activeUid
+                createdBy = existingCreatedBy,
+                createdAt = existingCreatedAt,
+                updatedAt = System.currentTimeMillis()
             )
             TeamRepository.saveService(activeCode, serviceObj, preferences)
         }

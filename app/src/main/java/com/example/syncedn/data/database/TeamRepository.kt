@@ -862,47 +862,46 @@ object TeamRepository {
                         val srv = ServiceData.fromMap(data).copy(id = doc.id)
                         remoteList.add(srv)
                     }
-                    if (remoteList.isNotEmpty()) {
-                        val memList = cachedServices.getOrPut(code) { java.util.Collections.synchronizedList(mutableListOf()) }
-                        synchronized(memList) {
-                            if (isLeader) {
-                                memList.clear()
-                                memList.addAll(remoteList)
-                            } else {
-                                // For members, merge published remote services
-                                for (srv in remoteList) {
-                                    val idx = memList.indexOfFirst { it.id == srv.id }
-                                    if (idx >= 0) memList[idx] = srv else memList.add(srv)
+                    val memList = cachedServices.getOrPut(code) { java.util.Collections.synchronizedList(mutableListOf()) }
+                    synchronized(memList) {
+                        if (isLeader) {
+                            memList.clear()
+                            memList.addAll(remoteList)
+                        } else {
+                            // For members, prune published services that are no longer published or were deleted remotely
+                            memList.removeAll { it.status == "Published" && remoteList.none { r -> r.id == it.id } }
+                            for (srv in remoteList) {
+                                val idx = memList.indexOfFirst { it.id == srv.id }
+                                if (idx >= 0) memList[idx] = srv else memList.add(srv)
+                            }
+                        }
+                        memList.sortBy { it.date }
+                    }
+                    preferences?.let { prefs ->
+                        try {
+                            val array = org.json.JSONArray()
+                            synchronized(memList) {
+                                memList.forEach { item ->
+                                    val obj = org.json.JSONObject()
+                                    item.toMap().forEach { (k, v) ->
+                                        if (v is List<*>) {
+                                            val childArray = org.json.JSONArray()
+                                            v.forEach { child ->
+                                                if (child is Map<*, *>) childArray.put(org.json.JSONObject(child))
+                                                else childArray.put(child)
+                                            }
+                                            obj.put(k, childArray)
+                                        } else if (v is Map<*, *>) {
+                                            obj.put(k, org.json.JSONObject(v))
+                                        } else {
+                                            obj.put(k, v)
+                                        }
+                                    }
+                                    array.put(obj)
                                 }
                             }
-                            memList.sortBy { it.date }
-                        }
-                        preferences?.let { prefs ->
-                            try {
-                                val array = org.json.JSONArray()
-                                synchronized(memList) {
-                                    memList.forEach { item ->
-                                        val obj = org.json.JSONObject()
-                                        item.toMap().forEach { (k, v) ->
-                                            if (v is List<*>) {
-                                                val childArray = org.json.JSONArray()
-                                                v.forEach { child ->
-                                                    if (child is Map<*, *>) childArray.put(org.json.JSONObject(child))
-                                                    else childArray.put(child)
-                                                }
-                                                obj.put(k, childArray)
-                                            } else if (v is Map<*, *>) {
-                                                obj.put(k, org.json.JSONObject(v))
-                                            } else {
-                                                obj.put(k, v)
-                                            }
-                                        }
-                                        array.put(obj)
-                                    }
-                                }
-                                prefs.edit().putString("team_services_$code", array.toString()).apply()
-                            } catch (_: Throwable) {}
-                        }
+                            prefs.edit().putString("team_services_$code", array.toString()).apply()
+                        } catch (_: Throwable) {}
                     }
                     val deliver = if (isLeader) {
                         getCachedServices(code, preferences)
@@ -945,12 +944,13 @@ object TeamRepository {
                 .addOnSuccessListener {
                     onComplete?.invoke(Result.success(service))
                 }
-                .addOnFailureListener {
-                    // Local cache already preserved the service
-                    onComplete?.invoke(Result.success(service))
+                .addOnFailureListener { err ->
+                    android.util.Log.e("TeamRepository", "Firestore saveService failed: ${err.message}", err)
+                    onComplete?.invoke(Result.failure(err))
                 }
-        } catch (_: Throwable) {
-            onComplete?.invoke(Result.success(service))
+        } catch (e: Throwable) {
+            android.util.Log.e("TeamRepository", "Firestore saveService exception: ${e.message}", e)
+            onComplete?.invoke(Result.failure(e))
         }
     }
 
@@ -1008,9 +1008,13 @@ object TeamRepository {
                 .document(serviceId)
                 .delete()
                 .addOnSuccessListener { onComplete?.invoke(Result.success(true)) }
-                .addOnFailureListener { onComplete?.invoke(Result.success(true)) }
-        } catch (_: Throwable) {
-            onComplete?.invoke(Result.success(true))
+                .addOnFailureListener { err ->
+                    android.util.Log.e("TeamRepository", "Firestore deleteService failed: ${err.message}", err)
+                    onComplete?.invoke(Result.failure(err))
+                }
+        } catch (e: Throwable) {
+            android.util.Log.e("TeamRepository", "Firestore deleteService exception: ${e.message}", e)
+            onComplete?.invoke(Result.failure(e))
         }
     }
 }

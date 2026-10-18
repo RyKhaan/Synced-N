@@ -63,8 +63,22 @@ data class ServiceData(
                 rehearsal = RehearsalData.fromMap(rehearsalMap),
                 songs = songsList,
                 createdBy = map["createdBy"] as? String ?: "",
-                createdAt = (map["createdAt"] as? Number)?.toLong() ?: System.currentTimeMillis(),
-                updatedAt = (map["updatedAt"] as? Number)?.toLong() ?: System.currentTimeMillis()
+                createdAt = when (val c = map["createdAt"]) {
+                    is Number -> c.toLong()
+                    is java.util.Date -> c.time
+                    else -> try {
+                        val toDate = c?.javaClass?.getMethod("toDate")
+                        (toDate?.invoke(c) as? java.util.Date)?.time ?: System.currentTimeMillis()
+                    } catch (_: Throwable) { System.currentTimeMillis() }
+                },
+                updatedAt = when (val u = map["updatedAt"]) {
+                    is Number -> u.toLong()
+                    is java.util.Date -> u.time
+                    else -> try {
+                        val toDate = u?.javaClass?.getMethod("toDate")
+                        (toDate?.invoke(u) as? java.util.Date)?.time ?: System.currentTimeMillis()
+                    } catch (_: Throwable) { System.currentTimeMillis() }
+                }
             )
         }
     }
