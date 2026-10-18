@@ -43,8 +43,13 @@ data class ServiceData(
 
             val rawSongs = map["songs"] as? List<*>
             val songsList = rawSongs?.mapNotNull { item ->
-                @Suppress("UNCHECKED_CAST")
-                (item as? Map<String, Any?>)?.let { ServiceSong.fromMap(it) }
+                when (item) {
+                    is Map<*, *> -> {
+                        @Suppress("UNCHECKED_CAST")
+                        ServiceSong.fromMap(item as Map<String, Any?>)
+                    }
+                    else -> item?.let { ServiceSong.unpack(it) }
+                }
             } ?: emptyList()
 
             @Suppress("UNCHECKED_CAST")
@@ -147,11 +152,77 @@ data class ServiceSong(
     )
 
     companion object {
-        fun fromMap(map: Map<String, Any?>): ServiceSong = ServiceSong(
-            title = map["title"] as? String ?: "",
-            artist = map["artist"] as? String ?: "",
-            key = map["key"] as? String ?: "",
-            bpm = (map["bpm"] as? Number)?.toInt() ?: 0
-        )
+        fun fromMap(map: Map<String, Any?>): ServiceSong = unpack(map)
+
+        fun unpack(raw: Any?): ServiceSong {
+            if (raw == null) return ServiceSong()
+            var title = ""
+            var artist = ""
+            var key = "C"
+            var bpm = 74
+
+            when (raw) {
+                is ServiceSong -> return raw
+                is Map<*, *> -> {
+                    title = raw["title"]?.toString().orEmpty()
+                    artist = raw["artist"]?.toString().orEmpty()
+                    key = raw["key"]?.toString().orEmpty().ifBlank { "C" }
+                    bpm = (raw["bpm"] as? Number)?.toInt() ?: 74
+                }
+                is org.json.JSONObject -> {
+                    title = raw.optString("title")
+                    artist = raw.optString("artist")
+                    key = raw.optString("key", "C").ifBlank { "C" }
+                    bpm = raw.optInt("bpm", 74).takeIf { it > 0 } ?: 74
+                }
+                is String -> {
+                    val trimmed = raw.trim()
+                    if (trimmed.startsWith("{") && trimmed.contains("\"title\"")) {
+                        try {
+                            val obj = org.json.JSONObject(trimmed)
+                            return unpack(obj)
+                        } catch (_: Exception) {
+                            title = trimmed
+                        }
+                    } else {
+                        title = trimmed
+                    }
+                }
+                else -> {
+                    val str = raw.toString().trim()
+                    if (str.startsWith("{") && str.contains("\"title\"")) {
+                        try {
+                            val obj = org.json.JSONObject(str)
+                            return unpack(obj)
+                        } catch (_: Exception) {
+                            title = str
+                        }
+                    } else {
+                        title = str
+                    }
+                }
+            }
+
+            var unwindLimit = 0
+            while (unwindLimit < 5 && title.startsWith("{") && title.contains("\"title\"")) {
+                try {
+                    val nested = org.json.JSONObject(title)
+                    title = nested.optString("title", title).trim()
+                    if (artist.isBlank()) artist = nested.optString("artist", "")
+                    if (key.isBlank() || key == "C") key = nested.optString("key", key).ifBlank { "C" }
+                    if (bpm <= 0 || bpm == 74) bpm = nested.optInt("bpm", bpm).takeIf { it > 0 } ?: bpm
+                    unwindLimit++
+                } catch (_: Exception) {
+                    break
+                }
+            }
+
+            return ServiceSong(
+                title = title.trim(),
+                artist = artist.trim(),
+                key = key.trim().ifBlank { "C" },
+                bpm = if (bpm > 0) bpm else 74
+            )
+        }
     }
 }

@@ -76,11 +76,32 @@ public final class ChordSheet {
         return false;
     }
 
+    private static String normalizeHeader(String header) {
+        String clean = header.replaceAll("[\\[\\]:().]", "").trim();
+        if (clean.isEmpty()) return header;
+        String[] parts = clean.split("\\s+");
+        StringBuilder sb = new StringBuilder("[");
+        for (int i = 0; i < parts.length; i++) {
+            if (i > 0) sb.append(' ');
+            String part = parts[i];
+            if (part.equalsIgnoreCase("pre-chorus") || part.equalsIgnoreCase("prechorus")) {
+                sb.append("Pre-Chorus");
+            } else if (part.length() > 0) {
+                sb.append(Character.toUpperCase(part.charAt(0)));
+                if (part.length() > 1) {
+                    sb.append(part.substring(1).toLowerCase(Locale.ROOT));
+                }
+            }
+        }
+        sb.append(']');
+        return sb.toString();
+    }
+
     public static String formatStanzas(String source) {
         if (source == null) return "";
         String[] lines = source.replace("\r", "").split("\n", -1);
         StringBuilder result = new StringBuilder();
-        Pattern sectionHeader = Pattern.compile("^(?:\\[?(?:verse|chorus|bridge|pre-chorus|intro|outro|vamp|hook|interlude|tag|ending)\\s*\\d*\\s*[\\]:]?)$", Pattern.CASE_INSENSITIVE);
+        Pattern sectionHeader = Pattern.compile("^(?:\\[?(?:verse|chorus|bridge|pre-chorus|prechorus|intro|outro|vamp|hook|interlude|tag|ending|refrain|coda)(?:\\s*\\d*)?\\s*[\\]:.]?)$", Pattern.CASE_INSENSITIVE);
         for (int i = 0; i < lines.length; i++) {
             String line = lines[i];
             String trimmed = line.trim();
@@ -89,13 +110,49 @@ public final class ChordSheet {
                     if (result.toString().endsWith("\n")) result.append('\n');
                     else result.append("\n\n");
                 }
-                result.append(line);
+                result.append(normalizeHeader(trimmed));
             } else {
                 if (result.length() > 0) result.append('\n');
                 result.append(line);
             }
         }
         return result.toString().replaceAll("\n{3,}", "\n\n").trim();
+    }
+
+    public static String autoDetectSections(String source) {
+        if (source == null || source.trim().isEmpty()) return "";
+        String formatted = formatStanzas(source);
+        Pattern headerPat = Pattern.compile("\\[(?i)(verse|chorus|bridge|pre-chorus|intro|outro|vamp|hook|tag|ending)[^\\]]*\\]");
+        if (headerPat.matcher(formatted).find()) {
+            return formatted;
+        }
+
+        String[] paragraphs = formatted.split("\\n\\s*\\n+");
+        if (paragraphs.length <= 1) {
+            return "[Verse]\n" + formatted.trim();
+        }
+
+        StringBuilder sb = new StringBuilder();
+        int verseCount = 1;
+        for (int i = 0; i < paragraphs.length; i++) {
+            String para = paragraphs[i].trim();
+            if (para.isEmpty()) continue;
+            if (sb.length() > 0) sb.append("\n\n");
+            if (i == 0) {
+                sb.append("[Verse ").append(verseCount++).append("]\n").append(para);
+            } else if (i == 1) {
+                sb.append("[Chorus]\n").append(para);
+            } else if (i == 2) {
+                sb.append("[Verse ").append(verseCount++).append("]\n").append(para);
+            } else if (i == 3) {
+                sb.append("[Chorus]\n").append(para);
+            } else if (i == 4) {
+                sb.append("[Bridge]\n").append(para);
+            } else {
+                sb.append("[Chorus]\n").append(para);
+            }
+        }
+        return sb.toString();
     }
 
     public static String render(String source, int steps, boolean lyricsOnly, boolean flats) {

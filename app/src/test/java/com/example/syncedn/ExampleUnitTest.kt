@@ -1285,8 +1285,8 @@ class ExampleUnitTest {
 
         val unspacedSections = "Verse 1\nLine 1\nChorus\nLine 2\nBridge\nLine 3"
         val formatted = com.example.syncedn.ChordSheet.formatStanzas(unspacedSections)
-        assertTrue("Formatted text should have double newlines before Chorus", formatted.contains("\n\nChorus"))
-        assertTrue("Formatted text should have double newlines before Bridge", formatted.contains("\n\nBridge"))
+        assertTrue("Formatted text should have double newlines before Chorus", formatted.contains("\n\n[Chorus]"))
+        assertTrue("Formatted text should have double newlines before Bridge", formatted.contains("\n\n[Bridge]"))
     }
 
     @Test
@@ -1327,6 +1327,81 @@ class ExampleUnitTest {
         assertEquals(7, afterDelete.size)
         assertFalse(afterDelete.any { it.title == "Praise" })
         assertTrue(afterDelete.any { it.title == "I Speak Jesus" })
+    }
+
+    @Test
+    fun testServiceSongUnpackDefensiveRobustness() {
+        // 1. Plain title string
+        val plain = com.example.syncedn.data.model.ServiceSong.unpack("Build My Life")
+        assertEquals("Build My Life", plain.title)
+        assertEquals("", plain.artist)
+        assertEquals("C", plain.key)
+        assertEquals(74, plain.bpm)
+
+        // 2. Exact raw JSON string from user bug report
+        val jsonString = "{\"title\":\"Amazing Grace\",\"artist\":\"John Newton\",\"key\":\"C\",\"bpm\":74}"
+        val fromJsonStr = com.example.syncedn.data.model.ServiceSong.unpack(jsonString)
+        assertEquals("Amazing Grace", fromJsonStr.title)
+        assertEquals("John Newton", fromJsonStr.artist)
+        assertEquals("C", fromJsonStr.key)
+        assertEquals(74, fromJsonStr.bpm)
+
+        // 3. Doubly-nested JSON (title contains stringified JSON object)
+        val nestedJsonObj = org.json.JSONObject()
+            .put("title", "{\"title\":\"Way Maker\",\"artist\":\"Sinach\",\"key\":\"E\",\"bpm\":68}")
+            .put("key", "C")
+            .put("bpm", 74)
+        val fromNested = com.example.syncedn.data.model.ServiceSong.unpack(nestedJsonObj)
+        assertEquals("Way Maker", fromNested.title)
+        assertEquals("Sinach", fromNested.artist)
+        assertEquals("E", fromNested.key)
+        assertEquals(68, fromNested.bpm)
+
+        // 4. Map representation
+        val map = mapOf("title" to "Goodness of God", "artist" to "Bethel Music", "key" to "Ab", "bpm" to 70)
+        val fromMap = com.example.syncedn.data.model.ServiceSong.fromMap(map)
+        assertEquals("Goodness of God", fromMap.title)
+        assertEquals("Bethel Music", fromMap.artist)
+        assertEquals("Ab", fromMap.key)
+        assertEquals(70, fromMap.bpm)
+
+        // 5. ServiceData.fromMap deserializing songs array containing JSON strings
+        val serviceMap = mapOf(
+            "id" to "srv_test",
+            "title" to "Sunday Service",
+            "songs" to listOf(jsonString, "Praise")
+        )
+        val service = com.example.syncedn.data.model.ServiceData.fromMap(serviceMap)
+        assertEquals(2, service.songs.size)
+        assertEquals("Amazing Grace", service.songs[0].title)
+        assertEquals("John Newton", service.songs[0].artist)
+        assertEquals("Praise", service.songs[1].title)
+    }
+
+    @Test
+    fun testChordSheetStanzaFormattingAndAutoDetection() {
+        // 1. Header normalization from raw unbracketed text
+        val rawInput = "Verse 1:\nAmazing grace how sweet the sound\nChorus:\nMy chains are gone I've been set free\nBridge:\nThe Lord has promised good to me"
+
+        val formatted = com.example.syncedn.ChordSheet.formatStanzas(rawInput)
+        assertTrue("Must normalize Verse 1 header into [Verse 1]", formatted.contains("[Verse 1]"))
+        assertTrue("Must normalize Chorus header into [Chorus]", formatted.contains("[Chorus]"))
+        assertTrue("Must normalize Bridge header into [Bridge]", formatted.contains("[Bridge]"))
+        assertTrue("Must cleanly separate stanzas with double newline", formatted.contains("\n\n[Chorus]\n"))
+        assertTrue("Must cleanly separate stanzas with double newline", formatted.contains("\n\n[Bridge]\n"))
+
+        // 2. autoDetectSections on text with NO headers
+        val unheadedText = "Amazing grace how sweet the sound\nThat saved a wretch like me\n\nMy chains are gone\nI've been set free\n\nThe earth shall soon dissolve like snow"
+
+        val autoDetected = com.example.syncedn.ChordSheet.autoDetectSections(unheadedText)
+        assertTrue("Paragraph 1 should be detected as [Verse 1]", autoDetected.startsWith("[Verse 1]\n"))
+        assertTrue("Paragraph 2 should be detected as [Chorus]", autoDetected.contains("\n\n[Chorus]\n"))
+        assertTrue("Paragraph 3 should be detected as [Verse 2]", autoDetected.contains("\n\n[Verse 2]\n"))
+
+        // 3. Transpose rendering
+        val chordSource = "[C]Amazing [G]grace"
+        val transposedD = com.example.syncedn.ChordSheet.render(chordSource, 2, false, false)
+        assertTrue("C shifted by 2 semitones must become D", transposedD.contains("D") && transposedD.contains("A"))
     }
 
     private class FakePreferences : android.content.SharedPreferences {

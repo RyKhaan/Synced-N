@@ -2011,18 +2011,29 @@ class AdminActivity : AppCompatActivity() {
         val songs = draftSongs()
         repeat(songs.length()) { index ->
             val rawItem = songs.get(index)
-            val songObj = if (rawItem is org.json.JSONObject) rawItem
-                          else try { org.json.JSONObject(rawItem.toString()) } catch (_: Exception) { null }
-            val songTitle = (songObj?.optString("title") ?: rawItem.toString()).trim()
-            val matchedSong = allCatalogSongs.find { it.title.equals(songTitle, true) }
-            val songArtist = songObj?.optString("artist").orEmpty().ifBlank { matchedSong?.artist.orEmpty() }
-            val songKey = songObj?.optString("key").orEmpty().ifBlank { matchedSong?.key.orEmpty() }
-            val songBpm = songObj?.optInt("bpm", 0)?.takeIf { it > 0 } ?: matchedSong?.bpm?.takeIf { it > 0 }
+            val unpacked = com.example.syncedn.data.model.ServiceSong.unpack(rawItem)
+            val matchedSong = allCatalogSongs.find { it.title.equals(unpacked.title, true) }
+            val songTitle = unpacked.title
+            val songArtist = unpacked.artist.ifBlank { matchedSong?.artist.orEmpty() }
+            val songKey = unpacked.key.ifBlank { matchedSong?.key.orEmpty() }.ifBlank { "C" }
+            val songBpm = if (unpacked.bpm > 0) unpacked.bpm else (matchedSong?.bpm?.takeIf { it > 0 } ?: 74)
+
+            // Auto-heal stringified JSON in draftSongs in memory
+            if (rawItem is String && rawItem.contains("\"title\"")) {
+                try {
+                    songs.put(index, org.json.JSONObject()
+                        .put("title", songTitle)
+                        .put("artist", songArtist)
+                        .put("key", songKey)
+                        .put("bpm", songBpm))
+                    saveLeaderDraft()
+                } catch (_: Exception) {}
+            }
 
             val subtitleParts = mutableListOf<String>()
             if (songArtist.isNotBlank()) subtitleParts.add(songArtist)
             if (songKey.isNotBlank()) subtitleParts.add("Key: $songKey")
-            if (songBpm != null && songBpm > 0) subtitleParts.add("$songBpm BPM")
+            if (songBpm > 0) subtitleParts.add("$songBpm BPM")
             val subtitleText = subtitleParts.joinToString(" • ")
 
             col.add(panel().apply {
@@ -2154,15 +2165,15 @@ class AdminActivity : AppCompatActivity() {
             val allCachedSongs = TeamRepository.getCachedSongs(activeCode, preferences)
             repeat(draftSongsArr.length()) { idx ->
                 val raw = draftSongsArr.get(idx)
-                val songObj = if (raw is org.json.JSONObject) raw else try { org.json.JSONObject(raw.toString()) } catch (_: Exception) { null }
-                val songTitle = (songObj?.optString("title") ?: raw.toString()).trim()
+                val unpacked = com.example.syncedn.data.model.ServiceSong.unpack(raw)
+                val songTitle = unpacked.title
                 val cachedSong = allCachedSongs.find { it.title.equals(songTitle, true) }
                 val songData = try { org.json.JSONObject(preferences.getString("songData_$songTitle", "{}").orEmpty()) } catch (_: Exception) { org.json.JSONObject() }
                 songsList.add(com.example.syncedn.data.model.ServiceSong(
                     title = songTitle,
-                    artist = songObj?.optString("artist")?.ifBlank { cachedSong?.artist.orEmpty() }?.ifBlank { songData.optString("artist", songCatalog().find { it.first == songTitle }?.second ?: "") } ?: "",
-                    key = songObj?.optString("key")?.ifBlank { cachedSong?.key.orEmpty() }?.ifBlank { songData.optString("key", "C") } ?: "C",
-                    bpm = songObj?.optInt("bpm", 0)?.takeIf { it > 0 } ?: (cachedSong?.bpm ?: songData.optInt("bpm", 74))
+                    artist = unpacked.artist.ifBlank { cachedSong?.artist.orEmpty() }.ifBlank { songData.optString("artist", songCatalog().find { it.first == songTitle }?.second ?: "") },
+                    key = unpacked.key.ifBlank { cachedSong?.key.orEmpty() }.ifBlank { songData.optString("key", "C") }.ifBlank { "C" },
+                    bpm = if (unpacked.bpm > 0) unpacked.bpm else (cachedSong?.bpm ?: songData.optInt("bpm", 74))
                 ))
             }
             val draftCreatedAt = leaderDraft.optLong("createdAt", 0L)
@@ -2208,7 +2219,10 @@ class AdminActivity : AppCompatActivity() {
         }); col.space(16)
         col.add(panel().apply {
             add(text("Song Lineup", 14, navy, true)); space(8)
-            repeat(draftSongs().length()) { index -> add(text("${index + 1}. " + draftSongs().getString(index), 12, navy)); space(6) }
+            repeat(draftSongs().length()) { index ->
+                val song = com.example.syncedn.data.model.ServiceSong.unpack(draftSongs().get(index))
+                add(text("${index + 1}. ${song.title}", 12, navy)); space(6)
+            }
         }); col.space(16)
         col.add(panel().apply {
             add(text("Rehearsal", 14, navy, true)); space(8)
@@ -2312,14 +2326,103 @@ class AdminActivity : AppCompatActivity() {
         listOf("Title*" to title, "Artist*" to artist, "Key" to key, "BPM" to bpm).forEach { (label, field) ->
             col.add(text(label, 12, navy, true)); col.space(8); col.add(field, -1, 48); col.space(16)
         }
-        col.add(text("Lyrics & Chords", 12, navy, true)); col.space(8); col.add(lyrics, -1, 160); col.space(16)
-        col.add(text("Reference Link", 12, navy, true)); col.space(8); col.add(link, -1, 48); col.space(24)
+        col.add(horizontal().apply {
+            add(text("Lyrics & Chords", 12, navy, true), 0, -2, 1f)
+            add(text("Auto-Detect Sections", 12, purple, bold = true).apply {
+                setPadding(dp(8), dp(4), dp(8), dp(4))
+                isClickable = true
+                isFocusable = true
+                setOnClickListener {
+                    val current = lyrics.text.toString()
+                    if (current.isNotBlank()) {
+                        val formatted = ChordSheet.autoDetectSections(current)
+                        lyrics.setText(formatted)
+                        toast("Lyrics formatted into Verse & Chorus sections")
+                    } else {
+                        toast("Enter or paste lyrics first")
+                    }
+                }
+            }, -2, -2)
+        })
+        col.space(8); col.add(lyrics, -1, 160); col.space(16)
+        col.add(text("Reference Link", 12, navy, true)); col.space(8); col.add(link, -1, 48); col.space(20)
+
+        // Dynamic Transpose Preview in Add/Edit Song
+        col.add(text("Transpose Preview", 12, navy, true)); col.space(8)
+        val previewRoots = listOf("C", "Db", "D", "Eb", "E", "F")
+        var currentPreviewKey = key.text.toString().trim().ifBlank { "C" }
+        val previewButtons = mutableMapOf<String, TextView>()
+        var activePreviewChord = previewRoots.find { it.equals(currentPreviewKey, true) } ?: "C"
+
+        val previewSheetText = text("", 12, navy).apply {
+            typeface = Typeface.MONOSPACE
+            setLineSpacing(dp(4).toFloat(), 1.18f)
+            isSingleLine = false
+            setHorizontallyScrolling(false)
+        }
+
+        fun updateTransposePreview(targetChord: String) {
+            activePreviewChord = targetChord
+            val origKey = key.text.toString().trim().ifBlank { "C" }
+            val basePitch = ChordSheet.keyPitch(origKey).coerceAtLeast(0)
+            val targetPitch = ChordSheet.pitch(targetChord).coerceAtLeast(0)
+            val offset = (targetPitch - basePitch + 12) % 12
+            val sourceText = lyrics.text.toString().ifBlank {
+                "[Verse 1]\n[C]Amazing grace how [G]sweet the sound\n[Am]That saved a wretch [F]like me\n\n[Chorus]\n[C]My chains are gone [G]I've been set free"
+            }
+            previewSheetText.text = ChordSheet.render(sourceText, offset, false, targetChord.contains('b') || targetChord == "F")
+            previewButtons.forEach { (chord, tv) ->
+                val isActive = (chord == targetChord)
+                tv.background = bg(if (isActive) navy else Color.rgb(228, 220, 235), 8)
+                tv.setTextColor(if (isActive) Color.WHITE else navy)
+            }
+        }
+
+        val previewRow = horizontal().apply {
+            previewRoots.forEachIndexed { idx, chord ->
+                val btn = text(chord, 12, navy, true, true).apply {
+                    background = bg(Color.rgb(228, 220, 235), 8)
+                    setOnClickListener { updateTransposePreview(chord) }
+                    isFocusable = true
+                }
+                previewButtons[chord] = btn
+                val lp = LinearLayout.LayoutParams(0, dp(38), 1f).apply {
+                    if (idx > 0) leftMargin = dp(6)
+                }
+                addView(btn, lp)
+            }
+        }
+        col.add(previewRow); col.space(12)
+
+        col.add(panel().apply {
+            add(previewSheetText, -1, -2)
+        }); col.space(24)
+
+        updateTransposePreview(activePreviewChord)
+
+        lyrics.addTextChangedListener(object : android.text.TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
+            override fun afterTextChanged(s: android.text.Editable?) {
+                updateTransposePreview(activePreviewChord)
+            }
+        })
+
+        key.addTextChangedListener(object : android.text.TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
+            override fun afterTextChanged(s: android.text.Editable?) {
+                updateTransposePreview(activePreviewChord)
+            }
+        })
+
         col.add(memberButton("Save Song") {
             val name = title.text.toString().trim()
             val artistName = artist.text.toString().trim()
             val tempo = bpm.text.toString().toIntOrNull()
             val songKey = key.text.toString().trim()
-            val sheetContent = lyrics.text.toString()
+            val rawSheet = lyrics.text.toString()
+            val sheetContent = ChordSheet.formatStanzas(rawSheet)
             val refUrl = link.text.toString().trim()
             val normalizedRef = SongData.normalizeReferenceUrl(refUrl)
             when {
@@ -3080,6 +3183,8 @@ class AdminActivity : AppCompatActivity() {
             if (hasChordsInSheet) typeface = Typeface.MONOSPACE
             setLineSpacing(dp(4).toFloat(), 1.18f)
             setTextIsSelectable(true)
+            isSingleLine = false
+            setHorizontallyScrolling(false)
         }
         val chordButtons = mutableMapOf<String, TextView>()
         fun renderTarget(target: Int) {
@@ -3135,15 +3240,7 @@ class AdminActivity : AppCompatActivity() {
         }); col.space(24)
         col.add(text(if(showChords) "Lyrics & Chords Sheet" else "Lyrics", 13, navy, true)); col.space(10)
         col.add(panel().apply {
-            if(showChords) {
-                add(android.widget.HorizontalScrollView(this@AdminActivity).apply {
-                    isFillViewport = true
-                    clipToPadding = true
-                    addView(sheetText, FrameLayout.LayoutParams(-2, -2))
-                })
-            } else {
-                add(sheetText, -1, -2)
-            }
+            add(sheetText, -1, -2)
         }); col.space(24)
         renderTarget((basePitch + offset) % 12)
         col.add(text("Reference Link", 13, navy, true)); col.space(10)

@@ -2257,8 +2257,8 @@ open class MemberActivity : AppCompatActivity() {
             lineupSongs.clear()
             repeat(songs.length()) { idx ->
                 val item = songs.get(idx)
-                val songTitle = if (item is org.json.JSONObject) item.optString("title") else item.toString()
-                if (songTitle.isNotBlank()) lineupSongs.add(songTitle)
+                val unpacked = com.example.syncedn.data.model.ServiceSong.unpack(item)
+                if (unpacked.title.isNotBlank()) lineupSongs.add(unpacked.title)
             }
         }
     }
@@ -2320,6 +2320,8 @@ open class MemberActivity : AppCompatActivity() {
             if (showChords) typeface = Typeface.MONOSPACE
             setLineSpacing(dp(4).toFloat(), 1.18f)
             setTextIsSelectable(true)
+            isSingleLine = false
+            setHorizontallyScrolling(false)
         }
         val chordButtons = mutableMapOf<String, TextView>()
         fun renderTarget(target: Int) {
@@ -2373,15 +2375,7 @@ open class MemberActivity : AppCompatActivity() {
         }); col.space(24)
         col.add(text(if(showChords) "Lyrics & Chords Sheet" else "Lyrics", 13, navy, true)); col.space(10)
         col.add(panel().apply {
-            if(showChords) {
-                add(android.widget.HorizontalScrollView(this@MemberActivity).apply {
-                    isFillViewport = true
-                    clipToPadding = true
-                    addView(sheetText, FrameLayout.LayoutParams(-2, -2))
-                })
-            } else {
-                add(sheetText, -1, -2)
-            }
+            add(sheetText, -1, -2)
         }); col.space(24)
         renderTarget((basePitch + offset) % 12)
         col.add(text("Reference Link", 13, navy, true)); col.space(10)
@@ -2399,17 +2393,17 @@ open class MemberActivity : AppCompatActivity() {
         val activeCode = preferences.getString("teamCode", "").orEmpty()
         val allCatalogSongs = TeamRepository.getCachedSongs(activeCode, preferences)
         lineupSongs.forEachIndexed { index, rawItem ->
-            val songObj = try { org.json.JSONObject(rawItem) } catch (_: Exception) { null }
-            val title = (songObj?.optString("title") ?: rawItem).trim()
-            val matched = allCatalogSongs.find { it.title.equals(title, true) }
-            val artist = songObj?.optString("artist").orEmpty().ifBlank { matched?.artist.orEmpty() }
-            val key = songObj?.optString("key").orEmpty().ifBlank { matched?.key.orEmpty() }
-            val bpm = songObj?.optInt("bpm", 0)?.takeIf { it > 0 } ?: matched?.bpm?.takeIf { it > 0 }
+            val unpacked = com.example.syncedn.data.model.ServiceSong.unpack(rawItem)
+            val matched = allCatalogSongs.find { it.title.equals(unpacked.title, true) }
+            val title = unpacked.title
+            val artist = unpacked.artist.ifBlank { matched?.artist.orEmpty() }
+            val key = unpacked.key.ifBlank { matched?.key.orEmpty() }.ifBlank { "C" }
+            val bpm = if (unpacked.bpm > 0) unpacked.bpm else (matched?.bpm?.takeIf { it > 0 } ?: 74)
 
             val subtitleParts = mutableListOf<String>()
             if (artist.isNotBlank()) subtitleParts.add(artist)
             if (key.isNotBlank()) subtitleParts.add("Key: $key")
-            if (bpm != null && bpm > 0) subtitleParts.add("$bpm BPM")
+            if (bpm > 0) subtitleParts.add("$bpm BPM")
             val subtitleText = subtitleParts.joinToString(" • ")
 
             col.add(panel().apply {
