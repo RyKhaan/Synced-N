@@ -3513,6 +3513,7 @@ class AdminActivity : AppCompatActivity() {
                                             TeamRepository.acceptSubstitutionAndUpdateService(activeCode, sub, preferences) { res ->
                                                 runOnUiThread {
                                                     if (res.isSuccess) toast("Substitution accepted and service roster updated!")
+                                                    else toast("Failed to accept substitution: ${res.exceptionOrNull()?.message ?: "Unknown error"}")
                                                     populateSubstitutions()
                                                 }
                                             }
@@ -3520,6 +3521,7 @@ class AdminActivity : AppCompatActivity() {
                                             TeamRepository.updateSubstitutionStatus(activeCode, sub.id, "Declined", preferences) { res ->
                                                 runOnUiThread {
                                                     if (res.isSuccess) toast("Substitution declined.")
+                                                    else toast("Failed to decline substitution: ${res.exceptionOrNull()?.message ?: "Unknown error"}")
                                                     populateSubstitutions()
                                                 }
                                             }

@@ -2208,6 +2208,14 @@ open class MemberActivity : AppCompatActivity() {
                 toast("Please select a substitute teammate.")
                 return@memberButton
             }
+            if (selectedSubstituteUid.isBlank() || selectedSubstituteUid.startsWith("seed_")) {
+                toast("Please select a registered teammate from the roster.")
+                return@memberButton
+            }
+            if (currentUid.isNotBlank() && selectedSubstituteUid == currentUid) {
+                toast("You cannot select yourself as a substitute.")
+                return@memberButton
+            }
 
             val newSub = SubstitutionData(
                 id = java.util.UUID.randomUUID().toString(),
@@ -2404,6 +2412,7 @@ open class MemberActivity : AppCompatActivity() {
                                             TeamRepository.acceptSubstitutionAndUpdateService(activeCode, sub, preferences) { res ->
                                                 runOnUiThread {
                                                     if (res.isSuccess) toast("Substitution accepted!")
+                                                    else toast("Failed to accept substitution: ${res.exceptionOrNull()?.message ?: "Unknown error"}")
                                                     populateSubstitutions()
                                                 }
                                             }
@@ -2411,6 +2420,7 @@ open class MemberActivity : AppCompatActivity() {
                                             TeamRepository.updateSubstitutionStatus(activeCode, sub.id, "Declined", preferences) { res ->
                                                 runOnUiThread {
                                                     if (res.isSuccess) toast("Substitution declined.")
+                                                    else toast("Failed to decline substitution: ${res.exceptionOrNull()?.message ?: "Unknown error"}")
                                                     populateSubstitutions()
                                                 }
                                             }
@@ -2430,6 +2440,7 @@ open class MemberActivity : AppCompatActivity() {
                                     TeamRepository.updateSubstitutionStatus(activeCode, sub.id, "Cancelled", preferences) { res ->
                                         runOnUiThread {
                                             if (res.isSuccess) toast("Request cancelled.")
+                                            else toast("Failed to cancel request: ${res.exceptionOrNull()?.message ?: "Unknown error"}")
                                             populateSubstitutions()
                                         }
                                     }

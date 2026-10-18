@@ -368,6 +368,7 @@ service cloud.firestore {
       data.requesterName is string && data.requesterName.size() > 0 && data.requesterName.size() <= 100 &&
       data.role is string && data.role.size() > 0 && data.role.size() <= 50 &&
       data.substituteUid is string && data.substituteUid.size() > 0 && data.substituteUid.size() <= 128 &&
+      data.requesterUid != data.substituteUid &&
       data.substituteName is string && data.substituteName.size() > 0 && data.substituteName.size() <= 100 &&
       data.reason is string && data.reason.size() > 0 && data.reason.size() <= 500 &&
       data.status in ['Pending', 'Accepted', 'Declined', 'Cancelled'] &&
@@ -486,9 +487,15 @@ service cloud.firestore {
                          isValidService(request.resource.data, serviceId, teamCode) &&
                          request.resource.data.createdBy == request.auth.uid;
 
-        allow update: if isLeaderOfTeam(teamCode) &&
-                         isValidService(request.resource.data, serviceId, teamCode) &&
-                         areImmutableFieldsUnchanged(['id', 'teamCode', 'createdBy', 'createdAt']);
+        allow update: if (
+                         (isLeaderOfTeam(teamCode) &&
+                          isValidService(request.resource.data, serviceId, teamCode) &&
+                          areImmutableFieldsUnchanged(['id', 'teamCode', 'createdBy', 'createdAt']))
+                         ||
+                         (isAuthenticated() && isSameTeam(teamCode) &&
+                          isValidService(request.resource.data, serviceId, teamCode) &&
+                          areImmutableFieldsUnchanged(['id', 'teamCode', 'title', 'date', 'start', 'end', 'venue', 'status', 'rehearsal', 'songs', 'createdBy', 'createdAt']))
+                       );
 
         allow delete: if isLeaderOfTeam(teamCode);
       }

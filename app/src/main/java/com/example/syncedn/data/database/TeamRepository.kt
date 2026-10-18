@@ -2058,55 +2058,75 @@ object TeamRepository {
     ) {
         val code = teamCode.trim().uppercase()
         val acceptedSub = sub.copy(status = "Accepted", updatedAt = System.currentTimeMillis())
-        updateSubstitutionStatusLocally(code, sub.id, "Accepted", preferences)
 
-        // 1. Update substitution status in Firestore
-        updateSubstitutionStatus(code, sub.id, "Accepted", preferences) { subResult ->
-            if (subResult.isFailure) {
+        if (acceptedSub.serviceId.isBlank()) {
+            updateSubstitutionStatusLocally(code, sub.id, "Accepted", preferences)
+            updateSubstitutionStatus(code, sub.id, "Accepted", preferences, onComplete)
+            return
+        }
+
+        // Helper to commit substitution status after service update succeeds
+        fun commitSubstitutionStatus() {
+            updateSubstitutionStatusLocally(code, sub.id, "Accepted", preferences)
+            updateSubstitutionStatus(code, sub.id, "Accepted", preferences) { subResult ->
                 onComplete?.invoke(subResult)
-                return@updateSubstitutionStatus
             }
+        }
 
-            // 2. If serviceId is blank, we are done
-            if (acceptedSub.serviceId.isBlank()) {
-                onComplete?.invoke(Result.success(true))
-                return@updateSubstitutionStatus
-            }
+        // Fetch latest ServiceData from Firestore to prevent stale cache overwrites
+        try {
+            db.collection(TEAMS_COLLECTION)
+                .document(code)
+                .collection(SERVICES_SUBCOLLECTION)
+                .document(acceptedSub.serviceId)
+                .get()
+                .addOnSuccessListener { doc ->
+                    val svc = if (doc != null && doc.exists()) {
+                        ServiceData.fromMap(doc.data ?: emptyMap())
+                    } else {
+                        getCachedServices(code, preferences).find { it.id == acceptedSub.serviceId }
+                    }
 
-            // 3. Service is linked; load it from local cache or Firestore
-            val cached = getCachedServices(code, preferences).find { it.id == acceptedSub.serviceId }
-            if (cached != null) {
-                val updated = replaceAssignmentInService(cached, acceptedSub)
-                saveServiceLocally(code, updated, preferences)
-                saveService(code, updated, preferences) { svcResult ->
-                    onComplete?.invoke(if (svcResult.isSuccess) Result.success(true) else Result.failure(svcResult.exceptionOrNull() ?: Exception("Failed to save updated service")))
-                }
-            } else {
-                try {
-                    db.collection(TEAMS_COLLECTION)
-                        .document(code)
-                        .collection(SERVICES_SUBCOLLECTION)
-                        .document(acceptedSub.serviceId)
-                        .get()
-                        .addOnSuccessListener { doc ->
-                            if (doc != null && doc.exists()) {
-                                val svc = ServiceData.fromMap(doc.data ?: emptyMap())
-                                val updated = replaceAssignmentInService(svc, acceptedSub)
-                                saveServiceLocally(code, updated, preferences)
-                                saveService(code, updated, preferences) { svcResult ->
-                                    onComplete?.invoke(if (svcResult.isSuccess) Result.success(true) else Result.failure(svcResult.exceptionOrNull() ?: Exception("Failed to save updated service")))
-                                }
+                    if (svc != null) {
+                        val updated = replaceAssignmentInService(svc, acceptedSub)
+                        saveServiceLocally(code, updated, preferences)
+                        saveService(code, updated, preferences) { svcResult ->
+                            if (svcResult.isSuccess) {
+                                commitSubstitutionStatus()
                             } else {
-                                onComplete?.invoke(Result.success(true))
+                                val err = svcResult.exceptionOrNull() ?: Exception("Failed to save updated service")
+                                android.util.Log.e("TeamRepository", "saveService failed on substitution accept", err)
+                                onComplete?.invoke(Result.failure(err))
                             }
                         }
-                        .addOnFailureListener {
-                            onComplete?.invoke(Result.success(true))
-                        }
-                } catch (_: Throwable) {
-                    onComplete?.invoke(Result.success(true))
+                    } else {
+                        // If service record not found anywhere, commit substitution status directly
+                        commitSubstitutionStatus()
+                    }
                 }
-            }
+                .addOnFailureListener { fetchErr ->
+                    // Network / fetch error: attempt fallback to locally cached service
+                    val cached = getCachedServices(code, preferences).find { it.id == acceptedSub.serviceId }
+                    if (cached != null) {
+                        val updated = replaceAssignmentInService(cached, acceptedSub)
+                        saveServiceLocally(code, updated, preferences)
+                        saveService(code, updated, preferences) { svcResult ->
+                            if (svcResult.isSuccess) {
+                                commitSubstitutionStatus()
+                            } else {
+                                val err = svcResult.exceptionOrNull() ?: fetchErr
+                                android.util.Log.e("TeamRepository", "saveService failed on substitution accept (offline fallback)", err)
+                                onComplete?.invoke(Result.failure(err))
+                            }
+                        }
+                    } else {
+                        android.util.Log.e("TeamRepository", "Failed to fetch service for substitution accept", fetchErr)
+                        onComplete?.invoke(Result.failure(fetchErr))
+                    }
+                }
+        } catch (e: Throwable) {
+            android.util.Log.e("TeamRepository", "Exception in acceptSubstitutionAndUpdateService", e)
+            onComplete?.invoke(Result.failure(e))
         }
     }
 }
