@@ -2482,14 +2482,20 @@ class AdminActivity : AppCompatActivity() {
     }
     private fun tabRow(labels: List<String>, active: String, onSelect: (String) -> Unit): View =
         horizontal().apply {
-            labels.forEach { label ->
-                add(text(label, 12, if (label == active) Color.WHITE else navy,
+            labels.forEachIndexed { index, label ->
+                val isActive = label == active
+                val tab = text(label, 12, if (isActive) Color.WHITE else navy,
                     bold = true, centered = true).apply {
-                    background = bg(if (label == active) navy else Color.WHITE, 24)
+                    background = bg(if (isActive) navy else Color.WHITE, 24,
+                        if (isActive) null else Color.rgb(220, 220, 225))
                     setPadding(dp(3), dp(8), dp(3), dp(8))
                     isClickable = true; isFocusable = true
                     setOnClickListener { onSelect(label) }
-                }, 0, 48, 1f)
+                }
+                val lp = LinearLayout.LayoutParams(0, dp(44), 1f).apply {
+                    if (index > 0) leftMargin = dp(8)
+                }
+                addView(tab, lp)
             }
         }
     private fun memberAvatar(): View = object : View(this) {
@@ -2876,12 +2882,18 @@ class AdminActivity : AppCompatActivity() {
             if (showChords) typeface = Typeface.MONOSPACE
             setTextIsSelectable(true)
         }
+        val chordButtons = mutableMapOf<String, TextView>()
         fun renderTarget(target: Int) {
             offset = (target - basePitch + 12) % 12
             val root = roots[target]
             key.text = "Key: $root${if(minor) "m" else ""}    •    $tempo BPM"
             sheetText.text = ChordSheet.render(sheet, offset, !showChords, root.contains('b') || root == "F")
             preferences.edit().putInt("chord_transpose_$selectedSong", offset).apply()
+            chordButtons.forEach { (chord, tv) ->
+                val isActive = (chord == root)
+                tv.background = bg(if (isActive) navy else Color.rgb(228, 220, 235), 8)
+                tv.setTextColor(if (isActive) Color.WHITE else navy)
+            }
         }
         if (isLeader) {
             col.add(memberButton("Edit Song", navy) { navigate("songEdit") }, -1, 48); col.space(16)
@@ -2904,12 +2916,18 @@ class AdminActivity : AppCompatActivity() {
                 }
                 add(text("Transpose preview", 12, Color.GRAY)); space(8)
                 add(horizontal().apply {
-                    listOf("C", "Db", "D", "Eb", "E", "F").forEach { chord ->
-                        add(text(chord, 12, navy, true, true).apply {
-                            background = bg(Color.rgb(224, 215, 230), 6)
+                    val previewChords = listOf("C", "Db", "D", "Eb", "E", "F")
+                    previewChords.forEachIndexed { idx, chord ->
+                        val btn = text(chord, 12, navy, true, true).apply {
+                            background = bg(Color.rgb(228, 220, 235), 8)
                             setOnClickListener { renderTarget(ChordSheet.pitch(chord)) }
                             isFocusable = true
-                        }, 0, 44, 1f)
+                        }
+                        chordButtons[chord] = btn
+                        val lp = LinearLayout.LayoutParams(0, dp(38), 1f).apply {
+                            if (idx > 0) leftMargin = dp(6)
+                        }
+                        addView(btn, lp)
                     }
                 })
             }
