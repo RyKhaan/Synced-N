@@ -9,6 +9,7 @@ import com.example.syncedn.data.database.FirestoreManager
 import com.example.syncedn.data.database.TeamRepository
 import com.example.syncedn.data.model.TeamMember
 import com.example.syncedn.data.model.UnavailableRange
+import com.example.syncedn.data.model.SongData
 import com.example.syncedn.data.util.ValidationUtils
 import android.text.InputFilter
 import androidx.activity.result.contract.ActivityResultContracts
@@ -2193,53 +2194,85 @@ class AdminActivity : AppCompatActivity() {
         }
     }
     private fun songCatalog(): List<Pair<String, String>> {
-        val base = listOf("Praise" to "Elevation Worship", "Trust in God" to "Elevation Worship",
-            "Way Maker" to "Sinach", "Gratitude" to "Brandon Lake")
-        val extra = mutableListOf<Pair<String, String>>()
-        try {
-            val data = org.json.JSONArray(preferences.getString("customSongs", "[]"))
-            repeat(data.length()) { val song = data.getJSONObject(it); extra.add(song.optString("title") to song.optString("artist")) }
-        } catch (_: Exception) {}
-        return (base + extra).map { (title, artist) ->
-            val details = try { org.json.JSONObject(preferences.getString("songData_$title", "{}").orEmpty()) }
-            catch (_: Exception) { org.json.JSONObject() }
-            title to details.optString("artist", artist)
-        }
+        val activeCode = preferences.getString("teamCode", "").orEmpty()
+        val songs = TeamRepository.getCachedSongs(activeCode, preferences)
+        return songs.map { it.title to it.artist }
     }
     private fun songEditView(): View = memberPage(if (selectedSong.isBlank()) "Add Song" else "Edit Song",
         if (selectedSong.isBlank()) "songs" else "songDetails") { col ->
-        val data = try { org.json.JSONObject(preferences.getString("songData_$selectedSong", "{}").orEmpty()) } catch (_: Exception) { org.json.JSONObject() }
-        val title = plainInput("Song title").apply { setText(selectedSong) }
-        val artist = plainInput("Artist").apply { setText(data.optString("artist", songCatalog().find { it.first == selectedSong }?.second ?: "")) }
-        val key = plainInput("Key, e.g. C").apply { setText(data.optString("key", "C")) }
-        val bpm = plainInput("BPM").apply { inputType = InputType.TYPE_CLASS_NUMBER; setText(data.optString("bpm", "74")) }
-        val lyrics = plainInput("Your licensed lyrics / chords", true).apply { setText(data.optString("sheet", data.optString("lyrics"))) }
-        val link = plainInput("Reference URL").apply { setText(data.optString("link")) }
+        val activeCode = preferences.getString("teamCode", "").orEmpty()
+        val currentSong = TeamRepository.getCachedSongs(activeCode, preferences).find { it.title.equals(selectedSong, ignoreCase = true) }
+        val fallbackJson = try { org.json.JSONObject(preferences.getString("songData_$selectedSong", "{}").orEmpty()) } catch (_: Exception) { org.json.JSONObject() }
+        
+        val title = plainInput("Song title").apply { setText(currentSong?.title ?: selectedSong) }
+        val artist = plainInput("Artist").apply { setText(currentSong?.artist ?: fallbackJson.optString("artist", songCatalog().find { it.first == selectedSong }?.second ?: "")) }
+        val key = plainInput("Key, e.g. C").apply { setText(currentSong?.key ?: fallbackJson.optString("key", "C")) }
+        val bpm = plainInput("BPM").apply { inputType = InputType.TYPE_CLASS_NUMBER; setText(currentSong?.bpm?.toString() ?: fallbackJson.optString("bpm", "74")) }
+        val lyrics = plainInput("Your licensed lyrics / chords", true).apply { 
+            setText(currentSong?.sheet?.ifBlank { currentSong.lyrics } ?: fallbackJson.optString("sheet", fallbackJson.optString("lyrics"))) 
+        }
+        val link = plainInput("Reference URL").apply { setText(currentSong?.referenceUrl ?: fallbackJson.optString("link")) }
         listOf("Title*" to title, "Artist*" to artist, "Key" to key, "BPM" to bpm).forEach { (label, field) ->
             col.add(text(label, 12, navy, true)); col.space(8); col.add(field, -1, 48); col.space(16)
         }
         col.add(text("Lyrics & Chords", 12, navy, true)); col.space(8); col.add(lyrics, -1, 160); col.space(16)
         col.add(text("Reference Link", 12, navy, true)); col.space(8); col.add(link, -1, 48); col.space(24)
         col.add(memberButton("Save Song") {
-            val name = title.text.toString().trim(); val tempo = bpm.text.toString().toIntOrNull()
+            val name = title.text.toString().trim()
+            val artistName = artist.text.toString().trim()
+            val tempo = bpm.text.toString().toIntOrNull()
+            val songKey = key.text.toString().trim()
+            val sheetContent = lyrics.text.toString()
+            val refUrl = link.text.toString().trim()
             when {
                 name.isBlank() -> invalid(title, "Enter a title.")
-                artist.text.isBlank() -> invalid(artist, "Enter an artist.")
-                ChordSheet.keyPitch(key.text.toString().trim()) < 0 -> invalid(key, "Enter a key such as C, Eb, F# or Am.")
+                artistName.isBlank() -> invalid(artist, "Enter an artist.")
+                ChordSheet.keyPitch(songKey) < 0 -> invalid(key, "Enter a key such as C, Eb, F# or Am.")
                 tempo == null || tempo !in 1..400 -> invalid(bpm, "Enter BPM from 1 to 400.")
                 else -> {
-                    if (songCatalog().none { it.first.equals(name, true) }) {
-                        val catalog = org.json.JSONArray(preferences.getString("customSongs", "[]"))
-                        catalog.put(org.json.JSONObject().put("title", name).put("artist", artist.text.toString().trim()))
-                        preferences.edit().putString("customSongs", catalog.toString()).apply()
-                    }
-                    preferences.edit().putString("songData_$name", org.json.JSONObject().put("artist", artist.text.toString().trim())
-                        .put("key", key.text.toString().trim()).put("bpm", tempo).put("lyrics", lyrics.text.toString()).put("sheet", lyrics.text.toString())
-                        .put("link", link.text.toString().trim()).toString()).apply()
-                    selectedSong = name; toast("Song saved locally"); navigate("songDetails")
+                    val songId = currentSong?.id?.ifBlank { "song_${System.currentTimeMillis()}" } ?: "song_${System.currentTimeMillis()}"
+                    val songObj = SongData(
+                        id = songId,
+                        teamCode = activeCode,
+                        title = name,
+                        artist = artistName,
+                        key = songKey,
+                        bpm = tempo,
+                        sheet = sheetContent,
+                        lyrics = sheetContent,
+                        referenceUrl = refUrl,
+                        createdBy = preferences.getString("userId", "").orEmpty(),
+                        createdAt = currentSong?.createdAt ?: System.currentTimeMillis(),
+                        updatedAt = System.currentTimeMillis()
+                    )
+                    TeamRepository.saveSong(activeCode, songObj, preferences)
+                    preferences.edit().putString("songData_$name", org.json.JSONObject().put("artist", artistName)
+                        .put("key", songKey).put("bpm", tempo).put("lyrics", sheetContent).put("sheet", sheetContent)
+                        .put("link", refUrl).toString()).apply()
+                    selectedSong = name
+                    toast("Song saved")
+                    navigate("songDetails")
                 }
             }
         }, -1, 48)
+
+        if (selectedSong.isNotBlank()) {
+            col.space(12)
+            col.add(memberButton("Delete Song", Color.rgb(180, 40, 40)) {
+                AlertDialog.Builder(this)
+                    .setTitle("Delete Song?")
+                    .setMessage("Are you sure you want to delete '$selectedSong' from the team library?")
+                    .setPositiveButton("Delete") { _, _ ->
+                        val songId = currentSong?.id ?: "song_${selectedSong.lowercase().replace(" ", "_")}"
+                        TeamRepository.deleteSong(activeCode, songId, preferences)
+                        toast("Song deleted")
+                        selectedSong = ""
+                        navigate("songs")
+                    }
+                    .setNegativeButton("Cancel", null)
+                    .show()
+            }, -1, 48)
+        }
     }
     private fun announcementEditView(): View = memberPage("Announcement", "announcements") { col ->
         val title = plainInput("Announcement title", true)
@@ -2837,9 +2870,10 @@ class AdminActivity : AppCompatActivity() {
         val search = plainInput("Search by title or artist")
         col.add(search, -1, 48); col.space(20)
         val results = vertical(); col.add(results)
-        val songs = songCatalog()
+        val activeCode = preferences.getString("teamCode", "").orEmpty()
         fun populate(query: String) {
             results.removeAllViews()
+            val songs = songCatalog()
             val matches = songs.filter { (title, artist) -> "$title $artist".contains(query, true) }
             if (matches.isEmpty()) results.add(text("No songs found.", 14, Color.GRAY))
             matches.forEach { (title, artist) ->
@@ -2863,19 +2897,26 @@ class AdminActivity : AppCompatActivity() {
             override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) { populate(s?.toString().orEmpty()) }
             override fun afterTextChanged(s: android.text.Editable?) {}
         })
+        if (activeCode.isNotBlank()) {
+            TeamRepository.getSongs(activeCode, false, preferences) { _ ->
+                runOnUiThread { populate(search.text?.toString().orEmpty()) }
+            }
+        }
     }
     private fun songDetailsView(): View = memberPage("Song Details", songDetailsBack) { col ->
+        val activeCode = preferences.getString("teamCode", "").orEmpty()
+        val currentSong = TeamRepository.getCachedSongs(activeCode, preferences).find { it.title.equals(selectedSong, ignoreCase = true) }
         val savedSong = try { org.json.JSONObject(preferences.getString("songData_$selectedSong", "{}").orEmpty()) }
             catch (_: Exception) { org.json.JSONObject() }
-        val originalKey = savedSong.optString("key", "C")
+        val originalKey = currentSong?.key?.ifBlank { savedSong.optString("key", "C") } ?: savedSong.optString("key", "C")
         val basePitch = ChordSheet.keyPitch(originalKey).coerceAtLeast(0)
         val roots = listOf("C", "Db", "D", "Eb", "E", "F", "F#", "G", "Ab", "A", "Bb", "B")
         val minor = originalKey.endsWith("m") || originalKey.endsWith(" minor")
         val showChords = true
-        val sheet = savedSong.optString("sheet", savedSong.optString("lyrics")).ifBlank {
+        val sheet = (currentSong?.sheet?.ifBlank { currentSong.lyrics } ?: savedSong.optString("sheet", savedSong.optString("lyrics"))).ifBlank {
             "[Verse]\n[C]Add your licensed lyrics here.\n\n[Chorus]\n[Am]Add chorus lyrics here [F][G]"
         }
-        val tempo = savedSong.optString("bpm", "74")
+        val tempo = currentSong?.bpm?.toString() ?: savedSong.optString("bpm", "74")
         var offset = ((preferences.getInt("chord_transpose_$selectedSong", 0) % 12) + 12) % 12
         val key = text("", 13, purple, true)
         val sheetText = text("", 13, navy).apply {
@@ -2900,7 +2941,9 @@ class AdminActivity : AppCompatActivity() {
         }
         col.add(panel().apply {
             add(text(selectedSong, 18, navy, true)); space(6)
-            add(text("By " + savedSong.optString("artist", if (selectedSong == "Way Maker") "Sinach" else if (selectedSong == "Gratitude") "Brandon Lake" else "Elevation Worship"), 13, Color.GRAY))
+            val defaultArtist = if (selectedSong == "Way Maker") "Sinach" else if (selectedSong == "Gratitude") "Brandon Lake" else "Elevation Worship"
+            val artistDisplay = currentSong?.artist?.ifBlank { savedSong.optString("artist", defaultArtist) } ?: savedSong.optString("artist", defaultArtist)
+            add(text("By $artistDisplay", 13, Color.GRAY))
             space(16)
             add(key); space(16)
             if(showChords) {
@@ -2943,7 +2986,7 @@ class AdminActivity : AppCompatActivity() {
         renderTarget((basePitch + offset) % 12)
         col.add(text("Reference Link", 13, navy, true)); col.space(10)
         col.add(memberButton("Find song on YouTube", navy) {
-            val reference = savedSong.optString("link")
+            val reference = currentSong?.referenceUrl ?: savedSong.optString("link")
             val url = if (reference.startsWith("https://") || reference.startsWith("http://")) reference
                 else "https://www.youtube.com/results?search_query=" + Uri.encode("$selectedSong worship")
             try { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }
