@@ -2145,6 +2145,8 @@ open class MemberActivity : AppCompatActivity() {
     }
 
     private fun leaderPosts(col: LinearLayout) {
+        val postsCol = vertical()
+        col.addView(postsCol)
         val activeCode = preferences.getString("teamCode", "").orEmpty()
         // Migrate legacy local demo posts if needed
         val legacyJson = preferences.getString("leaderPosts", null)
@@ -2174,16 +2176,16 @@ open class MemberActivity : AppCompatActivity() {
         }
 
         fun populateList() {
-            col.removeAllViews()
+            postsCol.removeAllViews()
             val list = TeamRepository.getCachedAnnouncements(activeCode, preferences)
             if (list.isEmpty()) {
-                col.add(panel().apply {
+                postsCol.add(panel().apply {
                     add(text("No announcements yet.", 13, Color.GRAY, centered = true))
-                }); col.space(16)
+                }); postsCol.space(16)
                 return
             }
             for (post in list) {
-                col.add(panel().apply {
+                postsCol.add(panel().apply {
                     if (post.urgent) {
                         val badgeRow = horizontal().apply { gravity = Gravity.CENTER_VERTICAL }
                         badgeRow.add(text("🚨 URGENT ALERT", 11, Color.rgb(220, 53, 69), bold = true).apply {
@@ -2198,7 +2200,7 @@ open class MemberActivity : AppCompatActivity() {
                     val authorLabel = if (post.author.isNotBlank()) post.author else "Leader"
                     val dateLabel = formatAnnouncementDate(post.createdAt)
                     space(8); add(text("By $authorLabel • $dateLabel", 11, Color.GRAY))
-                }); col.space(16)
+                }); postsCol.space(16)
             }
         }
 
