@@ -1455,6 +1455,42 @@ class ExampleUnitTest {
         assertTrue("Rendered must put chords above lyrics", rendered.contains("Dm") && rendered.contains("Burn the ships"))
     }
 
+    @Test
+    fun testAnnouncementDataSerializationAndDeserialization() {
+        val announcement = com.example.syncedn.data.model.AnnouncementData(
+            id = "ann_123456",
+            teamCode = "NGK8VN",
+            title = "Rehearsal Rescheduled",
+            message = "Please be informed that Saturday rehearsal is moved to 4 PM.",
+            urgent = true,
+            author = "RYAN LLOYD",
+            createdBy = "h9yRCswmV1f0Pnia2EnxDv4x4X43",
+            createdAt = 1792330000000L,
+            updatedAt = 1792330000000L
+        )
+        val map = announcement.toMap()
+        assertEquals("ann_123456", map["id"])
+        assertEquals("NGK8VN", map["teamCode"])
+        assertEquals("Rehearsal Rescheduled", map["title"])
+        assertEquals("Please be informed that Saturday rehearsal is moved to 4 PM.", map["message"])
+        assertEquals(true, map["urgent"])
+        assertEquals("RYAN LLOYD", map["author"])
+        assertEquals("h9yRCswmV1f0Pnia2EnxDv4x4X43", map["createdBy"])
+        assertEquals(1792330000000L, map["createdAt"])
+        assertEquals(1792330000000L, map["updatedAt"])
+
+        val restored = com.example.syncedn.data.model.AnnouncementData.fromMap(map)
+        assertEquals(announcement.id, restored.id)
+        assertEquals(announcement.teamCode, restored.teamCode)
+        assertEquals(announcement.title, restored.title)
+        assertEquals(announcement.message, restored.message)
+        assertEquals(announcement.urgent, restored.urgent)
+        assertEquals(announcement.author, restored.author)
+        assertEquals(announcement.createdBy, restored.createdBy)
+        assertEquals(announcement.createdAt, restored.createdAt)
+        assertEquals(announcement.updatedAt, restored.updatedAt)
+    }
+
 
     private class FakePreferences : android.content.SharedPreferences {
         private val map = mutableMapOf<String, Any?>()
