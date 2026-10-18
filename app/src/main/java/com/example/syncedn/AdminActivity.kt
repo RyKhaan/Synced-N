@@ -10,6 +10,7 @@ import com.example.syncedn.data.database.TeamRepository
 import com.example.syncedn.data.model.TeamMember
 import com.example.syncedn.data.model.UnavailableRange
 import com.example.syncedn.data.model.SongData
+import com.example.syncedn.data.model.AnnouncementData
 import com.example.syncedn.data.util.ValidationUtils
 import android.text.InputFilter
 import androidx.activity.result.contract.ActivityResultContracts
@@ -307,7 +308,10 @@ class AdminActivity : AppCompatActivity() {
                     "scheduleRehearsal" -> if (serviceWizard) "adminLineup" else "service"
                     "reviewService" -> "scheduleRehearsal"
                     "songEdit" -> if (selectedSong.isBlank()) "songs" else "songDetails"
-                    "announcementEdit" -> "announcements"
+                    "announcementEdit" -> {
+                        editingAnnouncement = null
+                        "announcements"
+                    }
                     else -> null
                 }
                 if (previous != null) navigate(previous)
@@ -1118,9 +1122,45 @@ class AdminActivity : AppCompatActivity() {
         navigate("service")
     }
     private fun announcementHomeTile(): View = memberTile(UI.announcementsButton, "announcement", "Announcements", 11).apply {
-        val count = try { org.json.JSONArray(preferences.getString("leaderPosts", "[]")).length() } catch (_: Exception) { 0 }
-        if (count > 0) { space(3); add(text("$count local post${if(count == 1) "" else "s"}", 10, purple, centered = true)) }
+        val activeCode = preferences.getString("teamCode", "").orEmpty()
+        val announcements = TeamRepository.getCachedAnnouncements(activeCode, preferences)
+        val count = announcements.size
+        if (count > 0) {
+            space(3)
+            val hasUrgent = announcements.any { it.urgent }
+            val label = if (hasUrgent) "🚨 $count post${if (count == 1) "" else "s"}" else "$count post${if (count == 1) "" else "s"}"
+            add(text(label, 10, if (hasUrgent) Color.rgb(220, 53, 69) else purple, centered = true))
+        }
         setOnClickListener { navigate("announcements") }
+    }
+
+    private fun urgentAlertBanner(): View? {
+        val activeCode = preferences.getString("teamCode", "").orEmpty()
+        val urgentItem = TeamRepository.getCachedAnnouncements(activeCode, preferences).firstOrNull { it.urgent } ?: return null
+        return vertical().apply {
+            background = bg(Color.rgb(255, 240, 240), 16, Color.rgb(220, 53, 69))
+            setPadding(dp(16), dp(14), dp(16), dp(14))
+            elevation = dp(2).toFloat()
+            isClickable = true
+            isFocusable = true
+            contentDescription = "Urgent announcement: ${urgentItem.title}. Tap to view."
+            setOnClickListener { navigate("announcements") }
+
+            val row = horizontal().apply { gravity = Gravity.CENTER_VERTICAL }
+            row.add(text("🚨 URGENT ALERT", 11, Color.rgb(220, 53, 69), bold = true).apply {
+                background = bg(Color.rgb(255, 220, 224), 8)
+                setPadding(dp(6), dp(2), dp(6), dp(2))
+            })
+            row.add(View(this@AdminActivity), 8, 1)
+            val dateStr = formatAnnouncementDate(urgentItem.createdAt)
+            row.add(text(dateStr, 11, Color.rgb(180, 40, 50)), 0, -2, 1f)
+            add(row)
+            space(6)
+            add(text(urgentItem.title, 14, navy, bold = true))
+            space(4)
+            val snippet = if (urgentItem.message.length > 90) urgentItem.message.take(87) + "..." else urgentItem.message
+            add(text(snippet, 12, Color.rgb(66, 82, 114)))
+        }
     }
     private fun homeView(): View {
         val root=vertical().apply { setBackgroundColor(Color.WHITE) }
@@ -1230,6 +1270,13 @@ class AdminActivity : AppCompatActivity() {
                     add(View(this@AdminActivity),24,1)
                     add(announcementHomeTile(),0,92,0.37f)
                 }); space(18)
+            }
+            val activeCode = preferences.getString("teamCode", "").orEmpty()
+            if (activeCode.isNotBlank()) {
+                TeamRepository.getAnnouncements(activeCode, false, preferences)
+            }
+            urgentAlertBanner()?.let { alertCard ->
+                add(alertCard); space(18)
             }
             add(text("Upcoming",17,navy,true));space(12)
             val upcoming=horizontal().apply { gravity=Gravity.TOP }
@@ -2674,36 +2721,185 @@ class AdminActivity : AppCompatActivity() {
             }, -1, 48)
         }
     }
-    private fun announcementEditView(): View = memberPage("Announcement", "announcements") { col ->
-        val title = plainInput("Announcement title", true)
-        val message = plainInput("Message", true)
+    private fun formatAnnouncementDate(timestamp: Long): String {
+        return try {
+            val date = java.util.Date(timestamp)
+            java.text.SimpleDateFormat("MMM d, yyyy", java.util.Locale.US).format(date)
+        } catch (_: Exception) {
+            "Recent"
+        }
+    }
+
+    private fun announcementEditView(): View = memberPage(if (editingAnnouncement != null) "Edit Announcement" else "Announcement", "announcements") { col ->
+        val title = plainInput("Announcement title", true).apply {
+            editingAnnouncement?.let { setText(it.title) }
+        }
+        val message = plainInput("Message", true).apply {
+            editingAnnouncement?.let { setText(it.message) }
+        }
         col.add(text("Announcement Title*", 12, navy)); col.space(8); col.add(title, -1, 72); col.space(20)
         col.add(text("Message*", 12, navy)); col.space(8); col.add(message, -1, 220); col.space(24)
-        val urgent = android.widget.CheckBox(this).apply { text = "Mark as Urgent Alert"; textSize = 13f; setTextColor(navy) }
+        val urgent = android.widget.CheckBox(this).apply {
+            text = "Mark as Urgent Alert"
+            textSize = 13f
+            setTextColor(navy)
+            isChecked = editingAnnouncement?.urgent ?: false
+        }
         col.add(urgent)
-        stepActions(col, { navigate("announcements") }, "Publish") {
+        val actionLabel = if (editingAnnouncement != null) "Save Changes" else "Publish"
+        stepActions(col, { editingAnnouncement = null; navigate("announcements") }, actionLabel) {
             when {
                 title.text.isBlank() -> invalid(title, "Enter a title.")
                 message.text.isBlank() -> invalid(message, "Enter a message.")
                 else -> {
-                    val posts = org.json.JSONArray(preferences.getString("leaderPosts", "[]"))
-                    posts.put(org.json.JSONObject().put("title", title.text.toString().trim())
-                        .put("message", message.text.toString().trim()).put("urgent", urgent.isChecked).put("author", fullName))
-                    preferences.edit().putString("leaderPosts", posts.toString()).apply()
-                    toast("Announcement published in the local demo"); navigate("announcements")
+                    val activeCode = preferences.getString("teamCode", "").orEmpty()
+                    val uid = preferences.getString("userId", "").orEmpty()
+                    val authorName = fullName.ifBlank { displayName.ifBlank { "Leader" } }
+                    val existing = editingAnnouncement
+                    val announcementId = existing?.id ?: "ann_${System.currentTimeMillis()}_${java.util.UUID.randomUUID().toString().take(6)}"
+                    val newAnnouncement = AnnouncementData(
+                        id = announcementId,
+                        teamCode = activeCode,
+                        title = title.text.toString().trim(),
+                        message = message.text.toString().trim(),
+                        urgent = urgent.isChecked,
+                        author = authorName,
+                        createdBy = existing?.createdBy?.ifBlank { uid } ?: uid,
+                        createdAt = existing?.createdAt ?: System.currentTimeMillis(),
+                        updatedAt = System.currentTimeMillis()
+                    )
+                    TeamRepository.saveAnnouncement(activeCode, newAnnouncement, preferences) { result ->
+                        runOnUiThread {
+                            if (result.isSuccess) {
+                                toast(if (existing != null) "Announcement updated" else "Announcement published")
+                            } else {
+                                toast("Saved locally (sync pending)")
+                            }
+                        }
+                    }
+                    editingAnnouncement = null
+                    toast(if (existing != null) "Announcement updated" else "Announcement published")
+                    navigate("announcements")
                 }
             }
         }
     }
+
     private fun leaderPosts(col: LinearLayout) {
-        val posts = org.json.JSONArray(preferences.getString("leaderPosts", "[]"))
-        for (index in posts.length() - 1 downTo 0) {
-            val post = posts.getJSONObject(index)
-            col.add(panel().apply {
-                add(text(post.optString("title") + if (post.optBoolean("urgent")) " • Urgent" else "", 14, purple, true))
-                space(8); add(text(post.optString("message"), 13, navy))
-                space(8); add(text("By " + post.optString("author"), 11, Color.GRAY))
-            }); col.space(16)
+        val activeCode = preferences.getString("teamCode", "").orEmpty()
+        // Migrate legacy local demo posts if needed
+        val legacyJson = preferences.getString("leaderPosts", null)
+        val cached = TeamRepository.getCachedAnnouncements(activeCode, preferences)
+        if (!legacyJson.isNullOrBlank() && cached.isEmpty()) {
+            try {
+                val posts = org.json.JSONArray(legacyJson)
+                val migrated = mutableListOf<AnnouncementData>()
+                for (i in 0 until posts.length()) {
+                    val p = posts.getJSONObject(i)
+                    migrated.add(AnnouncementData(
+                        id = "legacy_ann_$i",
+                        teamCode = activeCode,
+                        title = p.optString("title", "Announcement"),
+                        message = p.optString("message", ""),
+                        urgent = p.optBoolean("urgent", false),
+                        author = p.optString("author", fullName.ifBlank { displayName.ifBlank { "Leader" } }),
+                        createdBy = preferences.getString("userId", "").orEmpty(),
+                        createdAt = System.currentTimeMillis() - (posts.length() - i) * 60_000L
+                    ))
+                }
+                if (migrated.isNotEmpty()) {
+                    TeamRepository.saveAnnouncementsLocally(activeCode, migrated, preferences)
+                    preferences.edit().remove("leaderPosts").apply()
+                }
+            } catch (_: Throwable) {}
+        }
+
+        fun populateList() {
+            col.removeAllViews()
+            val list = TeamRepository.getCachedAnnouncements(activeCode, preferences)
+            if (list.isEmpty()) {
+                col.add(panel().apply {
+                    add(text("No announcements yet.", 13, Color.GRAY, centered = true))
+                }); col.space(16)
+                return
+            }
+            for (post in list) {
+                col.add(panel().apply {
+                    if (post.urgent) {
+                        val badgeRow = horizontal().apply { gravity = Gravity.CENTER_VERTICAL }
+                        badgeRow.add(text("🚨 URGENT ALERT", 11, Color.rgb(220, 53, 69), bold = true).apply {
+                            background = bg(Color.rgb(255, 235, 238), 12, Color.rgb(220, 53, 69))
+                            setPadding(dp(8), dp(4), dp(8), dp(4))
+                        })
+                        add(badgeRow)
+                        space(6)
+                    }
+                    val headerRow = horizontal().apply { gravity = Gravity.CENTER_VERTICAL }
+                    headerRow.add(text(post.title, 14, if (post.urgent) Color.rgb(220, 53, 69) else purple, bold = true), 0, -2, 1f)
+                    if (isLeader) {
+                        val moreBtn = TextView(this@AdminActivity).apply {
+                            text = "⋮"
+                            textSize = 20f
+                            setTextColor(navy)
+                            gravity = Gravity.CENTER
+                            setPadding(dp(8), dp(4), dp(8), dp(4))
+                            isClickable = true
+                            isFocusable = true
+                            contentDescription = "Options for ${post.title}"
+                            setOnClickListener {
+                                val options = arrayOf("Edit", "Delete")
+                                AlertDialog.Builder(this@AdminActivity)
+                                    .setItems(options) { _, which ->
+                                        when (which) {
+                                            0 -> {
+                                                editingAnnouncement = post
+                                                navigate("announcementEdit")
+                                            }
+                                            1 -> {
+                                                AlertDialog.Builder(this@AdminActivity)
+                                                    .setTitle("Delete Announcement?")
+                                                    .setMessage("Are you sure you want to delete this announcement?")
+                                                    .setNegativeButton("Cancel", null)
+                                                    .setPositiveButton("Delete") { _, _ ->
+                                                        TeamRepository.deleteAnnouncement(activeCode, post.id, preferences) { result ->
+                                                            runOnUiThread {
+                                                                if (result.isSuccess) {
+                                                                    toast("Announcement deleted")
+                                                                } else {
+                                                                    toast("Deleted locally (sync pending)")
+                                                                }
+                                                            }
+                                                        }
+                                                        populateList()
+                                                    }
+                                                    .show()
+                                            }
+                                        }
+                                    }
+                                    .show()
+                            }
+                        }
+                        headerRow.add(moreBtn, -2, -2)
+                    }
+                    add(headerRow)
+                    space(8); add(text(post.message, 13, navy))
+                    val authorLabel = if (post.author.isNotBlank()) post.author else "Leader"
+                    val dateLabel = formatAnnouncementDate(post.createdAt)
+                    space(8); add(text("By $authorLabel • $dateLabel", 11, Color.GRAY))
+                }); col.space(16)
+            }
+        }
+
+        populateList()
+
+        if (activeCode.isNotBlank()) {
+            TeamRepository.getAnnouncements(activeCode, false, preferences) { result ->
+                runOnUiThread {
+                    if (result.isSuccess && page == "announcements") {
+                        populateList()
+                    }
+                }
+            }
         }
     }
     private fun removeTeamMember() {
@@ -2865,6 +3061,7 @@ class AdminActivity : AppCompatActivity() {
     private var teamTab = "Team Chat"
     private var expandedRole: String? = null
     private var selectedSong = "Trust in God"
+    private var editingAnnouncement: AnnouncementData? = null
     private var songDetailsBack = "songs"
     private var selectedService = "Sunday Worship Service"
     private var serviceReturnPage = "schedule"
@@ -3216,7 +3413,10 @@ class AdminActivity : AppCompatActivity() {
     }
     private fun announcementsView(): View = memberPage("Announcement", "home") { col ->
         if (isLeader) {
-            col.add(memberButton("+ Post Announcement") { navigate("announcementEdit") }, -1, 48); col.space(20)
+            col.add(memberButton("+ Post Announcement") {
+                editingAnnouncement = null
+                navigate("announcementEdit")
+            }, -1, 48); col.space(20)
         }
         leaderPosts(col)
         col.add(text("Substitution Request", 13, purple, true)); col.space(12)
