@@ -1539,6 +1539,25 @@ class ExampleUnitTest {
         assertEquals("ann_2", afterDelete[0].id)
     }
 
+    @Test
+    fun testAnnouncementDataMissingFieldsAndTimestampCoercion() {
+        val date = java.util.Date(1792330000000L)
+        val sparseMap = mapOf<String, Any?>(
+            "id" to "ann_sparse",
+            "title" to "Sparse Title",
+            "createdAt" to com.google.firebase.Timestamp(date)
+        )
+        val data = com.example.syncedn.data.model.AnnouncementData.fromMap(sparseMap)
+        assertEquals("ann_sparse", data.id)
+        assertEquals("Sparse Title", data.title)
+        assertEquals("", data.teamCode)
+        assertEquals("", data.message)
+        assertEquals(false, data.urgent)
+        assertEquals("", data.author)
+        assertEquals("", data.createdBy)
+        assertEquals(1792330000000L, data.createdAt)
+        assertTrue(data.updatedAt > 0L)
+    }
 
     private class FakePreferences : android.content.SharedPreferences {
         private val map = mutableMapOf<String, Any?>()

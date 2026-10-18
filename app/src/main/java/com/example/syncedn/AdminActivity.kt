@@ -2733,9 +2733,11 @@ class AdminActivity : AppCompatActivity() {
     private fun announcementEditView(): View = memberPage(if (editingAnnouncement != null) "Edit Announcement" else "Announcement", "announcements") { col ->
         val title = plainInput("Announcement title", true).apply {
             editingAnnouncement?.let { setText(it.title) }
+            filters = arrayOf(android.text.InputFilter.LengthFilter(120))
         }
         val message = plainInput("Message", true).apply {
             editingAnnouncement?.let { setText(it.message) }
+            filters = arrayOf(android.text.InputFilter.LengthFilter(2000))
         }
         col.add(text("Announcement Title*", 12, navy)); col.space(8); col.add(title, -1, 72); col.space(20)
         col.add(text("Message*", 12, navy)); col.space(8); col.add(message, -1, 220); col.space(24)
@@ -2750,7 +2752,9 @@ class AdminActivity : AppCompatActivity() {
         stepActions(col, { editingAnnouncement = null; navigate("announcements") }, actionLabel) {
             when {
                 title.text.isBlank() -> invalid(title, "Enter a title.")
+                title.text.length > 120 -> invalid(title, "Title cannot exceed 120 characters.")
                 message.text.isBlank() -> invalid(message, "Enter a message.")
+                message.text.length > 2000 -> invalid(message, "Message cannot exceed 2,000 characters.")
                 else -> {
                     val activeCode = preferences.getString("teamCode", "").orEmpty()
                     val uid = preferences.getString("userId", "").orEmpty()
@@ -2770,9 +2774,7 @@ class AdminActivity : AppCompatActivity() {
                     )
                     TeamRepository.saveAnnouncement(activeCode, newAnnouncement, preferences) { result ->
                         runOnUiThread {
-                            if (result.isSuccess) {
-                                toast(if (existing != null) "Announcement updated" else "Announcement published")
-                            } else {
+                            if (!result.isSuccess) {
                                 toast("Saved locally (sync pending)")
                             }
                         }

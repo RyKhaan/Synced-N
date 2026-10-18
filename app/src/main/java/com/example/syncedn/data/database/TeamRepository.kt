@@ -1609,6 +1609,7 @@ object TeamRepository {
             db.collection(TEAMS_COLLECTION)
                 .document(code)
                 .collection(ANNOUNCEMENTS_SUBCOLLECTION)
+                .limit(50)
                 .get()
                 .addOnSuccessListener { snapshot ->
                     lastAnnouncementsFetchTimes[code] = System.currentTimeMillis()
