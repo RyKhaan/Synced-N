@@ -944,6 +944,57 @@ class ExampleUnitTest {
         assertEquals(2, callCount)
     }
 
+    @Test
+    fun testServiceDataSerializationAndDeserialization() {
+        val assignment = com.example.syncedn.data.model.ServiceAssignment(
+            uid = "user_123",
+            email = "member@example.com",
+            name = "John Doe",
+            role = "Guitarist"
+        )
+        val rehearsal = com.example.syncedn.data.model.RehearsalData(
+            date = "2026-10-24",
+            start = "18:00",
+            end = "19:30",
+            venue = "Fellowship Hall",
+            notes = "Review tempo for Song 2"
+        )
+        val song = com.example.syncedn.data.model.ServiceSong(
+            title = "Way Maker",
+            artist = "Sinach",
+            key = "E",
+            bpm = 68
+        )
+        val service = com.example.syncedn.data.model.ServiceData(
+            id = "service_001",
+            teamCode = "TEST01",
+            title = "Sunday Celebration",
+            date = "2026-10-25",
+            start = "09:00",
+            end = "10:30",
+            venue = "Main Sanctuary",
+            status = "Published",
+            assignments = listOf(assignment),
+            rehearsal = rehearsal,
+            songs = listOf(song),
+            createdBy = "leader_uid_999"
+        )
+
+        val map = service.toMap()
+        assertEquals("service_001", map["id"])
+        assertEquals("TEST01", map["teamCode"])
+        assertEquals("Published", map["status"])
+
+        val restored = com.example.syncedn.data.model.ServiceData.fromMap(map)
+        assertEquals(service.id, restored.id)
+        assertEquals(service.title, restored.title)
+        assertEquals(1, restored.assignments.size)
+        assertEquals("Guitarist", restored.assignments[0].role)
+        assertEquals("Fellowship Hall", restored.rehearsal.venue)
+        assertEquals(1, restored.songs.size)
+        assertEquals(68, restored.songs[0].bpm)
+    }
+
     private class FakePreferences : android.content.SharedPreferences {
         private val map = mutableMapOf<String, Any?>()
 
