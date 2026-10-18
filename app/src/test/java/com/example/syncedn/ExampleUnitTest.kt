@@ -1559,6 +1559,72 @@ class ExampleUnitTest {
         assertTrue(data.updatedAt > 0L)
     }
 
+    @Test
+    fun testSubstitutionDataSerializationAndDeserialization() {
+        val original = com.example.syncedn.data.model.SubstitutionData(
+            id = "sub_101",
+            teamCode = "74XWB7",
+            serviceId = "srv_202",
+            serviceTitle = "Sunday Worship Service",
+            serviceDate = "2026-10-25",
+            requesterUid = "req_user_1",
+            requesterName = "Angelo Daniel",
+            role = "Keyboardist",
+            substituteUid = "sub_user_2",
+            substituteName = "Ryan Lloyd Genturo",
+            reason = "School examination out of town",
+            status = "Pending",
+            createdBy = "req_user_1",
+            createdAt = 1792400000000L,
+            updatedAt = 1792400000000L
+        )
+
+        val map = original.toMap()
+        assertEquals("sub_101", map["id"])
+        assertEquals("74XWB7", map["teamCode"])
+        assertEquals("srv_202", map["serviceId"])
+        assertEquals("Sunday Worship Service", map["serviceTitle"])
+        assertEquals("2026-10-25", map["serviceDate"])
+        assertEquals("req_user_1", map["requesterUid"])
+        assertEquals("Angelo Daniel", map["requesterName"])
+        assertEquals("Keyboardist", map["role"])
+        assertEquals("sub_user_2", map["substituteUid"])
+        assertEquals("Ryan Lloyd Genturo", map["substituteName"])
+        assertEquals("School examination out of town", map["reason"])
+        assertEquals("Pending", map["status"])
+        assertEquals("req_user_1", map["createdBy"])
+        assertEquals(1792400000000L, map["createdAt"])
+        assertEquals(1792400000000L, map["updatedAt"])
+
+        val deserialized = com.example.syncedn.data.model.SubstitutionData.fromMap(map)
+        assertEquals(original.id, deserialized.id)
+        assertEquals(original.teamCode, deserialized.teamCode)
+        assertEquals(original.serviceId, deserialized.serviceId)
+        assertEquals(original.serviceTitle, deserialized.serviceTitle)
+        assertEquals(original.serviceDate, deserialized.serviceDate)
+        assertEquals(original.requesterUid, deserialized.requesterUid)
+        assertEquals(original.requesterName, deserialized.requesterName)
+        assertEquals(original.role, deserialized.role)
+        assertEquals(original.substituteUid, deserialized.substituteUid)
+        assertEquals(original.substituteName, deserialized.substituteName)
+        assertEquals(original.reason, deserialized.reason)
+        assertEquals(original.status, deserialized.status)
+        assertEquals(original.createdBy, deserialized.createdBy)
+        assertEquals(original.createdAt, deserialized.createdAt)
+        assertEquals(original.updatedAt, deserialized.updatedAt)
+
+        // Test sparse map handling
+        val sparse = com.example.syncedn.data.model.SubstitutionData.fromMap(mapOf(
+            "id" to "sub_sparse",
+            "serviceTitle" to "Midweek Service"
+        ))
+        assertEquals("sub_sparse", sparse.id)
+        assertEquals("Midweek Service", sparse.serviceTitle)
+        assertEquals("Pending", sparse.status)
+        assertEquals("", sparse.reason)
+        assertTrue(sparse.createdAt > 0L)
+    }
+
     private class FakePreferences : android.content.SharedPreferences {
         private val map = mutableMapOf<String, Any?>()
 
