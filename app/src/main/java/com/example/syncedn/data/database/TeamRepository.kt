@@ -3,6 +3,7 @@ package com.example.syncedn.data.database
 import com.example.syncedn.data.model.AnnouncementData
 import com.example.syncedn.data.model.ServiceData
 import com.example.syncedn.data.model.SongData
+import com.example.syncedn.data.model.SubstitutionData
 import com.example.syncedn.data.model.TeamData
 import com.example.syncedn.data.model.TeamMember
 import com.example.syncedn.data.model.UnavailableRange
@@ -21,6 +22,7 @@ object TeamRepository {
     private const val SERVICES_SUBCOLLECTION = "services"
     private const val SONGS_SUBCOLLECTION = "songs"
     private const val ANNOUNCEMENTS_SUBCOLLECTION = "announcements"
+    private const val SUBSTITUTIONS_SUBCOLLECTION = "substitutions"
 
     // In-memory cache for fast UI updates, offline fallback, and unit tests
     private val cachedRosters = java.util.concurrent.ConcurrentHashMap<String, MutableList<TeamMember>>()
@@ -41,8 +43,12 @@ object TeamRepository {
     private val lastAnnouncementsFetchTimes = java.util.concurrent.ConcurrentHashMap<String, Long>()
     private val announcementsInFlight = java.util.concurrent.ConcurrentHashMap<String, Boolean>()
 
+    private val cachedSubstitutions = java.util.concurrent.ConcurrentHashMap<String, MutableList<SubstitutionData>>()
+    private val lastSubstitutionsFetchTimes = java.util.concurrent.ConcurrentHashMap<String, Long>()
+    private val substitutionsInFlight = java.util.concurrent.ConcurrentHashMap<String, Boolean>()
+
     /**
-     * Clears all in-memory roster, role, service, song, and announcement caches (primarily for unit tests).
+     * Clears all in-memory roster, role, service, song, announcement, and substitution caches (primarily for unit tests).
      */
     @Synchronized
     fun clearCache() {
@@ -60,6 +66,9 @@ object TeamRepository {
         cachedAnnouncements.clear()
         lastAnnouncementsFetchTimes.clear()
         announcementsInFlight.clear()
+        cachedSubstitutions.clear()
+        lastSubstitutionsFetchTimes.clear()
+        substitutionsInFlight.clear()
     }
 
     /**
@@ -1703,5 +1712,403 @@ object TeamRepository {
             onComplete?.invoke(Result.failure(e))
         }
     }
+
+    /**
+     * Saves a list of substitutions into local in-memory cache and SharedPreferences.
+     */
+    fun saveSubstitutionsLocally(
+        teamCode: String,
+        substitutions: List<SubstitutionData>,
+        preferences: android.content.SharedPreferences? = null
+    ) {
+        val code = teamCode.trim().uppercase()
+        if (code.isBlank()) return
+
+        val sorted = substitutions.sortedByDescending { it.createdAt }
+        cachedSubstitutions[code] = java.util.Collections.synchronizedList(sorted.toMutableList())
+
+        preferences?.let { prefs ->
+            try {
+                val array = org.json.JSONArray()
+                sorted.forEach { item ->
+                    val obj = org.json.JSONObject()
+                    item.toMap().forEach { (k, v) -> obj.put(k, v) }
+                    array.put(obj)
+                }
+                prefs.edit().putString("cached_substitutions_$code", array.toString()).apply()
+            } catch (_: Throwable) {}
+        }
+    }
+
+    /**
+     * Saves or updates a single substitution in the local cache.
+     */
+    fun saveSubstitutionLocally(
+        teamCode: String,
+        substitution: SubstitutionData,
+        preferences: android.content.SharedPreferences? = null
+    ) {
+        val code = teamCode.trim().uppercase()
+        if (code.isBlank() || substitution.id.isBlank()) return
+
+        val current = getCachedSubstitutions(code, preferences).filter { it.id != substitution.id }.toMutableList()
+        current.add(substitution)
+        saveSubstitutionsLocally(code, current, preferences)
+    }
+
+    /**
+     * Updates the status of a cached substitution locally.
+     */
+    fun updateSubstitutionStatusLocally(
+        teamCode: String,
+        substitutionId: String,
+        status: String,
+        preferences: android.content.SharedPreferences? = null
+    ) {
+        val code = teamCode.trim().uppercase()
+        if (code.isBlank() || substitutionId.isBlank()) return
+
+        val current = getCachedSubstitutions(code, preferences).toMutableList()
+        val index = current.indexOfFirst { it.id == substitutionId }
+        if (index >= 0) {
+            current[index] = current[index].copy(status = status, updatedAt = System.currentTimeMillis())
+            saveSubstitutionsLocally(code, current, preferences)
+        }
+    }
+
+    /**
+     * Removes a substitution from the local cache and SharedPreferences.
+     */
+    fun removeSubstitutionLocally(
+        teamCode: String,
+        substitutionId: String,
+        preferences: android.content.SharedPreferences? = null
+    ) {
+        val code = teamCode.trim().uppercase()
+        if (code.isBlank() || substitutionId.isBlank()) return
+
+        val current = getCachedSubstitutions(code, preferences).filter { it.id != substitutionId }
+        saveSubstitutionsLocally(code, current, preferences)
+    }
+
+    /**
+     * Retrieves cached substitutions for the specified team.
+     */
+    fun getCachedSubstitutions(
+        teamCode: String,
+        preferences: android.content.SharedPreferences? = null
+    ): List<SubstitutionData> {
+        val code = teamCode.trim().uppercase()
+        if (code.isBlank()) return emptyList()
+
+        cachedSubstitutions[code]?.let { inMem ->
+            if (inMem.isNotEmpty()) return inMem.toList().sortedByDescending { it.createdAt }
+        }
+
+        preferences?.let { prefs ->
+            val json = prefs.getString("cached_substitutions_$code", null)
+            if (!json.isNullOrBlank()) {
+                try {
+                    val array = org.json.JSONArray(json)
+                    val list = mutableListOf<SubstitutionData>()
+                    for (i in 0 until array.length()) {
+                        val obj = array.getJSONObject(i)
+                        val map = mutableMapOf<String, Any?>()
+                        val keys = obj.keys()
+                        while (keys.hasNext()) {
+                            val key = keys.next()
+                            map[key] = obj.opt(key)
+                        }
+                        list.add(SubstitutionData.fromMap(map))
+                    }
+                    val sorted = list.sortedByDescending { it.createdAt }
+                    cachedSubstitutions[code] = java.util.Collections.synchronizedList(sorted.toMutableList())
+                    return sorted
+                } catch (_: Throwable) {}
+            }
+        }
+
+        return emptyList()
+    }
+
+    /**
+     * Fetches substitutions from Cloud Firestore with 15-second debounce and offline cache fallback.
+     */
+    fun getSubstitutions(
+        teamCode: String,
+        forceRefresh: Boolean = false,
+        preferences: android.content.SharedPreferences? = null,
+        onComplete: ((Result<List<SubstitutionData>>) -> Unit)? = null
+    ) {
+        val code = teamCode.trim().uppercase()
+        if (code.isBlank()) {
+            onComplete?.invoke(Result.success(emptyList()))
+            return
+        }
+
+        val cached = getCachedSubstitutions(code, preferences)
+        val now = System.currentTimeMillis()
+        val lastFetch = lastSubstitutionsFetchTimes[code] ?: 0L
+
+        if (!forceRefresh && (now - lastFetch < 15_000L) && cached.isNotEmpty()) {
+            onComplete?.invoke(Result.success(cached))
+            return
+        }
+
+        if (substitutionsInFlight[code] == true) {
+            onComplete?.invoke(Result.success(cached))
+            return
+        }
+
+        substitutionsInFlight[code] = true
+
+        try {
+            db.collection(TEAMS_COLLECTION)
+                .document(code)
+                .collection(SUBSTITUTIONS_SUBCOLLECTION)
+                .orderBy("createdAt", com.google.firebase.firestore.Query.Direction.DESCENDING)
+                .limit(50)
+                .get()
+                .addOnSuccessListener { snapshot ->
+                    substitutionsInFlight[code] = false
+                    lastSubstitutionsFetchTimes[code] = System.currentTimeMillis()
+                    val list = snapshot.documents.mapNotNull { doc ->
+                        doc.data?.let { data ->
+                            val mutable = data.toMutableMap()
+                            if (!mutable.containsKey("id") || (mutable["id"] as? String).isNullOrBlank()) {
+                                mutable["id"] = doc.id
+                            }
+                            SubstitutionData.fromMap(mutable)
+                        }
+                    }.sortedByDescending { it.createdAt }
+
+                    saveSubstitutionsLocally(code, list, preferences)
+                    onComplete?.invoke(Result.success(list))
+                }
+                .addOnFailureListener { err ->
+                    substitutionsInFlight[code] = false
+                    android.util.Log.e("TeamRepository", "Firestore getSubstitutions failed: ${err.message}", err)
+                    onComplete?.invoke(Result.success(cached))
+                }
+        } catch (e: Throwable) {
+            substitutionsInFlight[code] = false
+            android.util.Log.e("TeamRepository", "Firestore getSubstitutions exception: ${e.message}", e)
+            onComplete?.invoke(Result.success(cached))
+        }
+    }
+
+    /**
+     * Creates a new substitution request in Firestore and updates the local cache.
+     */
+    fun createSubstitutionRequest(
+        substitution: SubstitutionData,
+        preferences: android.content.SharedPreferences? = null,
+        onComplete: ((Result<SubstitutionData>) -> Unit)? = null
+    ) {
+        val code = substitution.teamCode.trim().uppercase()
+        if (code.isBlank() || substitution.id.isBlank()) {
+            onComplete?.invoke(Result.failure(IllegalArgumentException("teamCode and id cannot be blank")))
+            return
+        }
+
+        saveSubstitutionLocally(code, substitution, preferences)
+
+        try {
+            db.collection(TEAMS_COLLECTION)
+                .document(code)
+                .collection(SUBSTITUTIONS_SUBCOLLECTION)
+                .document(substitution.id)
+                .set(substitution.toMap())
+                .addOnSuccessListener {
+                    onComplete?.invoke(Result.success(substitution))
+                }
+                .addOnFailureListener { err ->
+                    android.util.Log.e("TeamRepository", "Firestore createSubstitutionRequest failed: ${err.message}", err)
+                    onComplete?.invoke(Result.failure(err))
+                }
+        } catch (e: Throwable) {
+            android.util.Log.e("TeamRepository", "Firestore createSubstitutionRequest exception: ${e.message}", e)
+            onComplete?.invoke(Result.failure(e))
+        }
+    }
+
+    /**
+     * Updates the status of a substitution request in Firestore and the local cache.
+     */
+    fun updateSubstitutionStatus(
+        teamCode: String,
+        substitutionId: String,
+        newStatus: String,
+        preferences: android.content.SharedPreferences? = null,
+        onComplete: ((Result<Boolean>) -> Unit)? = null
+    ) {
+        val code = teamCode.trim().uppercase()
+        if (code.isBlank() || substitutionId.isBlank()) {
+            onComplete?.invoke(Result.failure(IllegalArgumentException("teamCode and substitutionId cannot be blank")))
+            return
+        }
+
+        updateSubstitutionStatusLocally(code, substitutionId, newStatus, preferences)
+
+        try {
+            val updates = mapOf<String, Any>(
+                "status" to newStatus,
+                "updatedAt" to System.currentTimeMillis()
+            )
+            db.collection(TEAMS_COLLECTION)
+                .document(code)
+                .collection(SUBSTITUTIONS_SUBCOLLECTION)
+                .document(substitutionId)
+                .update(updates)
+                .addOnSuccessListener {
+                    onComplete?.invoke(Result.success(true))
+                }
+                .addOnFailureListener { err ->
+                    android.util.Log.e("TeamRepository", "Firestore updateSubstitutionStatus failed: ${err.message}", err)
+                    onComplete?.invoke(Result.failure(err))
+                }
+        } catch (e: Throwable) {
+            android.util.Log.e("TeamRepository", "Firestore updateSubstitutionStatus exception: ${e.message}", e)
+            onComplete?.invoke(Result.failure(e))
+        }
+    }
+
+    /**
+     * Deletes a substitution request from Firestore and the local cache.
+     */
+    fun deleteSubstitution(
+        teamCode: String,
+        substitutionId: String,
+        preferences: android.content.SharedPreferences? = null,
+        onComplete: ((Result<Boolean>) -> Unit)? = null
+    ) {
+        val code = teamCode.trim().uppercase()
+        if (code.isBlank() || substitutionId.isBlank()) {
+            onComplete?.invoke(Result.failure(IllegalArgumentException("teamCode and substitutionId cannot be blank")))
+            return
+        }
+
+        removeSubstitutionLocally(code, substitutionId, preferences)
+
+        try {
+            db.collection(TEAMS_COLLECTION)
+                .document(code)
+                .collection(SUBSTITUTIONS_SUBCOLLECTION)
+                .document(substitutionId)
+                .delete()
+                .addOnSuccessListener {
+                    onComplete?.invoke(Result.success(true))
+                }
+                .addOnFailureListener { err ->
+                    android.util.Log.e("TeamRepository", "Firestore deleteSubstitution failed: ${err.message}", err)
+                    onComplete?.invoke(Result.failure(err))
+                }
+        } catch (e: Throwable) {
+            android.util.Log.e("TeamRepository", "Firestore deleteSubstitution exception: ${e.message}", e)
+            onComplete?.invoke(Result.failure(e))
+        }
+    }
+
+    /**
+     * Pure function that replaces the assignment matching the substitution request in a ServiceData record.
+     */
+    fun replaceAssignmentInService(service: ServiceData, sub: SubstitutionData): ServiceData {
+        var replaced = false
+        val updatedAssignments = service.assignments.map { assignment ->
+            val matchesRole = assignment.role.equals(sub.role, ignoreCase = true)
+            val matchesRequester = (sub.requesterUid.isNotBlank() && assignment.uid == sub.requesterUid) ||
+                    (sub.requesterName.isNotBlank() && assignment.name.equals(sub.requesterName, ignoreCase = true))
+
+            if (!replaced && matchesRole && matchesRequester) {
+                replaced = true
+                assignment.copy(
+                    uid = sub.substituteUid,
+                    name = sub.substituteName
+                )
+            } else {
+                assignment
+            }
+        }.toMutableList()
+
+        if (!replaced) {
+            val roleIndex = updatedAssignments.indexOfFirst { it.role.equals(sub.role, ignoreCase = true) }
+            if (roleIndex >= 0) {
+                val old = updatedAssignments[roleIndex]
+                updatedAssignments[roleIndex] = old.copy(
+                    uid = sub.substituteUid,
+                    name = sub.substituteName
+                )
+            }
+        }
+
+        return service.copy(
+            assignments = updatedAssignments,
+            updatedAt = System.currentTimeMillis()
+        )
+    }
+
+    /**
+     * Accepts a substitution request and automatically updates the corresponding ServiceData schedule roster.
+     */
+    fun acceptSubstitutionAndUpdateService(
+        teamCode: String,
+        sub: SubstitutionData,
+        preferences: android.content.SharedPreferences? = null,
+        onComplete: ((Result<Boolean>) -> Unit)? = null
+    ) {
+        val code = teamCode.trim().uppercase()
+        val acceptedSub = sub.copy(status = "Accepted", updatedAt = System.currentTimeMillis())
+        updateSubstitutionStatusLocally(code, sub.id, "Accepted", preferences)
+
+        // 1. Update substitution status in Firestore
+        updateSubstitutionStatus(code, sub.id, "Accepted", preferences) { subResult ->
+            if (subResult.isFailure) {
+                onComplete?.invoke(subResult)
+                return@updateSubstitutionStatus
+            }
+
+            // 2. If serviceId is blank, we are done
+            if (acceptedSub.serviceId.isBlank()) {
+                onComplete?.invoke(Result.success(true))
+                return@updateSubstitutionStatus
+            }
+
+            // 3. Service is linked; load it from local cache or Firestore
+            val cached = getCachedServices(code, preferences).find { it.id == acceptedSub.serviceId }
+            if (cached != null) {
+                val updated = replaceAssignmentInService(cached, acceptedSub)
+                saveServiceLocally(code, updated, preferences)
+                saveService(code, updated, preferences) { svcResult ->
+                    onComplete?.invoke(if (svcResult.isSuccess) Result.success(true) else Result.failure(svcResult.exceptionOrNull() ?: Exception("Failed to save updated service")))
+                }
+            } else {
+                try {
+                    db.collection(TEAMS_COLLECTION)
+                        .document(code)
+                        .collection(SERVICES_SUBCOLLECTION)
+                        .document(acceptedSub.serviceId)
+                        .get()
+                        .addOnSuccessListener { doc ->
+                            if (doc != null && doc.exists()) {
+                                val svc = ServiceData.fromMap(doc.data ?: emptyMap())
+                                val updated = replaceAssignmentInService(svc, acceptedSub)
+                                saveServiceLocally(code, updated, preferences)
+                                saveService(code, updated, preferences) { svcResult ->
+                                    onComplete?.invoke(if (svcResult.isSuccess) Result.success(true) else Result.failure(svcResult.exceptionOrNull() ?: Exception("Failed to save updated service")))
+                                }
+                            } else {
+                                onComplete?.invoke(Result.success(true))
+                            }
+                        }
+                        .addOnFailureListener {
+                            onComplete?.invoke(Result.success(true))
+                        }
+                } catch (_: Throwable) {
+                    onComplete?.invoke(Result.success(true))
+                }
+            }
+        }
+    }
 }
+
 

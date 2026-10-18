@@ -1625,6 +1625,137 @@ class ExampleUnitTest {
         assertTrue(sparse.createdAt > 0L)
     }
 
+    @Test
+    fun testTeamRepositorySubstitutionCachingAndFiltering() {
+        val prefs = FakePreferences()
+        val repo = com.example.syncedn.data.database.TeamRepository
+        val code = "SUBTEST"
+
+        // 1. Initial cached list should be empty
+        val initial = repo.getCachedSubstitutions(code, prefs)
+        assertTrue(initial.isEmpty())
+
+        // 2. Add first substitution
+        val sub1 = com.example.syncedn.data.model.SubstitutionData(
+            id = "sub_1",
+            teamCode = code,
+            serviceTitle = "Sunday Worship",
+            serviceDate = "2026-10-25",
+            requesterUid = "req_1",
+            requesterName = "Angelo Daniel",
+            role = "Keyboardist",
+            substituteUid = "sub_1",
+            substituteName = "Ryan Lloyd Genturo",
+            reason = "School exam",
+            status = "Pending",
+            createdBy = "req_1",
+            createdAt = 1000L
+        )
+        repo.saveSubstitutionLocally(code, sub1, prefs)
+
+        // 3. Add second substitution (newer timestamp)
+        val sub2 = com.example.syncedn.data.model.SubstitutionData(
+            id = "sub_2",
+            teamCode = code,
+            serviceTitle = "Midweek Service",
+            serviceDate = "2026-10-28",
+            requesterUid = "req_2",
+            requesterName = "John Doe",
+            role = "Guitarist",
+            substituteUid = "sub_2",
+            substituteName = "Kid Gamboa",
+            reason = "Family emergency",
+            status = "Accepted",
+            createdBy = "req_2",
+            createdAt = 2000L
+        )
+        repo.saveSubstitutionLocally(code, sub2, prefs)
+
+        // 4. Verify sorting: sub2 (2000L) must appear before sub1 (1000L)
+        val cached = repo.getCachedSubstitutions(code, prefs)
+        assertEquals(2, cached.size)
+        assertEquals("sub_2", cached[0].id)
+        assertEquals("Accepted", cached[0].status)
+        assertEquals("sub_1", cached[1].id)
+        assertEquals("Pending", cached[1].status)
+
+        // 5. Update status of sub1 locally to Accepted
+        repo.updateSubstitutionStatusLocally(code, "sub_1", "Accepted", prefs)
+        val afterUpdate = repo.getCachedSubstitutions(code, prefs)
+        val updatedSub1 = afterUpdate.find { it.id == "sub_1" }
+        assertNotNull(updatedSub1)
+        assertEquals("Accepted", updatedSub1?.status)
+
+        // 6. Delete a substitution
+        repo.deleteSubstitution(code, "sub_2", prefs)
+        val afterDelete = repo.getCachedSubstitutions(code, prefs)
+        assertEquals(1, afterDelete.size)
+        assertEquals("sub_1", afterDelete[0].id)
+    }
+
+    @Test
+    fun testServiceRosterReplacementOnAccept() {
+        val repo = com.example.syncedn.data.database.TeamRepository
+        val originalService = com.example.syncedn.data.model.ServiceData(
+            id = "srv_test_100",
+            teamCode = "74XWB7",
+            title = "Sunday Worship Service",
+            date = "2026-10-25",
+            start = "08:00",
+            end = "10:30",
+            venue = "Main Sanctuary",
+            assignments = listOf(
+                com.example.syncedn.data.model.ServiceAssignment(
+                    uid = "uid_angelo",
+                    name = "Angelo Daniel",
+                    role = "Keyboardist"
+                ),
+                com.example.syncedn.data.model.ServiceAssignment(
+                    uid = "uid_kid",
+                    name = "Kid Gamboa",
+                    role = "Bassist"
+                )
+            ),
+            songs = listOf(
+                com.example.syncedn.data.model.ServiceSong(title = "Goodness of God")
+            )
+        )
+
+        val subRequest = com.example.syncedn.data.model.SubstitutionData(
+            id = "sub_999",
+            teamCode = "74XWB7",
+            serviceId = "srv_test_100",
+            serviceTitle = "Sunday Worship Service",
+            serviceDate = "2026-10-25",
+            requesterUid = "uid_angelo",
+            requesterName = "Angelo Daniel",
+            role = "Keyboardist",
+            substituteUid = "uid_ryan",
+            substituteName = "Ryan Lloyd Genturo",
+            reason = "Out of town",
+            status = "Accepted"
+        )
+
+        val updatedService = repo.replaceAssignmentInService(originalService, subRequest)
+
+        // Assert Keyboardist is now Ryan Lloyd Genturo
+        val keyboardist = updatedService.assignments.find { it.role == "Keyboardist" }
+        assertNotNull(keyboardist)
+        assertEquals("uid_ryan", keyboardist?.uid)
+        assertEquals("Ryan Lloyd Genturo", keyboardist?.name)
+
+        // Assert Bassist is unchanged
+        val bassist = updatedService.assignments.find { it.role == "Bassist" }
+        assertNotNull(bassist)
+        assertEquals("uid_kid", bassist?.uid)
+        assertEquals("Kid Gamboa", bassist?.name)
+
+        // Assert songs and metadata are completely untouched
+        assertEquals(1, updatedService.songs.size)
+        assertEquals("Goodness of God", updatedService.songs[0].title)
+        assertEquals("Main Sanctuary", updatedService.venue)
+    }
+
     private class FakePreferences : android.content.SharedPreferences {
         private val map = mutableMapOf<String, Any?>()
 
