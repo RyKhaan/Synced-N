@@ -32,6 +32,19 @@ rules_version = '2';
 //   - roles: list (optional, max 50 items) - Customized ministry roles list for the team
 //   - createdAt: number | timestamp (optional, >= 0, immutable) - Team creation timestamp
 //
+// Subcollection: teams/{teamCode}/announcements
+// Document ID: {announcementId} (matches id field)
+// Fields:
+//   - id: string (required, matches doc ID, immutable) - Unique announcement ID
+//   - teamCode: string (required, matches parent teamCode, immutable) - Team invite code
+//   - title: string (required, 1-120 chars) - Announcement headline
+//   - message: string (required, 1-2000 chars) - Announcement body content
+//   - urgent: bool (required) - High-priority / urgent alert flag
+//   - author: string (optional, 0-100 chars) - Display name or attribution of the author
+//   - createdBy: string (required, matches creator auth.uid, immutable) - Creator's UID
+//   - createdAt: number | timestamp (optional, >= 0, immutable) - Timestamp when created
+//   - updatedAt: number | timestamp (optional, >= 0) - Timestamp when last updated
+//
 // Collection: password_resets
 // Document ID: {email} (User's normalized email address)
 // Fields:
@@ -298,6 +311,24 @@ service cloud.firestore {
       (!('updatedAt' in data) || (data.updatedAt is number && data.updatedAt >= 0) || (data.updatedAt is timestamp));
     }
 
+    // Strict validator for /teams/{teamCode}/announcements/{announcementId} documents (Group 5)
+    function isValidAnnouncement(data, announcementId, teamCode) {
+      return hasOnlyAllowedFields(data, [
+        'id', 'teamCode', 'title', 'message', 'urgent', 'author',
+        'createdBy', 'createdAt', 'updatedAt'
+      ]) &&
+      hasRequiredFields(data, ['id', 'teamCode', 'title', 'message', 'createdBy']) &&
+      data.id is string && data.id == announcementId &&
+      data.teamCode is string && data.teamCode == teamCode &&
+      data.title is string && data.title.size() > 0 && data.title.size() <= 120 &&
+      data.message is string && data.message.size() > 0 && data.message.size() <= 2000 &&
+      data.urgent is bool &&
+      (!('author' in data) || (data.author is string && data.author.size() <= 100)) &&
+      data.createdBy is string && data.createdBy.size() > 0 &&
+      (!('createdAt' in data) || (data.createdAt is number && data.createdAt >= 0) || (data.createdAt is timestamp)) &&
+      (!('updatedAt' in data) || (data.updatedAt is number && data.updatedAt >= 0) || (data.updatedAt is timestamp));
+    }
+
     // ===============================================================
     // Collection Match Rules
     // ===============================================================
@@ -429,6 +460,25 @@ service cloud.firestore {
 
         allow update: if isLeaderOfTeam(teamCode) &&
                          isValidSong(request.resource.data, songId, teamCode) &&
+                         areImmutableFieldsUnchanged(['id', 'teamCode', 'createdBy', 'createdAt']);
+
+        allow delete: if isLeaderOfTeam(teamCode);
+      }
+
+      // ---------------------------------------------------------------
+      // Subcollection: Announcements (/teams/{teamCode}/announcements/{announcementId})
+      // ---------------------------------------------------------------
+      match /announcements/{announcementId} {
+        // Read: Any authenticated member of the team can view team announcements.
+        allow read: if isAuthenticated() && isSameTeam(teamCode);
+
+        // Write: Only verified Team Leaders can create, update, or delete announcements.
+        allow create: if isLeaderOfTeam(teamCode) &&
+                         isValidAnnouncement(request.resource.data, announcementId, teamCode) &&
+                         request.resource.data.createdBy == request.auth.uid;
+
+        allow update: if isLeaderOfTeam(teamCode) &&
+                         isValidAnnouncement(request.resource.data, announcementId, teamCode) &&
                          areImmutableFieldsUnchanged(['id', 'teamCode', 'createdBy', 'createdAt']);
 
         allow delete: if isLeaderOfTeam(teamCode);
