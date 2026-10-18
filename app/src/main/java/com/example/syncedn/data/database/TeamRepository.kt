@@ -1,6 +1,7 @@
 package com.example.syncedn.data.database
 
 import com.example.syncedn.data.model.ServiceData
+import com.example.syncedn.data.model.SongData
 import com.example.syncedn.data.model.TeamData
 import com.example.syncedn.data.model.TeamMember
 import com.example.syncedn.data.model.UnavailableRange
@@ -17,6 +18,7 @@ object TeamRepository {
     private const val USERS_COLLECTION = "users"
     private const val TEAMS_COLLECTION = "teams"
     private const val SERVICES_SUBCOLLECTION = "services"
+    private const val SONGS_SUBCOLLECTION = "songs"
 
     // In-memory cache for fast UI updates, offline fallback, and unit tests
     private val cachedRosters = java.util.concurrent.ConcurrentHashMap<String, MutableList<TeamMember>>()
@@ -29,8 +31,12 @@ object TeamRepository {
     private val lastServicesFetchTimes = java.util.concurrent.ConcurrentHashMap<String, Long>()
     private val servicesInFlight = java.util.concurrent.ConcurrentHashMap<String, Boolean>()
 
+    private val cachedSongs = java.util.concurrent.ConcurrentHashMap<String, MutableList<SongData>>()
+    private val lastSongsFetchTimes = java.util.concurrent.ConcurrentHashMap<String, Long>()
+    private val songsInFlight = java.util.concurrent.ConcurrentHashMap<String, Boolean>()
+
     /**
-     * Clears all in-memory roster, role, and service caches (primarily for unit tests).
+     * Clears all in-memory roster, role, service, and song caches (primarily for unit tests).
      */
     @Synchronized
     fun clearCache() {
@@ -42,6 +48,9 @@ object TeamRepository {
         cachedServices.clear()
         lastServicesFetchTimes.clear()
         servicesInFlight.clear()
+        cachedSongs.clear()
+        lastSongsFetchTimes.clear()
+        songsInFlight.clear()
     }
 
     /**
@@ -1017,4 +1026,361 @@ object TeamRepository {
             onComplete?.invoke(Result.failure(e))
         }
     }
+
+    // ===============================================================
+    // Songs Catalog Management (Group 4)
+    // ===============================================================
+
+    /**
+     * Default seed worship catalog loaded for new teams or offline cold-start.
+     */
+    fun getDefaultSeedSongs(teamCode: String): List<SongData> {
+        val code = teamCode.trim().uppercase()
+        return listOf(
+            SongData(
+                id = "seed_praise",
+                teamCode = code,
+                title = "Praise",
+                artist = "Elevation Worship",
+                key = "C",
+                bpm = 74,
+                sheet = "[Verse 1]\n[C]Let everything that has breath\n[F]Praise the Lord\n\n[Chorus]\n[C]Praise the Lord, oh my soul\n[Am]Praise the Lord, oh my soul\n[F]        [G]        [C]",
+                lyrics = "Let everything that has breath\nPraise the Lord\n\nPraise the Lord, oh my soul\nPraise the Lord, oh my soul"
+            ),
+            SongData(
+                id = "seed_trust_in_god",
+                teamCode = code,
+                title = "Trust in God",
+                artist = "Elevation Worship",
+                key = "C",
+                bpm = 74,
+                sheet = "[Verse 1]\n[C]Blessed assurance, Jesus is mine\n[F]Oh what a foretaste of glory divine\n\n[Chorus]\n[C]I trust in God, my Savior\n[Am]The one who will never fail\n[F]        [G]        [C]",
+                lyrics = "Blessed assurance, Jesus is mine\nOh what a foretaste of glory divine\n\nI trust in God, my Savior\nThe one who will never fail"
+            ),
+            SongData(
+                id = "seed_way_maker",
+                teamCode = code,
+                title = "Way Maker",
+                artist = "Sinach",
+                key = "C",
+                bpm = 74,
+                sheet = "[Verse]\n[F]You are here, moving in our midst\n[C]I worship You, I worship You\n\n[Chorus]\n[F]Way maker, miracle worker\n[C]Promise keeper, light in the darkness\n[G]My God, that is who You are",
+                lyrics = "You are here, moving in our midst\nI worship You, I worship You\n\nWay maker, miracle worker\nPromise keeper, light in the darkness\nMy God, that is who You are"
+            ),
+            SongData(
+                id = "seed_gratitude",
+                teamCode = code,
+                title = "Gratitude",
+                artist = "Brandon Lake",
+                key = "B",
+                bpm = 78,
+                sheet = "[Verse 1]\n[B]All my words are fall short\n[E]I got nothing new\n\n[Chorus]\n[B]So I throw up my hands and praise You again and again\n[G#m]Cause all that I have is a hallelujah\n[E]        [F#]        [B]",
+                lyrics = "All my words are fall short\nI got nothing new\n\nSo I throw up my hands and praise You again and again\nCause all that I have is a hallelujah"
+            ),
+            SongData(
+                id = "seed_goodness_of_god",
+                teamCode = code,
+                title = "Goodness of God",
+                artist = "Bethel Music",
+                key = "Ab",
+                bpm = 70,
+                sheet = "[Verse 1]\n[Ab]I love You, Lord, for Your mercy never fails me\n[Db]All my days, I've been held in Your hands\n\n[Chorus]\n[Db]All my life You have been faithful\n[Ab]All my life You have been so, so good\n[Db]        [Eb]        [Ab]",
+                lyrics = "I love You, Lord, for Your mercy never fails me\nAll my days, I've been held in Your hands\n\nAll my life You have been faithful\nAll my life You have been so, so good"
+            ),
+            SongData(
+                id = "seed_build_my_life",
+                teamCode = code,
+                title = "Build My Life",
+                artist = "Pat Barrett",
+                key = "G",
+                bpm = 68,
+                sheet = "[Verse 1]\n[G]Worthy of every song we could ever sing\n[C]Worthy of all the praise we could ever bring\n\n[Chorus]\n[C]Holy, there is no one like You\n[Am]There is none beside You\n[D]Open up my eyes in wonder",
+                lyrics = "Worthy of every song we could ever sing\nWorthy of all the praise we could ever bring\n\nHoly, there is no one like You\nThere is none beside You\nOpen up my eyes in wonder"
+            ),
+            SongData(
+                id = "seed_amazing_grace",
+                teamCode = code,
+                title = "Amazing Grace",
+                artist = "John Newton",
+                key = "G",
+                bpm = 72,
+                sheet = "[Verse 1]\n[G]Amazing grace, how [C]sweet the [G]sound\nThat saved a [D]wretch like me\n[G]I once was lost, but [C]now am [G]found\nWas blind, but [D]now I [G]see",
+                lyrics = "Amazing grace, how sweet the sound\nThat saved a wretch like me\nI once was lost, but now am found\nWas blind, but now I see"
+            )
+        )
+    }
+
+    /**
+     * Retrieves cached songs for the team, falling back to SharedPreferences and seed catalog.
+     */
+    fun getCachedSongs(
+        teamCode: String,
+        preferences: android.content.SharedPreferences? = null
+    ): List<SongData> {
+        val code = teamCode.trim().uppercase()
+        if (code.isBlank()) return emptyList()
+
+        val inMemory = cachedSongs[code]
+        if (inMemory != null && inMemory.isNotEmpty()) {
+            return synchronized(inMemory) { inMemory.toList() }
+        }
+
+        preferences?.getString("team_songs_$code", null)?.let { jsonStr ->
+            if (jsonStr.isNotBlank() && jsonStr != "[]") {
+                try {
+                    val array = org.json.JSONArray(jsonStr)
+                    val list = mutableListOf<SongData>()
+                    for (i in 0 until array.length()) {
+                        val obj = array.getJSONObject(i)
+                        val map = mutableMapOf<String, Any?>()
+                        val keys = obj.keys()
+                        while (keys.hasNext()) {
+                            val k = keys.next()
+                            map[k] = obj.opt(k)
+                        }
+                        list.add(SongData.fromMap(map))
+                    }
+                    if (list.isNotEmpty()) {
+                        cachedSongs[code] = java.util.Collections.synchronizedList(list)
+                        return list
+                    }
+                } catch (_: Throwable) {}
+            }
+        }
+
+        val seeds = getDefaultSeedSongs(code)
+        cachedSongs[code] = java.util.Collections.synchronizedList(seeds.toMutableList())
+        return seeds
+    }
+
+    /**
+     * Saves a song into local in-memory cache and SharedPreferences.
+     */
+    fun saveSongLocally(
+        teamCode: String,
+        song: SongData,
+        preferences: android.content.SharedPreferences? = null
+    ) {
+        val code = teamCode.trim().uppercase()
+        if (code.isBlank() || song.id.isBlank()) return
+
+        val list = cachedSongs.getOrPut(code) {
+            java.util.Collections.synchronizedList(getCachedSongs(code, preferences).toMutableList())
+        }
+        synchronized(list) {
+            val idx = list.indexOfFirst { it.id == song.id || (it.title.isNotBlank() && it.title.equals(song.title, ignoreCase = true)) }
+            if (idx >= 0) list[idx] = song
+            else list.add(song)
+            list.sortBy { it.title.lowercase() }
+        }
+
+        preferences?.let { prefs ->
+            try {
+                val array = org.json.JSONArray()
+                synchronized(list) {
+                    list.forEach { item ->
+                        val obj = org.json.JSONObject()
+                        item.toMap().forEach { (k, v) -> obj.put(k, v) }
+                        array.put(obj)
+                    }
+                }
+                prefs.edit().putString("team_songs_$code", array.toString()).apply()
+            } catch (_: Throwable) {}
+        }
+    }
+
+    /**
+     * Removes a song from local cache and SharedPreferences.
+     */
+    fun removeSongLocally(
+        teamCode: String,
+        songId: String,
+        preferences: android.content.SharedPreferences? = null
+    ) {
+        val code = teamCode.trim().uppercase()
+        if (code.isBlank() || songId.isBlank()) return
+
+        cachedSongs[code]?.let { list ->
+            synchronized(list) {
+                list.removeAll { it.id == songId }
+            }
+        }
+
+        preferences?.let { prefs ->
+            try {
+                val cached = getCachedSongs(code, prefs).filter { it.id != songId }
+                val array = org.json.JSONArray()
+                cached.forEach { item ->
+                    val obj = org.json.JSONObject()
+                    item.toMap().forEach { (k, v) -> obj.put(k, v) }
+                    array.put(obj)
+                }
+                prefs.edit().putString("team_songs_$code", array.toString()).apply()
+            } catch (_: Throwable) {}
+        }
+    }
+
+    /**
+     * Saves a list of songs into local cache and SharedPreferences.
+     */
+    fun saveSongsLocally(
+        teamCode: String,
+        songs: List<SongData>,
+        preferences: android.content.SharedPreferences? = null
+    ) {
+        val code = teamCode.trim().uppercase()
+        if (code.isBlank()) return
+
+        val sorted = songs.sortedBy { it.title.lowercase() }
+        cachedSongs[code] = java.util.Collections.synchronizedList(sorted.toMutableList())
+
+        preferences?.let { prefs ->
+            try {
+                val array = org.json.JSONArray()
+                sorted.forEach { item ->
+                    val obj = org.json.JSONObject()
+                    item.toMap().forEach { (k, v) -> obj.put(k, v) }
+                    array.put(obj)
+                }
+                prefs.edit().putString("team_songs_$code", array.toString()).apply()
+            } catch (_: Throwable) {}
+        }
+    }
+
+    /**
+     * Fetches songs from Firestore with 15-second debounce and offline cache fallback.
+     */
+    fun getSongs(
+        teamCode: String,
+        forceRefresh: Boolean = false,
+        preferences: android.content.SharedPreferences? = null,
+        onResult: (Result<List<SongData>>) -> Unit = {}
+    ) {
+        val code = teamCode.trim().uppercase()
+        if (code.isBlank()) {
+            onResult(Result.success(emptyList()))
+            return
+        }
+
+        val cached = getCachedSongs(code, preferences)
+
+        val now = System.currentTimeMillis()
+        val lastFetch = lastSongsFetchTimes[code] ?: 0L
+        if (!forceRefresh && (now - lastFetch < 15_000L)) {
+            onResult(Result.success(cached))
+            return
+        }
+
+        if (songsInFlight[code] == true) {
+            onResult(Result.success(cached))
+            return
+        }
+        songsInFlight[code] = true
+
+        var hasFinished = false
+        fun finishOnce(result: Result<List<SongData>>) {
+            if (!hasFinished) {
+                hasFinished = true
+                songsInFlight[code] = false
+                onResult(result)
+            }
+        }
+
+        try {
+            db.collection(TEAMS_COLLECTION)
+                .document(code)
+                .collection(SONGS_SUBCOLLECTION)
+                .orderBy("title")
+                .get()
+                .addOnSuccessListener { snapshot ->
+                    lastSongsFetchTimes[code] = System.currentTimeMillis()
+                    val fetched = snapshot.documents.mapNotNull { doc ->
+                        doc.data?.let { SongData.fromMap(it) }
+                    }
+                    if (fetched.isNotEmpty()) {
+                        saveSongsLocally(code, fetched, preferences)
+                        finishOnce(Result.success(fetched))
+                    } else {
+                        // If no songs in Firestore yet, preserve cached or seed songs
+                        finishOnce(Result.success(cached))
+                    }
+                }
+                .addOnFailureListener {
+                    finishOnce(Result.success(cached))
+                }
+        } catch (_: Throwable) {
+            finishOnce(Result.success(cached))
+        }
+    }
+
+    /**
+     * Saves a song to local cache and synchronizes to Cloud Firestore.
+     */
+    fun saveSong(
+        teamCode: String,
+        song: SongData,
+        preferences: android.content.SharedPreferences? = null,
+        onComplete: ((Result<SongData>) -> Unit)? = null
+    ) {
+        val code = teamCode.trim().uppercase()
+        if (code.isBlank() || song.id.isBlank()) {
+            onComplete?.invoke(Result.failure(IllegalArgumentException("teamCode and song.id cannot be blank")))
+            return
+        }
+
+        saveSongLocally(code, song, preferences)
+
+        try {
+            db.collection(TEAMS_COLLECTION)
+                .document(code)
+                .collection(SONGS_SUBCOLLECTION)
+                .document(song.id)
+                .set(song.toMap(), com.google.firebase.firestore.SetOptions.merge())
+                .addOnSuccessListener {
+                    onComplete?.invoke(Result.success(song))
+                }
+                .addOnFailureListener { err ->
+                    android.util.Log.e("TeamRepository", "Firestore saveSong failed: ${err.message}", err)
+                    onComplete?.invoke(Result.failure(err))
+                }
+        } catch (e: Throwable) {
+            android.util.Log.e("TeamRepository", "Firestore saveSong exception: ${e.message}", e)
+            onComplete?.invoke(Result.failure(e))
+        }
+    }
+
+    /**
+     * Deletes a song from local cache and Cloud Firestore.
+     */
+    fun deleteSong(
+        teamCode: String,
+        songId: String,
+        preferences: android.content.SharedPreferences? = null,
+        onComplete: ((Result<Boolean>) -> Unit)? = null
+    ) {
+        val code = teamCode.trim().uppercase()
+        if (code.isBlank() || songId.isBlank()) {
+            onComplete?.invoke(Result.failure(IllegalArgumentException("teamCode and songId cannot be blank")))
+            return
+        }
+
+        removeSongLocally(code, songId, preferences)
+
+        try {
+            db.collection(TEAMS_COLLECTION)
+                .document(code)
+                .collection(SONGS_SUBCOLLECTION)
+                .document(songId)
+                .delete()
+                .addOnSuccessListener { onComplete?.invoke(Result.success(true)) }
+                .addOnFailureListener { err ->
+                    android.util.Log.e("TeamRepository", "Firestore deleteSong failed: ${err.message}", err)
+                    onComplete?.invoke(Result.failure(err))
+                }
+        } catch (e: Throwable) {
+            android.util.Log.e("TeamRepository", "Firestore deleteSong exception: ${e.message}", e)
+            onComplete?.invoke(Result.failure(e))
+        }
+    }
 }
+

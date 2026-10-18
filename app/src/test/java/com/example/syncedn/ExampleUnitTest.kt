@@ -1116,6 +1116,63 @@ class ExampleUnitTest {
         assertEquals(82, coerced.bpm)
     }
 
+    @Test
+    fun testTeamRepositorySongCachingAndSeedFallback() {
+        val prefs = FakePreferences()
+        val repo = com.example.syncedn.data.database.TeamRepository
+
+        // 1. Verify default seed songs
+        val seeds = repo.getDefaultSeedSongs("UPJAT7")
+        assertTrue(seeds.isNotEmpty())
+        assertTrue(seeds.any { it.title == "Praise" })
+        assertTrue(seeds.any { it.title == "Way Maker" })
+        assertTrue(seeds.any { it.title == "Trust in God" })
+
+        // 2. When cache is empty, getCachedSongs returns seed songs
+        val cached = repo.getCachedSongs("UPJAT7", prefs)
+        assertEquals(seeds.size, cached.size)
+        assertEquals(seeds.first().title, cached.first().title)
+
+        // 3. Save a new custom song locally
+        val customSong = com.example.syncedn.data.model.SongData(
+            id = "song_custom_1",
+            teamCode = "UPJAT7",
+            title = "Living Hope",
+            artist = "Phil Wickham",
+            key = "D",
+            bpm = 72
+        )
+        repo.saveSongLocally("UPJAT7", customSong, prefs)
+
+        val updated = repo.getCachedSongs("UPJAT7", prefs)
+        assertTrue(updated.any { it.id == "song_custom_1" && it.title == "Living Hope" })
+    }
+
+    @Test
+    fun testTeamRepositorySongOptimisticUpdateAndDeletion() {
+        val prefs = FakePreferences()
+        val repo = com.example.syncedn.data.database.TeamRepository
+
+        val song = com.example.syncedn.data.model.SongData(
+            id = "song_edit_1",
+            teamCode = "TEAM_B",
+            title = "Goodness of God",
+            key = "G",
+            bpm = 70
+        )
+        repo.saveSongLocally("TEAM_B", song, prefs)
+        assertEquals("G", repo.getCachedSongs("TEAM_B", prefs).find { it.id == "song_edit_1" }?.key)
+
+        // Edit key to A
+        val editedSong = song.copy(key = "A")
+        repo.saveSongLocally("TEAM_B", editedSong, prefs)
+        assertEquals("A", repo.getCachedSongs("TEAM_B", prefs).find { it.id == "song_edit_1" }?.key)
+
+        // Delete song
+        repo.removeSongLocally("TEAM_B", "song_edit_1", prefs)
+        assertNull(repo.getCachedSongs("TEAM_B", prefs).find { it.id == "song_edit_1" })
+    }
+
     private class FakePreferences : android.content.SharedPreferences {
         private val map = mutableMapOf<String, Any?>()
 
