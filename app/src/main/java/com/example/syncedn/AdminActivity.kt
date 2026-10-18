@@ -11,6 +11,7 @@ import com.example.syncedn.data.model.TeamMember
 import com.example.syncedn.data.model.UnavailableRange
 import com.example.syncedn.data.model.SongData
 import com.example.syncedn.data.model.AnnouncementData
+import com.example.syncedn.data.model.SubstitutionData
 import com.example.syncedn.data.util.ValidationUtils
 import android.text.InputFilter
 import androidx.activity.result.contract.ActivityResultContracts
@@ -3415,6 +3416,138 @@ class AdminActivity : AppCompatActivity() {
             }
         }
     }
+
+    private fun substitutionFeed(col: LinearLayout) {
+        col.add(text("Substitution Requests", 13, purple, true)); col.space(12)
+        val subCol = vertical()
+        col.addView(subCol)
+
+        val activeCode = preferences.getString("teamCode", "").orEmpty()
+
+        // Migrate legacy demo substitution if needed
+        val legacyServiceName = preferences.getString("requestServiceName", null)
+        val cached = TeamRepository.getCachedSubstitutions(activeCode, preferences)
+        if (!legacyServiceName.isNullOrBlank() && cached.isEmpty()) {
+            val legacySub = SubstitutionData(
+                id = "legacy_demo_sub",
+                teamCode = activeCode,
+                serviceTitle = legacyServiceName,
+                requesterUid = "demo_requester",
+                requesterName = preferences.getString("requestRequester", "Angelo Daniel").orEmpty(),
+                role = preferences.getString("requestRole", "Guitarist").orEmpty(),
+                substituteUid = "demo_substitute",
+                substituteName = preferences.getString("requestSubstitute", "Ryan Lloyd Genturo").orEmpty(),
+                reason = preferences.getString("requestReason", "Family emergency out of town").orEmpty(),
+                status = preferences.getString("requestStatus", "Waiting for substitute").orEmpty().let {
+                    if (it == "Waiting for substitute") "Pending" else it
+                },
+                createdBy = "demo_requester"
+            )
+            TeamRepository.saveSubstitutionLocally(activeCode, legacySub, preferences)
+        }
+
+        fun populateSubstitutions() {
+            subCol.removeAllViews()
+            val list = TeamRepository.getCachedSubstitutions(activeCode, preferences)
+            if (list.isEmpty()) {
+                subCol.add(panel().apply {
+                    add(text("No substitution requests.", 13, Color.GRAY, centered = true))
+                }); subCol.space(24)
+                return
+            }
+
+            for (sub in list) {
+                subCol.add(panel().apply {
+                    val headerRow = horizontal().apply { gravity = Gravity.CENTER_VERTICAL }
+                    headerRow.add(text(sub.serviceTitle.ifBlank { "Sunday Worship Service" }, 14, purple, true), 0, -2, 1f)
+
+                    // Leader delete button
+                    val delBtn = text("✕", 15, Color.GRAY, bold = true, centered = true).apply {
+                        setPadding(dp(6), dp(2), dp(6), dp(2))
+                        isClickable = true; isFocusable = true
+                        contentDescription = "Delete substitution request"
+                        setOnClickListener {
+                            AlertDialog.Builder(this@AdminActivity).setTitle("Delete request?")
+                                .setMessage("Are you sure you want to delete this substitution record?")
+                                .setNegativeButton("Cancel", null)
+                                .setPositiveButton("Delete") { _, _ ->
+                                    TeamRepository.deleteSubstitution(activeCode, sub.id, preferences) { res ->
+                                        runOnUiThread {
+                                            if (res.isSuccess) toast("Request removed")
+                                            populateSubstitutions()
+                                        }
+                                    }
+                                }.show()
+                        }
+                    }
+                    headerRow.add(delBtn, 36, 36)
+                    add(headerRow); space(6)
+
+                    val statusColor = when (sub.status.lowercase()) {
+                        "accepted" -> Color.rgb(40, 167, 69)
+                        "declined" -> Color.rgb(220, 53, 69)
+                        "cancelled" -> Color.GRAY
+                        else -> purple
+                    }
+                    val statusText = when (sub.status.lowercase()) {
+                        "pending" -> "Waiting for substitute"
+                        else -> sub.status
+                    }
+                    val statusBadge = text(statusText, 11, statusColor, true)
+                    add(statusBadge); space(8)
+
+                    add(text("Requesting: ${sub.requesterName} (${sub.role})", 12, navy)); space(4)
+                    add(text("Proposed Substitute: ${sub.substituteName}", 12, navy, true)); space(4)
+                    add(text("Reason: ${sub.reason}", 12, navy))
+
+                    if (sub.status.equals("Pending", ignoreCase = true)) {
+                        space(16)
+                        val actions = horizontal()
+                        listOf("Accept", "Decline").forEach { label ->
+                            actions.add(memberButton(label, if (label == "Accept") purple else navy) {
+                                AlertDialog.Builder(this@AdminActivity).setTitle("$label substitution as Leader?")
+                                    .setMessage("As Team Leader, do you want to $label this request for ${sub.role} (${sub.substituteName} replacing ${sub.requesterName})?")
+                                    .setNegativeButton("Cancel", null)
+                                    .setPositiveButton(label) { _, _ ->
+                                        if (label == "Accept") {
+                                            TeamRepository.acceptSubstitutionAndUpdateService(activeCode, sub, preferences) { res ->
+                                                runOnUiThread {
+                                                    if (res.isSuccess) toast("Substitution accepted and service roster updated!")
+                                                    populateSubstitutions()
+                                                }
+                                            }
+                                        } else {
+                                            TeamRepository.updateSubstitutionStatus(activeCode, sub.id, "Declined", preferences) { res ->
+                                                runOnUiThread {
+                                                    if (res.isSuccess) toast("Substitution declined.")
+                                                    populateSubstitutions()
+                                                }
+                                            }
+                                        }
+                                    }.show()
+                            }, 0, 48, 1f)
+                            if (label == "Accept") actions.add(View(this@AdminActivity), 12, 1)
+                        }
+                        add(actions)
+                    }
+                }); subCol.space(16)
+            }
+            subCol.space(8)
+        }
+
+        populateSubstitutions()
+
+        if (activeCode.isNotBlank()) {
+            TeamRepository.getSubstitutions(activeCode, false, preferences) { result ->
+                runOnUiThread {
+                    if (result.isSuccess && page == "announcements") {
+                        populateSubstitutions()
+                    }
+                }
+            }
+        }
+    }
+
     private fun announcementsView(): View = memberPage("Announcement", "home") { col ->
         if (isLeader) {
             col.add(memberButton("+ Post Announcement") {
@@ -3423,31 +3556,7 @@ class AdminActivity : AppCompatActivity() {
             }, -1, 48); col.space(20)
         }
         leaderPosts(col)
-        col.add(text("Substitution Request", 13, purple, true)); col.space(12)
-        col.add(panel().apply {
-            add(text(preferences.getString("requestServiceName", "Sunday Worship Service").orEmpty(), 14, purple, true)); space(10)
-            val status = text(preferences.getString("requestStatus", "Waiting for substitute").orEmpty(), 11, purple, true)
-            add(status); space(10)
-            add(text("Requesting: " + preferences.getString("requestRequester", "Angelo Daniel") +
-                    " (" + preferences.getString("requestRole", "Guitarist") + ")", 12, navy)); space(5)
-            add(text("Proposed Substitute: " + preferences.getString("requestSubstitute", "Ryan Lloyd Genturo"), 12, navy, true))
-            space(5); add(text("Reason: " + preferences.getString("requestReason", "Family emergency out of town"), 12, navy))
-            space(16)
-            val actions = horizontal()
-            listOf("Accept", "Decline").forEach { label ->
-                actions.add(memberButton(label, if (label == "Accept") purple else navy) {
-                    AlertDialog.Builder(this@AdminActivity).setTitle("$label substitution?")
-                        .setMessage("This updates the demo request on this phone.")
-                        .setNegativeButton("Cancel", null).setPositiveButton(label) { _, _ ->
-                            val value = if (label == "Accept") "Accepted" else "Declined"
-                            preferences.edit().putString("requestStatus", value).apply()
-                            status.text = value
-                        }.show()
-                }, 0, 48, 1f)
-                if (label == "Accept") actions.add(View(this@AdminActivity), 12, 1)
-            }
-            add(actions)
-        }); col.space(24)
+        substitutionFeed(col)
         col.add(text("Recent Notifications", 13, purple, true)); col.space(12)
         listOf("New Service Scheduled" to "Sunday Worship Service scheduled for Oct 18, 2026 at 8:00AM.",
             "Duty Assigned" to "You are assigned as Keyboardist for Sunday Worship Service on Oct 11, 2026.",
