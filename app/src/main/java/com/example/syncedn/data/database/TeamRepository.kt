@@ -1117,6 +1117,23 @@ object TeamRepository {
         )
     }
 
+    private fun getDeletedSongKeys(teamCode: String, preferences: android.content.SharedPreferences?): Set<String> {
+        val code = teamCode.trim().uppercase()
+        val raw = preferences?.getString("deleted_songs_$code", "[]").orEmpty()
+        return try {
+            val arr = org.json.JSONArray(raw)
+            (0 until arr.length()).map { arr.getString(it).trim().lowercase() }.toSet()
+        } catch (_: Exception) { emptySet() }
+    }
+
+    private fun markSongDeleted(teamCode: String, songId: String, songTitle: String = "", preferences: android.content.SharedPreferences?) {
+        val code = teamCode.trim().uppercase()
+        val current = getDeletedSongKeys(code, preferences).toMutableSet()
+        if (songId.isNotBlank()) current.add(songId.trim().lowercase())
+        if (songTitle.isNotBlank()) current.add(songTitle.trim().lowercase())
+        preferences?.edit()?.putString("deleted_songs_$code", org.json.JSONArray(current).toString())?.apply()
+    }
+
     /**
      * Retrieves cached songs for the team, falling back to SharedPreferences and seed catalog.
      */
@@ -1127,12 +1144,20 @@ object TeamRepository {
         val code = teamCode.trim().uppercase()
         if (code.isBlank()) return emptyList()
 
+        val defaultSeeds = getDefaultSeedSongs(code)
+        val deletedKeys = getDeletedSongKeys(code, preferences)
+        val activeSeeds = defaultSeeds.filter { it.id.lowercase() !in deletedKeys && it.title.trim().lowercase() !in deletedKeys }
+
         val inMemory = cachedSongs[code]
         if (inMemory != null && inMemory.isNotEmpty()) {
-            return synchronized(inMemory) { inMemory.toList() }
+            val mergedMem = synchronized(inMemory) { inMemory.filter { it.id.lowercase() !in deletedKeys && it.title.trim().lowercase() !in deletedKeys }.toMutableList() }
+            activeSeeds.forEach { seed ->
+                if (mergedMem.none { it.title.equals(seed.title, ignoreCase = true) }) {
+                    mergedMem.add(seed)
+                }
+            }
+            return mergedMem
         }
-
-        val defaultSeeds = getDefaultSeedSongs(code)
 
         preferences?.getString("team_songs_$code", null)?.let { jsonStr ->
             if (jsonStr.isNotBlank() && jsonStr != "[]") {
@@ -1148,29 +1173,38 @@ object TeamRepository {
                             map[k] = obj.opt(k)
                         }
                         val parsed = SongData.fromMap(map)
-                        // If seed song was saved previously without referenceUrl or updated chords, backfill metadata
-                        val seedMatch = defaultSeeds.find { it.title.equals(parsed.title, ignoreCase = true) }
-                        val enriched = if (seedMatch != null && parsed.referenceUrl.isBlank()) {
-                            parsed.copy(
-                                referenceUrl = seedMatch.referenceUrl,
-                                key = if (parsed.key.isBlank() || parsed.key == "C") seedMatch.key else parsed.key,
-                                bpm = if (parsed.bpm == 74) seedMatch.bpm else parsed.bpm,
-                                sheet = if (parsed.sheet.isBlank() || parsed.sheet.contains("Add your licensed")) seedMatch.sheet else parsed.sheet,
-                                lyrics = if (parsed.lyrics.isBlank()) seedMatch.lyrics else parsed.lyrics
-                            )
-                        } else parsed
-                        list.add(enriched)
+                        if (parsed.id.lowercase() !in deletedKeys && parsed.title.trim().lowercase() !in deletedKeys) {
+                            // If seed song was saved previously without referenceUrl or updated chords, backfill metadata
+                            val seedMatch = defaultSeeds.find { it.title.equals(parsed.title, ignoreCase = true) }
+                            val enriched = if (seedMatch != null && parsed.referenceUrl.isBlank()) {
+                                parsed.copy(
+                                    referenceUrl = seedMatch.referenceUrl,
+                                    key = if (parsed.key.isBlank() || parsed.key == "C") seedMatch.key else parsed.key,
+                                    bpm = if (parsed.bpm == 74) seedMatch.bpm else parsed.bpm,
+                                    sheet = if (parsed.sheet.isBlank() || parsed.sheet.contains("Add your licensed")) seedMatch.sheet else parsed.sheet,
+                                    lyrics = if (parsed.lyrics.isBlank()) seedMatch.lyrics else parsed.lyrics
+                                )
+                            } else parsed
+                            list.add(enriched)
+                        }
                     }
-                    if (list.isNotEmpty()) {
-                        cachedSongs[code] = java.util.Collections.synchronizedList(list)
-                        return list
+                    val merged = mutableListOf<SongData>()
+                    merged.addAll(list)
+                    activeSeeds.forEach { seed ->
+                        if (merged.none { it.title.equals(seed.title, ignoreCase = true) }) {
+                            merged.add(seed)
+                        }
+                    }
+                    if (merged.isNotEmpty()) {
+                        cachedSongs[code] = java.util.Collections.synchronizedList(merged)
+                        return merged
                     }
                 } catch (_: Throwable) {}
             }
         }
 
-        cachedSongs[code] = java.util.Collections.synchronizedList(defaultSeeds.toMutableList())
-        return defaultSeeds
+        cachedSongs[code] = java.util.Collections.synchronizedList(activeSeeds.toMutableList())
+        return activeSeeds
     }
 
     /**
@@ -1184,6 +1218,10 @@ object TeamRepository {
         val code = teamCode.trim().uppercase()
         if (code.isBlank() || song.id.isBlank()) return
 
+        val defaultSeeds = getDefaultSeedSongs(code)
+        val deletedKeys = getDeletedSongKeys(code, preferences)
+        val activeSeeds = defaultSeeds.filter { it.id.lowercase() !in deletedKeys && it.title.trim().lowercase() !in deletedKeys }
+
         val list = cachedSongs.getOrPut(code) {
             java.util.Collections.synchronizedList(getCachedSongs(code, preferences).toMutableList())
         }
@@ -1191,6 +1229,11 @@ object TeamRepository {
             val idx = list.indexOfFirst { it.id == song.id || (it.title.isNotBlank() && it.title.equals(song.title, ignoreCase = true)) }
             if (idx >= 0) list[idx] = song
             else list.add(song)
+            activeSeeds.forEach { seed ->
+                if (list.none { it.title.equals(seed.title, ignoreCase = true) }) {
+                    list.add(seed)
+                }
+            }
             list.sortBy { it.title.lowercase() }
         }
 
@@ -1317,13 +1360,18 @@ object TeamRepository {
                     val fetched = snapshot.documents.mapNotNull { doc ->
                         doc.data?.let { SongData.fromMap(it) }
                     }
-                    if (fetched.isNotEmpty()) {
-                        saveSongsLocally(code, fetched, preferences)
-                        finishOnce(Result.success(fetched))
-                    } else {
-                        // If no songs in Firestore yet, preserve cached or seed songs
-                        finishOnce(Result.success(cached))
+                    val defaultSeeds = getDefaultSeedSongs(code)
+                    val deletedKeys = getDeletedSongKeys(code, preferences)
+                    val activeSeeds = defaultSeeds.filter { it.id.lowercase() !in deletedKeys && it.title.trim().lowercase() !in deletedKeys }
+                    val merged = mutableListOf<SongData>()
+                    merged.addAll(fetched.filter { it.id.lowercase() !in deletedKeys && it.title.trim().lowercase() !in deletedKeys })
+                    activeSeeds.forEach { seed ->
+                        if (merged.none { it.title.equals(seed.title, ignoreCase = true) }) {
+                            merged.add(seed)
+                        }
                     }
+                    saveSongsLocally(code, merged, preferences)
+                    finishOnce(Result.success(merged))
                 }
                 .addOnFailureListener {
                     finishOnce(Result.success(cached))
@@ -1384,6 +1432,8 @@ object TeamRepository {
             return
         }
 
+        val targetTitle = getCachedSongs(code, preferences).find { it.id == songId }?.title.orEmpty()
+        markSongDeleted(code, songId, targetTitle, preferences)
         removeSongLocally(code, songId, preferences)
 
         try {

@@ -1980,34 +1980,81 @@ class AdminActivity : AppCompatActivity() {
         col.add(memberButton("Review / Save Changes") { navigate("reviewService") }, -1, 48)
     }
     private fun addLineupSong() {
-        val available = songCatalog().map { it.first } + listOf("Amazing Grace", "Goodness of God", "Build My Life")
-        AlertDialog.Builder(this).setTitle("Add Song").setItems(available.distinct().toTypedArray()) { _, index ->
-            val song = available.distinct()[index]; val songs = draftSongs()
-            if ((0 until songs.length()).any { songs.getString(it) == song }) toast("This song is already in the lineup.")
-            else { songs.put(song); saveLeaderDraft(); navigate("adminLineup") }
+        val available = (songCatalog().map { it.first } + listOf("Amazing Grace", "Goodness of God", "Build My Life")).distinct()
+        AlertDialog.Builder(this).setTitle("Add Song").setItems(available.toTypedArray()) { _, index ->
+            val songName = available[index]
+            val songs = draftSongs()
+            val alreadyIn = (0 until songs.length()).any { idx ->
+                val itm = songs.get(idx)
+                val t = if (itm is org.json.JSONObject) itm.optString("title") else itm.toString()
+                t.equals(songName, ignoreCase = true)
+            }
+            if (alreadyIn) {
+                toast("This song is already in the lineup.")
+            } else {
+                val activeCode = preferences.getString("teamCode", "").orEmpty()
+                val cachedSong = TeamRepository.getCachedSongs(activeCode, preferences).find { it.title.equals(songName, true) }
+                val newObj = org.json.JSONObject().put("title", songName)
+                    .put("artist", cachedSong?.artist ?: songCatalog().find { it.first == songName }?.second ?: "")
+                    .put("key", cachedSong?.key ?: "C")
+                    .put("bpm", cachedSong?.bpm ?: 74)
+                songs.put(newObj)
+                saveLeaderDraft()
+                navigate("adminLineup")
+            }
         }.setNegativeButton("Cancel", null).show()
     }
     private fun adminLineupView(): View = memberPage("Song Lineup", if (serviceWizard) "serviceAssignments" else "service") { col ->
         col.add(text(leaderDraft.optString("title"), 13, navy, true)); col.space(20)
+        val activeCode = preferences.getString("teamCode", "").orEmpty()
+        val allCatalogSongs = TeamRepository.getCachedSongs(activeCode, preferences)
         val songs = draftSongs()
         repeat(songs.length()) { index ->
-            val title = songs.getString(index)
+            val rawItem = songs.get(index)
+            val songObj = if (rawItem is org.json.JSONObject) rawItem
+                          else try { org.json.JSONObject(rawItem.toString()) } catch (_: Exception) { null }
+            val songTitle = (songObj?.optString("title") ?: rawItem.toString()).trim()
+            val matchedSong = allCatalogSongs.find { it.title.equals(songTitle, true) }
+            val songArtist = songObj?.optString("artist").orEmpty().ifBlank { matchedSong?.artist.orEmpty() }
+            val songKey = songObj?.optString("key").orEmpty().ifBlank { matchedSong?.key.orEmpty() }
+            val songBpm = songObj?.optInt("bpm", 0)?.takeIf { it > 0 } ?: matchedSong?.bpm?.takeIf { it > 0 }
+
+            val subtitleParts = mutableListOf<String>()
+            if (songArtist.isNotBlank()) subtitleParts.add(songArtist)
+            if (songKey.isNotBlank()) subtitleParts.add("Key: $songKey")
+            if (songBpm != null && songBpm > 0) subtitleParts.add("$songBpm BPM")
+            val subtitleText = subtitleParts.joinToString(" • ")
+
             col.add(panel().apply {
                 add(horizontal().apply {
                     add(text("${index + 1}.", 14, navy, true), 28, 48)
-                    add(text(title, 14, navy, true).apply {
-                        setOnClickListener { songDetailsBack="adminLineup";selectedSong=title;navigate("songDetails") }
+                    add(vertical().apply {
+                        setPadding(dp(4), 0, dp(8), 0)
+                        add(text(songTitle, 14, navy, true))
+                        if (subtitleText.isNotBlank()) {
+                            space(3)
+                            add(text(subtitleText, 11, Color.GRAY))
+                        }
+                        isClickable = true
+                        setOnClickListener {
+                            songDetailsBack = "adminLineup"
+                            selectedSong = songTitle
+                            navigate("songDetails")
+                        }
                     }, 0, -2, 1f)
                     add(text("⋮", 24, navy, centered = true).apply {
-                        contentDescription = "Edit $title"
+                        contentDescription = "Edit $songTitle"
                         setOnClickListener {
-                            AlertDialog.Builder(this@AdminActivity).setTitle(title)
+                            AlertDialog.Builder(this@AdminActivity).setTitle(songTitle)
                                 .setItems(arrayOf("Move Up", "Move Down", "Remove")) { _, choice ->
                                     if (choice == 2) songs.remove(index)
                                     else {
                                         val target = if (choice == 0) index - 1 else index + 1
                                         if (target in 0 until songs.length()) {
-                                            val other = songs.getString(target); songs.put(target, title); songs.put(index, other)
+                                            val currentItem = songs.get(index)
+                                            val otherItem = songs.get(target)
+                                            songs.put(target, currentItem)
+                                            songs.put(index, otherItem)
                                         }
                                     }
                                     saveLeaderDraft(); navigate("adminLineup")
@@ -2104,14 +2151,18 @@ class AdminActivity : AppCompatActivity() {
             )
             val songsList = mutableListOf<com.example.syncedn.data.model.ServiceSong>()
             val draftSongsArr = draftSongs()
+            val allCachedSongs = TeamRepository.getCachedSongs(activeCode, preferences)
             repeat(draftSongsArr.length()) { idx ->
-                val songTitle = draftSongsArr.getString(idx)
+                val raw = draftSongsArr.get(idx)
+                val songObj = if (raw is org.json.JSONObject) raw else try { org.json.JSONObject(raw.toString()) } catch (_: Exception) { null }
+                val songTitle = (songObj?.optString("title") ?: raw.toString()).trim()
+                val cachedSong = allCachedSongs.find { it.title.equals(songTitle, true) }
                 val songData = try { org.json.JSONObject(preferences.getString("songData_$songTitle", "{}").orEmpty()) } catch (_: Exception) { org.json.JSONObject() }
                 songsList.add(com.example.syncedn.data.model.ServiceSong(
                     title = songTitle,
-                    artist = songData.optString("artist", songCatalog().find { it.first == songTitle }?.second ?: ""),
-                    key = songData.optString("key", "C"),
-                    bpm = songData.optInt("bpm", 74)
+                    artist = songObj?.optString("artist")?.ifBlank { cachedSong?.artist.orEmpty() }?.ifBlank { songData.optString("artist", songCatalog().find { it.first == songTitle }?.second ?: "") } ?: "",
+                    key = songObj?.optString("key")?.ifBlank { cachedSong?.key.orEmpty() }?.ifBlank { songData.optString("key", "C") } ?: "C",
+                    bpm = songObj?.optInt("bpm", 0)?.takeIf { it > 0 } ?: (cachedSong?.bpm ?: songData.optInt("bpm", 74))
                 ))
             }
             val draftCreatedAt = leaderDraft.optLong("createdAt", 0L)
@@ -2541,6 +2592,8 @@ class AdminActivity : AppCompatActivity() {
         setPadding(dp(16), dp(16), dp(16), dp(16))
         background = bg(Color.WHITE, 16, stroke)
         elevation = dp(3).toFloat()
+        outlineProvider = android.view.ViewOutlineProvider.BACKGROUND
+        clipToOutline = true
     }
     private fun memberPage(title: String, back: String, tab: String? = null,
                            body: (LinearLayout) -> Unit): View {
@@ -3013,15 +3066,19 @@ class AdminActivity : AppCompatActivity() {
         val basePitch = ChordSheet.keyPitch(originalKey).coerceAtLeast(0)
         val roots = listOf("C", "Db", "D", "Eb", "E", "F", "F#", "G", "Ab", "A", "Bb", "B")
         val minor = originalKey.endsWith("m") || originalKey.endsWith(" minor")
-        val showChords = true
-        val sheet = (currentSong?.sheet?.ifBlank { currentSong.lyrics } ?: savedSong.optString("sheet", savedSong.optString("lyrics"))).ifBlank {
+        val sheetRaw = (currentSong?.sheet?.ifBlank { currentSong.lyrics } ?: savedSong.optString("sheet", savedSong.optString("lyrics"))).ifBlank {
             "[Verse]\n[C]Add your licensed lyrics here.\n\n[Chorus]\n[Am]Add chorus lyrics here [F][G]"
         }
+        val sheet = ChordSheet.formatStanzas(sheetRaw)
+        val hasChordsInSheet = ChordSheet.hasChords(sheet)
+        val showChords = hasChordsInSheet
         val tempo = currentSong?.bpm?.toString() ?: savedSong.optString("bpm", "74")
         var offset = ((preferences.getInt("chord_transpose_$selectedSong", 0) % 12) + 12) % 12
         val key = text("", 13, purple, true)
-        val sheetText = text("", 13, navy).apply {
-            if (showChords) typeface = Typeface.MONOSPACE
+        val maxLineLen = sheet.lines().maxOfOrNull { it.length } ?: 0
+        val sheetText = text("", if (hasChordsInSheet && maxLineLen > 40) 12 else 13, navy).apply {
+            if (hasChordsInSheet) typeface = Typeface.MONOSPACE
+            setLineSpacing(dp(4).toFloat(), 1.18f)
             setTextIsSelectable(true)
         }
         val chordButtons = mutableMapOf<String, TextView>()
@@ -3080,9 +3137,13 @@ class AdminActivity : AppCompatActivity() {
         col.add(panel().apply {
             if(showChords) {
                 add(android.widget.HorizontalScrollView(this@AdminActivity).apply {
-                    addView(sheetText, FrameLayout.LayoutParams(-2,-2))
+                    isFillViewport = true
+                    clipToPadding = true
+                    addView(sheetText, FrameLayout.LayoutParams(-2, -2))
                 })
-            } else add(sheetText)
+            } else {
+                add(sheetText, -1, -2)
+            }
         }); col.space(24)
         renderTarget((basePitch + offset) % 12)
         col.add(text("Reference Link", 13, navy, true)); col.space(10)

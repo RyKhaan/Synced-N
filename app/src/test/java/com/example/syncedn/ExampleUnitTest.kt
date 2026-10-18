@@ -1275,6 +1275,60 @@ class ExampleUnitTest {
         assertEquals(70, goodness.bpm)
     }
 
+    @Test
+    fun testChordSheetHasChordsAndStanzaFormatting() {
+        val chordSheet = "[Verse 1]\n[G]Let everything that has breath\nPraise the Lord\n[Chorus]\n[Em]Praise the Lord"
+        assertTrue(com.example.syncedn.ChordSheet.hasChords(chordSheet))
+
+        val plainLyrics = "I just wanna speak the name of Jesus\nOver every heart and every mind\n'Cause I know there is peace within Your presence"
+        assertFalse(com.example.syncedn.ChordSheet.hasChords(plainLyrics))
+
+        val unspacedSections = "Verse 1\nLine 1\nChorus\nLine 2\nBridge\nLine 3"
+        val formatted = com.example.syncedn.ChordSheet.formatStanzas(unspacedSections)
+        assertTrue("Formatted text should have double newlines before Chorus", formatted.contains("\n\nChorus"))
+        assertTrue("Formatted text should have double newlines before Bridge", formatted.contains("\n\nBridge"))
+    }
+
+    @Test
+    fun testSongCatalogPreservesSeedsWhenCustomSongAdded() {
+        val prefs = FakePreferences()
+        val repo = com.example.syncedn.data.database.TeamRepository
+        val code = "TESTTEAM"
+
+        // 1. Initial cached songs should contain 7 seeds
+        val initial = repo.getCachedSongs(code, prefs)
+        assertEquals(7, initial.size)
+
+        // 2. Add custom song "I Speak Jesus"
+        val customSong = com.example.syncedn.data.model.SongData(
+            id = "custom_speak_jesus",
+            teamCode = code,
+            title = "I Speak Jesus",
+            artist = "Charity Gayle",
+            key = "E",
+            bpm = 74,
+            sheet = "I just wanna speak the name of Jesus",
+            lyrics = "I just wanna speak the name of Jesus"
+        )
+        repo.saveSongLocally(code, customSong, prefs)
+
+        // 3. getCachedSongs must now contain 8 songs (custom song + all 7 original seeds)
+        val updated = repo.getCachedSongs(code, prefs)
+        assertEquals(8, updated.size)
+        assertTrue(updated.any { it.title == "I Speak Jesus" })
+        assertTrue(updated.any { it.title == "Praise" })
+        assertTrue(updated.any { it.title == "Trust in God" })
+        assertTrue(updated.any { it.title == "Way Maker" })
+        assertTrue(updated.any { it.title == "Gratitude" })
+
+        // 4. Deleting a song marks it deleted
+        repo.deleteSong(code, "seed_praise", prefs)
+        val afterDelete = repo.getCachedSongs(code, prefs)
+        assertEquals(7, afterDelete.size)
+        assertFalse(afterDelete.any { it.title == "Praise" })
+        assertTrue(afterDelete.any { it.title == "I Speak Jesus" })
+    }
+
     private class FakePreferences : android.content.SharedPreferences {
         private val map = mutableMapOf<String, Any?>()
 

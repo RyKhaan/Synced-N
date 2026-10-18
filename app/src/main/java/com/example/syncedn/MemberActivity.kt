@@ -1678,6 +1678,8 @@ open class MemberActivity : AppCompatActivity() {
         setPadding(dp(16), dp(16), dp(16), dp(16))
         background = bg(Color.WHITE, 16, stroke)
         elevation = dp(3).toFloat()
+        outlineProvider = android.view.ViewOutlineProvider.BACKGROUND
+        clipToOutline = true
     }
     private fun memberPage(title: String, back: String, tab: String? = null,
                            body: (LinearLayout) -> Unit): View {
@@ -2303,15 +2305,20 @@ open class MemberActivity : AppCompatActivity() {
         val basePitch = ChordSheet.keyPitch(originalKey).coerceAtLeast(0)
         val roots = listOf("C", "Db", "D", "Eb", "E", "F", "F#", "G", "Ab", "A", "Bb", "B")
         val minor = originalKey.endsWith("m") || originalKey.endsWith(" minor")
-        val showChords = ChordSheet.isInstrumentalist(songAssignedRoles())
-        val sheet = (currentSong?.sheet?.ifBlank { currentSong.lyrics } ?: savedSong.optString("sheet", savedSong.optString("lyrics"))).ifBlank {
+        val sheetRaw = (currentSong?.sheet?.ifBlank { currentSong.lyrics } ?: savedSong.optString("sheet", savedSong.optString("lyrics"))).ifBlank {
             "[Verse]\n[C]Add your licensed lyrics here.\n\n[Chorus]\n[Am]Add chorus lyrics here [F][G]"
         }
+        val sheet = ChordSheet.formatStanzas(sheetRaw)
+        val hasChordsInSheet = ChordSheet.hasChords(sheet)
+        val isInstrumentalist = ChordSheet.isInstrumentalist(songAssignedRoles())
+        val showChords = isInstrumentalist && hasChordsInSheet
         val tempo = currentSong?.bpm?.toString() ?: savedSong.optString("bpm", "74")
         var offset = ((preferences.getInt("chord_transpose_$selectedSong", 0) % 12) + 12) % 12
         val key = text("", 13, purple, true)
-        val sheetText = text("", 13, navy).apply {
+        val maxLineLen = sheet.lines().maxOfOrNull { it.length } ?: 0
+        val sheetText = text("", if (showChords && maxLineLen > 40) 12 else 13, navy).apply {
             if (showChords) typeface = Typeface.MONOSPACE
+            setLineSpacing(dp(4).toFloat(), 1.18f)
             setTextIsSelectable(true)
         }
         val chordButtons = mutableMapOf<String, TextView>()
@@ -2368,9 +2375,13 @@ open class MemberActivity : AppCompatActivity() {
         col.add(panel().apply {
             if(showChords) {
                 add(android.widget.HorizontalScrollView(this@MemberActivity).apply {
-                    addView(sheetText, FrameLayout.LayoutParams(-2,-2))
+                    isFillViewport = true
+                    clipToPadding = true
+                    addView(sheetText, FrameLayout.LayoutParams(-2, -2))
                 })
-            } else add(sheetText)
+            } else {
+                add(sheetText, -1, -2)
+            }
         }); col.space(24)
         renderTarget((basePitch + offset) % 12)
         col.add(text("Reference Link", 13, navy, true)); col.space(10)
@@ -2385,11 +2396,39 @@ open class MemberActivity : AppCompatActivity() {
 
     private fun lineupView(): View = memberPage("Song Lineup", "service") { col ->
         col.add(text(selectedService.ifBlank { "Sunday Worship Service" }, 13, navy, true)); col.space(20)
-        lineupSongs.forEachIndexed { index, title ->
+        val activeCode = preferences.getString("teamCode", "").orEmpty()
+        val allCatalogSongs = TeamRepository.getCachedSongs(activeCode, preferences)
+        lineupSongs.forEachIndexed { index, rawItem ->
+            val songObj = try { org.json.JSONObject(rawItem) } catch (_: Exception) { null }
+            val title = (songObj?.optString("title") ?: rawItem).trim()
+            val matched = allCatalogSongs.find { it.title.equals(title, true) }
+            val artist = songObj?.optString("artist").orEmpty().ifBlank { matched?.artist.orEmpty() }
+            val key = songObj?.optString("key").orEmpty().ifBlank { matched?.key.orEmpty() }
+            val bpm = songObj?.optInt("bpm", 0)?.takeIf { it > 0 } ?: matched?.bpm?.takeIf { it > 0 }
+
+            val subtitleParts = mutableListOf<String>()
+            if (artist.isNotBlank()) subtitleParts.add(artist)
+            if (key.isNotBlank()) subtitleParts.add("Key: $key")
+            if (bpm != null && bpm > 0) subtitleParts.add("$bpm BPM")
+            val subtitleText = subtitleParts.joinToString(" • ")
+
             col.add(panel().apply {
                 val row = horizontal()
                 row.add(text((index + 1).toString() + ".", 14, navy, true), 28, 48)
-                row.add(text(title, 14, navy, true), 0, -2, 1f)
+                row.add(vertical().apply {
+                    setPadding(dp(4), 0, dp(8), 0)
+                    add(text(title, 14, navy, true))
+                    if (subtitleText.isNotBlank()) {
+                        space(3)
+                        add(text(subtitleText, 11, Color.GRAY))
+                    }
+                    isClickable = true
+                    setOnClickListener {
+                        songDetailsBack = "lineup"
+                        selectedSong = title
+                        navigate("songDetails")
+                    }
+                }, 0, -2, 1f)
                 row.add(text("⋮", 24, navy, centered = true).apply {
                     contentDescription = "Reorder $title"; isFocusable = true
                     setOnClickListener {
@@ -2403,13 +2442,6 @@ open class MemberActivity : AppCompatActivity() {
                     }
                 }, 48, 48)
                 add(row)
-                isClickable = true
-                isFocusable = true
-                setOnClickListener {
-                    songDetailsBack = "lineup"
-                    selectedSong = title
-                    navigate("songDetails")
-                }
             })
             col.space(12)
         }

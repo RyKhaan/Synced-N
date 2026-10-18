@@ -63,9 +63,45 @@ public final class ChordSheet {
         }
         return found;
     }
+
+    public static boolean hasChords(String source) {
+        if (source == null || source.trim().isEmpty()) return false;
+        Matcher match = INLINE.matcher(source);
+        while (match.find()) {
+            if (isChord(match.group(1))) return true;
+        }
+        for (String line : source.replace("\r", "").split("\n", -1)) {
+            if (chordLine(line)) return true;
+        }
+        return false;
+    }
+
+    public static String formatStanzas(String source) {
+        if (source == null) return "";
+        String[] lines = source.replace("\r", "").split("\n", -1);
+        StringBuilder result = new StringBuilder();
+        Pattern sectionHeader = Pattern.compile("^(?:\\[?(?:verse|chorus|bridge|pre-chorus|intro|outro|vamp|hook|interlude|tag|ending)\\s*\\d*\\s*[\\]:]?)$", Pattern.CASE_INSENSITIVE);
+        for (int i = 0; i < lines.length; i++) {
+            String line = lines[i];
+            String trimmed = line.trim();
+            if (sectionHeader.matcher(trimmed).matches()) {
+                if (result.length() > 0 && !result.toString().endsWith("\n\n")) {
+                    if (result.toString().endsWith("\n")) result.append('\n');
+                    else result.append("\n\n");
+                }
+                result.append(line);
+            } else {
+                if (result.length() > 0) result.append('\n');
+                result.append(line);
+            }
+        }
+        return result.toString().replaceAll("\n{3,}", "\n\n").trim();
+    }
+
     public static String render(String source, int steps, boolean lyricsOnly, boolean flats) {
+        String formatted = formatStanzas(source);
         List<String> output=new ArrayList<>();
-        for (String line : source.replace("\r","").split("\n",-1)) {
+        for (String line : formatted.split("\n",-1)) {
             Matcher match=INLINE.matcher(line);
             StringBuilder lyrics=new StringBuilder();
             StringBuilder chords=new StringBuilder();
