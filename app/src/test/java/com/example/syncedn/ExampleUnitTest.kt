@@ -1404,6 +1404,58 @@ class ExampleUnitTest {
         assertTrue("C shifted by 2 semitones must become D", transposedD.contains("D") && transposedD.contains("A"))
     }
 
+    @Test
+    fun testChordPaletteAndSectionSplitting() {
+        // 1. Test getChordPalette
+        val cPalette = com.example.syncedn.ChordSheet.getChordPalette("C")
+        assertTrue(cPalette.contains("C"))
+        assertTrue(cPalette.contains("F"))
+        assertTrue(cPalette.contains("G"))
+        assertTrue(cPalette.contains("Am"))
+        assertTrue(cPalette.contains("Dm"))
+        assertTrue(cPalette.contains("Em"))
+
+        val dmPalette = com.example.syncedn.ChordSheet.getChordPalette("Dm")
+        assertTrue(dmPalette.contains("Dm"))
+        assertTrue(dmPalette.contains("Bb"))
+        assertTrue(dmPalette.contains("F"))
+        assertTrue(dmPalette.contains("C"))
+        assertTrue(dmPalette.contains("Gm"))
+        assertTrue(dmPalette.contains("A7"))
+
+        // 2. Test splitSections
+        val rawSong = """
+            [Verse 1]
+            [Dm]Burn the ships, cut the [Bb]ties
+
+            [Chorus]
+            [F]Step into the [C]light
+
+            [Verse 2]
+            [Dm]Out of the shadows [Bb]into the day
+        """.trimIndent()
+
+        val sections = com.example.syncedn.ChordSheet.splitSections(rawSong)
+        assertEquals(3, sections.size)
+        assertEquals("[Verse 1]", sections[0].first)
+        assertTrue(sections[0].second.contains("[Dm]Burn the ships"))
+        assertEquals("[Chorus]", sections[1].first)
+        assertTrue(sections[1].second.contains("[F]Step into the [C]light"))
+        assertEquals("[Verse 2]", sections[2].first)
+        assertTrue(sections[2].second.contains("[Dm]Out of the shadows"))
+
+        // 3. Test assembleSections
+        val assembled = com.example.syncedn.ChordSheet.assembleSections(sections)
+        assertTrue(assembled.contains("[Verse 1]\n[Dm]Burn the ships, cut the [Bb]ties"))
+        assertTrue(assembled.contains("[Chorus]\n[F]Step into the [C]light"))
+        assertTrue(assembled.contains("[Verse 2]\n[Dm]Out of the shadows [Bb]into the day"))
+
+        // 4. Test rendering of the assembled song
+        val rendered = com.example.syncedn.ChordSheet.render(assembled, 0, false, true)
+        assertTrue("Rendered must put chords above lyrics", rendered.contains("Dm") && rendered.contains("Burn the ships"))
+    }
+
+
     private class FakePreferences : android.content.SharedPreferences {
         private val map = mutableMapOf<String, Any?>()
 

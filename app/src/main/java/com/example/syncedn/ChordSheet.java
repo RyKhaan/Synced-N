@@ -5,9 +5,11 @@ import java.util.List;
 import java.util.Locale;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import kotlin.Pair;
 
 /** Pure Java chord parser: no Android dependencies and no changes to stored source text. */
 public final class ChordSheet {
+
     private ChordSheet() {}
     private static final String[] SHARPS = {"C","C#","D","D#","E","F","F#","G","G#","A","A#","B"};
     private static final String[] FLATS = {"C","Db","D","Eb","E","F","Gb","G","Ab","A","Bb","B"};
@@ -226,4 +228,100 @@ public final class ChordSheet {
         boolean vocal=text.contains("vocal") || text.contains("singer") || text.contains("choir");
         return text.matches(".*\\bbass\\b.*") && (!vocal || text.contains("/") || text.contains(","));
     }
+
+    public static List<String> getChordPalette(String key) {
+        List<String> list = new ArrayList<>();
+        if (key == null || key.trim().isEmpty()) {
+            key = "C";
+        }
+        String cleanKey = key.trim();
+        boolean isMinor = cleanKey.endsWith("m") && !cleanKey.toLowerCase(Locale.ROOT).endsWith("maj") && !cleanKey.toLowerCase(Locale.ROOT).endsWith("major");
+        boolean flats = cleanKey.contains("b") || cleanKey.equalsIgnoreCase("F") || cleanKey.equalsIgnoreCase("Dm");
+        String[] names = flats ? FLATS : SHARPS;
+        int rootPitch = keyPitch(cleanKey);
+        if (rootPitch < 0) rootPitch = 0; // fallback C
+
+        if (isMinor) {
+            // Natural / harmonic minor: i, ii°, III, iv, v, V7, VI, VII
+            list.add(names[rootPitch] + "m");
+            list.add(names[(rootPitch + 2) % 12] + "dim");
+            list.add(names[(rootPitch + 3) % 12]);
+            list.add(names[(rootPitch + 5) % 12] + "m");
+            list.add(names[(rootPitch + 7) % 12] + "m");
+            list.add(names[(rootPitch + 7) % 12] + "7");
+            list.add(names[(rootPitch + 8) % 12]);
+            list.add(names[(rootPitch + 10) % 12]);
+        } else {
+            // Major: I, ii, iii, IV, V, vi, vii°, V7
+            list.add(names[rootPitch]);
+            list.add(names[(rootPitch + 2) % 12] + "m");
+            list.add(names[(rootPitch + 4) % 12] + "m");
+            list.add(names[(rootPitch + 5) % 12]);
+            list.add(names[(rootPitch + 7) % 12]);
+            list.add(names[(rootPitch + 9) % 12] + "m");
+            list.add(names[(rootPitch + 11) % 12] + "dim");
+            list.add(names[(rootPitch + 7) % 12] + "7");
+        }
+        return list;
+    }
+
+    public static List<Pair<String, String>> splitSections(String source) {
+        List<Pair<String, String>> result = new ArrayList<>();
+        if (source == null || source.trim().isEmpty()) {
+            return result;
+        }
+        String formatted = formatStanzas(source);
+        String[] lines = formatted.split("\n", -1);
+        String currentHeader = "";
+        StringBuilder currentBody = new StringBuilder();
+        Pattern headerPattern = Pattern.compile("^\\s*(\\[[^\\]\\r\\n]+\\])\\s*$");
+
+        for (String line : lines) {
+            Matcher m = headerPattern.matcher(line);
+            if (m.matches()) {
+                if (!currentHeader.isEmpty() || currentBody.length() > 0) {
+                    String h = currentHeader.isEmpty() ? "[Verse 1]" : currentHeader;
+                    result.add(new Pair<>(h, currentBody.toString().trim()));
+                    currentBody.setLength(0);
+                }
+                currentHeader = m.group(1).trim();
+            } else {
+                if (currentHeader.isEmpty() && line.trim().length() > 0) {
+                    currentHeader = "[Verse 1]";
+                }
+                if (currentBody.length() > 0) {
+                    currentBody.append("\n");
+                }
+                currentBody.append(line);
+            }
+        }
+        if (!currentHeader.isEmpty() || currentBody.length() > 0) {
+            String h = currentHeader.isEmpty() ? "[Verse 1]" : currentHeader;
+            result.add(new Pair<>(h, currentBody.toString().trim()));
+        }
+        return result;
+    }
+
+    public static String assembleSections(List<Pair<String, String>> sections) {
+        if (sections == null || sections.isEmpty()) {
+            return "";
+        }
+        StringBuilder sb = new StringBuilder();
+        for (Pair<String, String> section : sections) {
+            String header = section.getFirst() == null ? "" : section.getFirst().trim();
+            String body = section.getSecond() == null ? "" : section.getSecond().trim();
+            if (header.isEmpty() && body.isEmpty()) continue;
+            if (!header.startsWith("[")) header = "[" + header;
+            if (!header.endsWith("]")) header = header + "]";
+            if (sb.length() > 0) {
+                sb.append("\n\n");
+            }
+            sb.append(header);
+            if (!body.isEmpty()) {
+                sb.append("\n").append(body);
+            }
+        }
+        return sb.toString();
+    }
 }
+
