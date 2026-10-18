@@ -87,5 +87,36 @@ data class SongData(
         fun resolveCreatorUid(existingCreator: String?, fallbackUid: String): String {
             return existingCreator?.takeIf { it.isNotBlank() } ?: fallbackUid
         }
+
+        /**
+         * Extracts the 11-character YouTube video ID from various YouTube URL formats:
+         * - https://www.youtube.com/watch?v=VIDEO_ID
+         * - https://youtu.be/VIDEO_ID
+         * - https://www.youtube.com/shorts/VIDEO_ID
+         * - https://www.youtube.com/embed/VIDEO_ID
+         * - http://...
+         */
+        fun extractYoutubeVideoId(url: String?): String? {
+            if (url.isNullOrBlank()) return null
+            val clean = url.trim()
+            val pattern = Regex(
+                """(?:https?://)?(?:www\.|m\.)?(?:youtube\.com/(?:watch\?(?:.*&)?v=|embed/|v/|shorts/)|youtu\.be/)([\w-]{11})""",
+                RegexOption.IGNORE_CASE
+            )
+            val match = pattern.find(clean)
+            if (match != null) {
+                return match.groupValues[1]
+            }
+            val fallback = Regex("""[?&]v=([\w-]{11})""").find(clean)
+            return fallback?.groupValues?.get(1)
+        }
+
+        /**
+         * Returns the high-quality YouTube thumbnail image URL (hqdefault.jpg) for a YouTube reference URL or video ID.
+         */
+        fun getYoutubeThumbnailUrl(url: String?): String? {
+            val videoId = extractYoutubeVideoId(url) ?: return null
+            return "https://img.youtube.com/vi/$videoId/hqdefault.jpg"
+        }
     }
 }

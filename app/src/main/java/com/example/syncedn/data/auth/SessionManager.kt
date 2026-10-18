@@ -35,6 +35,14 @@ object SessionManager {
         try {
             AuthManager.signOut()
         } catch (_: Exception) {}
+        clearPreferencesOnly(preferences)
+    }
+
+    /**
+     * Clears cached session fields from SharedPreferences and in-memory caches
+     * for a fresh user sign-in or registration without signing out of Firebase Auth.
+     */
+    fun clearPreferencesOnly(preferences: SharedPreferences) {
         TeamRepository.clearCache()
         preferences.edit {
             remove(KEY_USER_ID)

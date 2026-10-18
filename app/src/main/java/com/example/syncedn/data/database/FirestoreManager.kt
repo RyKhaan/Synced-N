@@ -25,12 +25,15 @@ object FirestoreManager {
                 .document(profile.uid)
                 .set(profile.toMap())
                 .addOnSuccessListener {
+                    android.util.Log.d("FirestoreManager", "Successfully saved user profile ${profile.uid} in Firestore")
                     onComplete(Result.success(Unit))
                 }
                 .addOnFailureListener { exception ->
+                    android.util.Log.e("FirestoreManager", "Failed to save user profile ${profile.uid} in Firestore: ${exception.message}", exception)
                     onComplete(Result.failure(exception))
                 }
         } catch (e: Exception) {
+            android.util.Log.e("FirestoreManager", "Exception saving user profile ${profile.uid}: ${e.message}", e)
             onComplete(Result.failure(e))
         }
     }
@@ -219,12 +222,13 @@ object FirestoreManager {
         registerLocalTeam(generatedCode, cleanTeamName)
 
         val effectiveLeaderUid = com.example.syncedn.data.auth.AuthManager.currentUser?.uid?.takeIf { it.isNotBlank() } ?: leaderUid
+        val effectiveLeaderName = leaderName.trim().ifBlank { "Leader" }
 
         val teamData = mapOf(
             "teamCode" to generatedCode,
             "teamName" to cleanTeamName,
             "leaderUid" to effectiveLeaderUid,
-            "leaderName" to leaderName,
+            "leaderName" to effectiveLeaderName,
             "createdAt" to System.currentTimeMillis()
         )
 
@@ -233,16 +237,21 @@ object FirestoreManager {
                 .document(generatedCode)
                 .set(teamData)
                 .addOnSuccessListener {
-                    updateUserRoleAndTeam(effectiveLeaderUid, "Leader", cleanTeamName, generatedCode)
+                    android.util.Log.d("FirestoreManager", "Team $generatedCode successfully created in Firestore")
+                    updateUserRoleAndTeam(effectiveLeaderUid, "Leader", cleanTeamName, generatedCode) {
+                        onComplete(Result.success(generatedCode))
+                    }
                 }
-                .addOnFailureListener {
+                .addOnFailureListener { exception ->
+                    android.util.Log.e("FirestoreManager", "Failed to create team in Firestore: ${exception.message}", exception)
                     updateUserRoleAndTeam(effectiveLeaderUid, "Leader", cleanTeamName, generatedCode)
+                    onComplete(Result.success(generatedCode))
                 }
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            android.util.Log.e("FirestoreManager", "Exception creating team: ${e.message}", e)
             updateUserRoleAndTeam(effectiveLeaderUid, "Leader", cleanTeamName, generatedCode)
+            onComplete(Result.success(generatedCode))
         }
-
-        onComplete(Result.success(generatedCode))
     }
 
     /**
@@ -357,25 +366,21 @@ object FirestoreManager {
                 db.collection(USERS_COLLECTION)
                     .document(effectiveUid)
                     .set(updates, com.google.firebase.firestore.SetOptions.merge())
-            } catch (_: Exception) {
-                // Synced in background
-            }
-        }
-        if (cleanEmail.isNotBlank()) {
-            try {
-                db.collection(USERS_COLLECTION)
-                    .whereEqualTo("email", cleanEmail)
-                    .get()
-                    .addOnSuccessListener { querySnap ->
-                        for (doc in querySnap.documents) {
-                            doc.reference.set(updates, com.google.firebase.firestore.SetOptions.merge())
-                        }
+                    .addOnSuccessListener {
+                        android.util.Log.d("FirestoreManager", "Successfully updated user $effectiveUid in Firestore: $updates")
+                        onComplete(Result.success(Unit))
                     }
-            } catch (_: Exception) {
-                // Synced in background
+                    .addOnFailureListener { e ->
+                        android.util.Log.e("FirestoreManager", "Failed to update user $effectiveUid in Firestore: ${e.message}", e)
+                        onComplete(Result.failure(e))
+                    }
+            } catch (e: Exception) {
+                android.util.Log.e("FirestoreManager", "Exception updating user $effectiveUid: ${e.message}", e)
+                onComplete(Result.failure(e))
             }
+        } else {
+            onComplete(Result.success(Unit))
         }
-        onComplete(Result.success(Unit))
     }
 
     const val PASSWORD_RESETS_COLLECTION = "password_resets"

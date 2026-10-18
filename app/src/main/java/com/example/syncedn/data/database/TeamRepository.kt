@@ -1042,10 +1042,11 @@ object TeamRepository {
                 teamCode = code,
                 title = "Praise",
                 artist = "Elevation Worship",
-                key = "C",
-                bpm = 74,
-                sheet = "[Verse 1]\n[C]Let everything that has breath\n[F]Praise the Lord\n\n[Chorus]\n[C]Praise the Lord, oh my soul\n[Am]Praise the Lord, oh my soul\n[F]        [G]        [C]",
-                lyrics = "Let everything that has breath\nPraise the Lord\n\nPraise the Lord, oh my soul\nPraise the Lord, oh my soul"
+                key = "G",
+                bpm = 127,
+                sheet = "[Verse 1]\n[G]Let everything that has breath\nPraise the Lord, [C]praise the Lord\n[G]I'll praise in the valley, praise on the mountain\n[C]I'll praise when I'm sure, praise when I'm doubting\n\n[Chorus]\n[G]Praise the Lord, oh my soul\n[Em]Praise the Lord, oh my soul\n[C]I won't be quiet, my [D]rock and salvation\n[G]Praise the Lord!",
+                lyrics = "Let everything that has breath\nPraise the Lord, praise the Lord\nI'll praise in the valley, praise on the mountain\nI'll praise when I'm sure, praise when I'm doubting\n\nPraise the Lord, oh my soul\nPraise the Lord, oh my soul\nI won't be quiet, my rock and salvation\nPraise the Lord!",
+                referenceUrl = "https://www.youtube.com/watch?v=f2OXgn6mHHY"
             ),
             SongData(
                 id = "seed_trust_in_god",
@@ -1054,18 +1055,20 @@ object TeamRepository {
                 artist = "Elevation Worship",
                 key = "C",
                 bpm = 74,
-                sheet = "[Verse 1]\n[C]Blessed assurance, Jesus is mine\n[F]Oh what a foretaste of glory divine\n\n[Chorus]\n[C]I trust in God, my Savior\n[Am]The one who will never fail\n[F]        [G]        [C]",
-                lyrics = "Blessed assurance, Jesus is mine\nOh what a foretaste of glory divine\n\nI trust in God, my Savior\nThe one who will never fail"
+                sheet = "[Verse 1]\n[C]Blessed assurance, [F]Jesus is [C]mine\n[Am]Oh what a [G]foretaste of [F]glory divine\n[C]Heir of salvation, [F]purchase of [C]God\n[Am]Born of His [G]Spirit, washed [F]in His blood\n\n[Chorus]\n[C]I trust in God, my Savior\n[Am]The One who will never fail\n[F]He will never fail, [G]He will never [C]fail",
+                lyrics = "Blessed assurance, Jesus is mine\nOh what a foretaste of glory divine\nHeir of salvation, purchase of God\nBorn of His Spirit, washed in His blood\n\nI trust in God, my Savior\nThe One who will never fail\nHe will never fail, He will never fail",
+                referenceUrl = "https://www.youtube.com/watch?v=y7495tY_k_8"
             ),
             SongData(
                 id = "seed_way_maker",
                 teamCode = code,
                 title = "Way Maker",
                 artist = "Sinach",
-                key = "C",
-                bpm = 74,
-                sheet = "[Verse]\n[F]You are here, moving in our midst\n[C]I worship You, I worship You\n\n[Chorus]\n[F]Way maker, miracle worker\n[C]Promise keeper, light in the darkness\n[G]My God, that is who You are",
-                lyrics = "You are here, moving in our midst\nI worship You, I worship You\n\nWay maker, miracle worker\nPromise keeper, light in the darkness\nMy God, that is who You are"
+                key = "E",
+                bpm = 68,
+                sheet = "[Verse 1]\n[E]You are here, moving in our midst\n[B]I worship You, I worship You\n[C#m]You are here, working in this place\n[A]I worship You, I worship You\n\n[Chorus]\n[E]Way maker, miracle worker, [B]promise keeper\n[C#m]Light in the darkness, my God, [A]that is who You [E]are",
+                lyrics = "You are here, moving in our midst\nI worship You, I worship You\nYou are here, working in this place\nI worship You, I worship You\n\nWay maker, miracle worker, promise keeper\nLight in the darkness, my God, that is who You are",
+                referenceUrl = "https://www.youtube.com/watch?v=n4XWfwLHeLM"
             ),
             SongData(
                 id = "seed_gratitude",
@@ -1074,8 +1077,9 @@ object TeamRepository {
                 artist = "Brandon Lake",
                 key = "B",
                 bpm = 78,
-                sheet = "[Verse 1]\n[B]All my words are fall short\n[E]I got nothing new\n\n[Chorus]\n[B]So I throw up my hands and praise You again and again\n[G#m]Cause all that I have is a hallelujah\n[E]        [F#]        [B]",
-                lyrics = "All my words are fall short\nI got nothing new\n\nSo I throw up my hands and praise You again and again\nCause all that I have is a hallelujah"
+                sheet = "[Verse 1]\n[B]All my words fall short\n[E]I got nothing new\n[G#m]How could I express\n[F#]All my gratitude\n\n[Chorus]\n[B]So I throw up my hands and praise You again and again\n[G#m]'Cause all that I have is a hallelujah, [E]hallelujah\n[B]And I know it's not much, but I've nothing else fit for a King\n[G#m]Except for a heart singing hallelujah, [F#]hallelujah",
+                lyrics = "All my words fall short\nI got nothing new\nHow could I express\nAll my gratitude\n\nSo I throw up my hands and praise You again and again\n'Cause all that I have is a hallelujah, hallelujah\nAnd I know it's not much, but I've nothing else fit for a King\nExcept for a heart singing hallelujah, hallelujah",
+                referenceUrl = "https://www.youtube.com/watch?v=dQdfs5S6jyA"
             ),
             SongData(
                 id = "seed_goodness_of_god",
@@ -1084,8 +1088,9 @@ object TeamRepository {
                 artist = "Bethel Music",
                 key = "Ab",
                 bpm = 70,
-                sheet = "[Verse 1]\n[Ab]I love You, Lord, for Your mercy never fails me\n[Db]All my days, I've been held in Your hands\n\n[Chorus]\n[Db]All my life You have been faithful\n[Ab]All my life You have been so, so good\n[Db]        [Eb]        [Ab]",
-                lyrics = "I love You, Lord, for Your mercy never fails me\nAll my days, I've been held in Your hands\n\nAll my life You have been faithful\nAll my life You have been so, so good"
+                sheet = "[Verse 1]\n[Ab]I love You, Lord, for Your [Db]mercy never [Ab]fails me\n[Eb]All my [Fm]days, I've been [Db]held in Your [Eb]hands\nFrom the moment that I [Fm]wake up until I [Db]lay my [Ab]head\n[Db]I will sing of the [Eb]goodness of [Ab]God\n\n[Chorus]\n[Db]All my life You have been faithful\n[Ab]All my life You have been so, so good\n[Db]With every breath that I am [Ab]able\n[Db]I will sing of the [Eb]goodness of [Ab]God",
+                lyrics = "I love You, Lord, for Your mercy never fails me\nAll my days, I've been held in Your hands\nFrom the moment that I wake up until I lay my head\nI will sing of the goodness of God\n\nAll my life You have been faithful\nAll my life You have been so, so good\nWith every breath that I am able\nI will sing of the goodness of God",
+                referenceUrl = "https://www.youtube.com/watch?v=-f4MUKEVKaU"
             ),
             SongData(
                 id = "seed_build_my_life",
@@ -1094,8 +1099,9 @@ object TeamRepository {
                 artist = "Pat Barrett",
                 key = "G",
                 bpm = 68,
-                sheet = "[Verse 1]\n[G]Worthy of every song we could ever sing\n[C]Worthy of all the praise we could ever bring\n\n[Chorus]\n[C]Holy, there is no one like You\n[Am]There is none beside You\n[D]Open up my eyes in wonder",
-                lyrics = "Worthy of every song we could ever sing\nWorthy of all the praise we could ever bring\n\nHoly, there is no one like You\nThere is none beside You\nOpen up my eyes in wonder"
+                sheet = "[Verse 1]\n[G]Worthy of every song we could [C]ever sing\n[G]Worthy of all the praise we could [C]ever bring\n[G]Worthy of every breath we could [C]ever breathe\nWe live for [Am]You, [D]we live for [G]You\n\n[Chorus]\n[C]Holy, there is no one like [Am]You\nThere is none beside [G]You\nOpen up my eyes in [Em]wonder\nAnd [C]show me who You are and [Am]fill me\nWith Your heart and lead [G]me\nIn Your love to those [Em]around me",
+                lyrics = "Worthy of every song we could ever sing\nWorthy of all the praise we could ever bring\nWorthy of every breath we could ever breathe\nWe live for You, we live for You\n\nHoly, there is no one like You\nThere is none beside You\nOpen up my eyes in wonder\nAnd show me who You are and fill me\nWith Your heart and lead me\nIn Your love to those around me",
+                referenceUrl = "https://www.youtube.com/watch?v=Z32HiSuUY8o"
             ),
             SongData(
                 id = "seed_amazing_grace",
@@ -1104,8 +1110,9 @@ object TeamRepository {
                 artist = "John Newton",
                 key = "G",
                 bpm = 72,
-                sheet = "[Verse 1]\n[G]Amazing grace, how [C]sweet the [G]sound\nThat saved a [D]wretch like me\n[G]I once was lost, but [C]now am [G]found\nWas blind, but [D]now I [G]see",
-                lyrics = "Amazing grace, how sweet the sound\nThat saved a wretch like me\nI once was lost, but now am found\nWas blind, but now I see"
+                sheet = "[Verse 1]\n[G]Amazing grace, how [C]sweet the [G]sound\nThat saved a [D]wretch like me\n[G]I once was lost, but [C]now am [G]found\nWas blind, but [D]now I [G]see\n\n[Verse 2]\n'Twas [G]grace that taught my [C]heart to [G]fear\nAnd grace my [D]fears relieved\nHow [G]precious did that [C]grace ap[G]pear\nThe hour I [D]first be[G]lieved",
+                lyrics = "Amazing grace, how sweet the sound\nThat saved a wretch like me\nI once was lost, but now am found\nWas blind, but now I see\n\n'Twas grace that taught my heart to fear\nAnd grace my fears relieved\nHow precious did that grace appear\nThe hour I first believed",
+                referenceUrl = "https://www.youtube.com/watch?v=Jbe7OruLk8I"
             )
         )
     }
@@ -1125,6 +1132,8 @@ object TeamRepository {
             return synchronized(inMemory) { inMemory.toList() }
         }
 
+        val defaultSeeds = getDefaultSeedSongs(code)
+
         preferences?.getString("team_songs_$code", null)?.let { jsonStr ->
             if (jsonStr.isNotBlank() && jsonStr != "[]") {
                 try {
@@ -1138,7 +1147,19 @@ object TeamRepository {
                             val k = keys.next()
                             map[k] = obj.opt(k)
                         }
-                        list.add(SongData.fromMap(map))
+                        val parsed = SongData.fromMap(map)
+                        // If seed song was saved previously without referenceUrl or updated chords, backfill metadata
+                        val seedMatch = defaultSeeds.find { it.title.equals(parsed.title, ignoreCase = true) }
+                        val enriched = if (seedMatch != null && parsed.referenceUrl.isBlank()) {
+                            parsed.copy(
+                                referenceUrl = seedMatch.referenceUrl,
+                                key = if (parsed.key.isBlank() || parsed.key == "C") seedMatch.key else parsed.key,
+                                bpm = if (parsed.bpm == 74) seedMatch.bpm else parsed.bpm,
+                                sheet = if (parsed.sheet.isBlank() || parsed.sheet.contains("Add your licensed")) seedMatch.sheet else parsed.sheet,
+                                lyrics = if (parsed.lyrics.isBlank()) seedMatch.lyrics else parsed.lyrics
+                            )
+                        } else parsed
+                        list.add(enriched)
                     }
                     if (list.isNotEmpty()) {
                         cachedSongs[code] = java.util.Collections.synchronizedList(list)
@@ -1148,9 +1169,8 @@ object TeamRepository {
             }
         }
 
-        val seeds = getDefaultSeedSongs(code)
-        cachedSongs[code] = java.util.Collections.synchronizedList(seeds.toMutableList())
-        return seeds
+        cachedSongs[code] = java.util.Collections.synchronizedList(defaultSeeds.toMutableList())
+        return defaultSeeds
     }
 
     /**

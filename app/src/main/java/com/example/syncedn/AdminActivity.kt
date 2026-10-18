@@ -551,6 +551,7 @@ class AdminActivity : AppCompatActivity() {
                                 displayName = profile?.username?.ifBlank { emailStr.substringBefore("@") } ?: "Leader"
                                 val (userRole, userTeam, userTeamCode) = resolveUserTeamSession(profile, emailStr)
                                 teamName = userTeam
+                                SessionManager.clearPreferencesOnly(preferences)
                                 SessionManager.saveSessionProfile(preferences, profile, displayName, emailStr)
                                 fullName = preferences.getString(SessionManager.KEY_FULL_NAME, "").orEmpty()
                                 displayName = preferences.getString(SessionManager.KEY_USERNAME, displayName).orEmpty()
@@ -612,7 +613,7 @@ class AdminActivity : AppCompatActivity() {
                                 val registeredProfile = result.getOrNull()
                                 displayName = nameStr
                                 fullName = ""
-                                SessionManager.clearSession(preferences)
+                                SessionManager.clearPreferencesOnly(preferences)
                                 SessionManager.saveSessionProfile(preferences, registeredProfile, displayName, emailStr)
                                 preferences.edit {
                                     putString("role", "")
@@ -1084,8 +1085,12 @@ class AdminActivity : AppCompatActivity() {
     }
     private fun homeUpcomingRecord(): org.json.JSONObject? {
         val today = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).format(java.util.Date())
-        return localServices.filter { it.optString("status") == "Published" && it.optString("date") >= today }
-            .minByOrNull { it.optString("date") + it.optString("start") }
+        val published = localServices.filter { it.optString("status") == "Published" }
+        val upcoming = published.filter { it.optString("date") >= today }
+        if (upcoming.isNotEmpty()) {
+            return upcoming.minByOrNull { it.optString("date") + it.optString("start") }
+        }
+        return published.maxByOrNull { it.optString("date") + it.optString("start") }
     }
     private fun openHomeUpcoming() {
         val record = homeUpcomingRecord()
@@ -1733,10 +1738,11 @@ class AdminActivity : AppCompatActivity() {
     }
     private fun resetLeaderDraft() {
         activeServiceIndex = -1
-        leaderDraft = org.json.JSONObject().put("title", "").put("date", "2026-10-11")
+        val today = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).format(java.util.Date())
+        leaderDraft = org.json.JSONObject().put("title", "").put("date", today)
             .put("start", "09:00").put("end", "10:00").put("venue", "")
             .put("assignments", org.json.JSONArray())
-            .put("songs", org.json.JSONArray(listOf("Amazing Grace", "Way Maker", "Goodness of God", "Build My Life")))
+            .put("songs", org.json.JSONArray(listOf("Amazing Grace", "Way Maker", "Goodness of God", "Build My Life", "Praise")))
         saveLeaderDraft()
     }
     private fun saveLeaderDraft() {
@@ -2177,20 +2183,60 @@ class AdminActivity : AppCompatActivity() {
             }, 0, 48, 1f)
         })
     }
+    private fun formatBadgeDate(rawDate: String): String = try {
+        if (rawDate.contains("\n")) rawDate
+        else {
+            val sdf = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US)
+            val parsed = sdf.parse(rawDate)
+            if (parsed != null) {
+                val cal = java.util.Calendar.getInstance().apply { time = parsed }
+                val month = java.text.SimpleDateFormat("MMM", java.util.Locale.US).format(cal.time).uppercase()
+                val day = cal.get(java.util.Calendar.DAY_OF_MONTH)
+                "$month\n$day"
+            } else rawDate
+        }
+    } catch (_: Exception) { rawDate }
+
     private fun leaderScheduleCards(col: LinearLayout) {
+        val today = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).format(java.util.Date())
+        val hasUpcoming = localServices.any { it.optString("date") >= today && it.optString("status") == "Published" }
         localServices.forEachIndexed { index, record ->
-            val today = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).format(java.util.Date())
-            val isPast = record.optString("date") < today && record.optString("status") == "Published"
-            if (scheduleFilter == "Past" && !isPast || scheduleFilter == "Upcoming" && isPast) return@forEachIndexed
-            col.add(panel().apply {
-                add(text(record.optString("title"), 15, navy, true)); space(6)
-                add(text(record.optString("date") + " • " + leaderTime(record.optString("start")) + " – " + leaderTime(record.optString("end")), 12, navy))
-                space(5); add(text(record.optString("venue") + " • " + record.optString("status"), 11, purple, true))
-                isFocusable = true; setOnClickListener {
-                leaderDraft = org.json.JSONObject(record.toString()); activeServiceIndex = index
-                serviceWizard = false; serviceReturnPage = "schedule"; saveLeaderDraft(); navigate("service")
+            val date = record.optString("date")
+            val isPublished = record.optString("status") == "Published"
+            val isPast = date < today && isPublished
+            if (scheduleFilter == "Past" && !isPast) return@forEachIndexed
+            if (scheduleFilter == "Upcoming" && isPast && hasUpcoming) return@forEachIndexed
+
+            val title = record.optString("title", "Sunday Worship Service")
+            val badgeDate = formatBadgeDate(date)
+            val start = record.optString("start")
+            val end = record.optString("end")
+            val time = if (start.isNotBlank() && end.isNotBlank()) "${leaderTime(start)} – ${leaderTime(end)}"
+                       else if (start.isNotBlank()) leaderTime(start) else "6:00AM – 11:00AM"
+            val venue = record.optString("venue", "Main Sanctuary")
+            val status = record.optString("status")
+
+            val row = horizontal().apply {
+                background = bg(Color.WHITE, 20, if (preferences.getString("serviceDate", "") == date) purple else Color.rgb(230, 230, 235))
+                elevation = dp(3).toFloat(); setPadding(dp(8), dp(10), dp(12), dp(10))
+                add(text(badgeDate, 15, Color.WHITE, bold = true, centered = true).apply {
+                    background = GradientDrawable(GradientDrawable.Orientation.TL_BR,
+                        intArrayOf(purple, Color.rgb(167, 0, 214))).apply { cornerRadius = dp(14).toFloat() }
+                }, 60, 66)
+                add(vertical().apply {
+                    setPadding(dp(12), 0, dp(8), 0)
+                    add(text(title, 13, navy, true)); space(4); add(text(time, 11, navy))
+                    space(3); add(text("$venue • $status", 11, if (status == "Published") purple else Color.rgb(100, 100, 110), true))
+                }, 0, -2, 1f)
+                add(Symbol(this@AdminActivity, "arrow", Color.GRAY), 18, 24)
+                isClickable = true; isFocusable = true
+                setOnClickListener {
+                    leaderDraft = org.json.JSONObject(record.toString())
+                    activeServiceIndex = index
+                    serviceWizard = false; serviceReturnPage = "schedule"; saveLeaderDraft(); navigate("service")
+                }
             }
-            }); col.space(16)
+            col.add(row); col.space(16)
         }
     }
     private fun songCatalog(): List<Pair<String, String>> {
@@ -2856,15 +2902,64 @@ class AdminActivity : AppCompatActivity() {
             }); col.space(16)
         }
     }
-    private fun songCover(title: String): View = image("song_covers_source", "$title cover").apply {
-        val source = (drawable as android.graphics.drawable.BitmapDrawable).bitmap
-        val coverY = when (title) { "Praise" -> 210; "Trust in God" -> 320; "Way Maker" -> 430; else -> 540 }
-        setImageBitmap(bitmaps.getOrPut("song_cover_$title") {
-            Bitmap.createBitmap(source, 29, coverY, 120, 66)
-        })
-        scaleType = ImageView.ScaleType.CENTER_CROP
-        background = bg(navy, 6); outlineProvider = ViewOutlineProvider.BACKGROUND; clipToOutline = true
-        (drawable as? android.graphics.drawable.BitmapDrawable)?.setFilterBitmap(true)
+    private val youtubeThumbnailCache = java.util.concurrent.ConcurrentHashMap<String, Bitmap>()
+
+    private fun songCover(title: String, referenceUrl: String = ""): View {
+        val img = image("song_covers_source", "$title cover").apply {
+            scaleType = ImageView.ScaleType.CENTER_CROP
+            background = bg(navy, 6); outlineProvider = ViewOutlineProvider.BACKGROUND; clipToOutline = true
+            (drawable as? android.graphics.drawable.BitmapDrawable)?.setFilterBitmap(true)
+        }
+        val source = (img.drawable as? android.graphics.drawable.BitmapDrawable)?.bitmap
+        val defaultBitmap = if (source != null && !source.isRecycled) {
+            val coverY = when (title) { "Praise" -> 210; "Trust in God" -> 320; "Way Maker" -> 430; else -> 540 }
+            bitmaps.getOrPut("song_cover_$title") {
+                Bitmap.createBitmap(source, 29, coverY, 120, 66)
+            }
+        } else null
+
+        val videoId = com.example.syncedn.data.model.SongData.extractYoutubeVideoId(referenceUrl)
+        if (videoId != null) {
+            val cached = youtubeThumbnailCache[videoId]
+            if (cached != null && !cached.isRecycled) {
+                img.setImageBitmap(cached)
+            } else {
+                if (defaultBitmap != null) img.setImageBitmap(defaultBitmap)
+                img.tag = videoId
+                Thread {
+                    try {
+                        val thumbUrl = com.example.syncedn.data.model.SongData.getYoutubeThumbnailUrl(referenceUrl)
+                        if (thumbUrl != null) {
+                            val url = java.net.URL(thumbUrl)
+                            val conn = url.openConnection() as java.net.HttpURLConnection
+                            conn.connectTimeout = 4000
+                            conn.readTimeout = 4000
+                            conn.instanceFollowRedirects = true
+                            conn.connect()
+                            if (conn.responseCode == 200) {
+                                val stream = conn.inputStream
+                                val downloaded = BitmapFactory.decodeStream(stream)
+                                stream.close()
+                                if (downloaded != null) {
+                                    youtubeThumbnailCache[videoId] = downloaded
+                                    runOnUiThread {
+                                        if (img.tag == videoId) {
+                                            img.setImageBitmap(downloaded)
+                                        }
+                                    }
+                                }
+                            }
+                            conn.disconnect()
+                        }
+                    } catch (_: Exception) {}
+                }.start()
+            }
+        } else {
+            if (defaultBitmap != null) {
+                img.setImageBitmap(defaultBitmap)
+            }
+        }
+        return img
     }
     private fun songsView(): View = memberPage("Songs", songsReturnPage) { col ->
         if (isLeader) {
@@ -2880,10 +2975,13 @@ class AdminActivity : AppCompatActivity() {
             val matches = songs.filter { (title, artist) -> "$title $artist".contains(query, true) }
             if (matches.isEmpty()) results.add(text("No songs found.", 14, Color.GRAY))
             matches.forEach { (title, artist) ->
+                val currentSong = TeamRepository.getCachedSongs(activeCode, preferences).find { it.title.equals(title, ignoreCase = true) }
+                val refUrl = currentSong?.referenceUrl.orEmpty().ifBlank {
+                    try { org.json.JSONObject(preferences.getString("songData_$title", "{}").orEmpty()).optString("link") } catch (_: Exception) { "" }
+                }
                 results.add(panel().apply {
                     val row = horizontal()
-                    row.add(if(title in listOf("Praise","Trust in God","Way Maker","Gratitude")) songCover(title)
-                    else text("♫",30,navy,centered=true), 104, 60)
+                    row.add(songCover(title, refUrl), 104, 60)
                     row.add(vertical().apply {
                         setPadding(dp(14), 0, dp(8), 0)
                         add(text(title, 14, navy, true)); space(5); add(text(artist, 11, Color.GRAY))

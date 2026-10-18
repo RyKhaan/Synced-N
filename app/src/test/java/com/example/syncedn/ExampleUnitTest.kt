@@ -495,6 +495,29 @@ class ExampleUnitTest {
     }
 
     @Test
+    fun testSessionManagerClearPreferencesOnlyClearsPrefsAndCacheWithoutSignout() {
+        val prefs = FakePreferences()
+        val repo = com.example.syncedn.data.database.TeamRepository
+        prefs.edit()
+            .putString("userId", "user_123")
+            .putString("email", "test@domain.com")
+            .putString("fullName", "Test User")
+            .apply()
+        repo.cacheMember(com.example.syncedn.data.model.TeamMember(
+            uid = "user_123",
+            fullName = "Test User",
+            teamCode = "TEST_CODE"
+        ))
+        assertEquals(1, repo.getCachedRoster("TEST_CODE").size)
+
+        com.example.syncedn.data.auth.SessionManager.clearPreferencesOnly(prefs)
+        assertEquals("", prefs.getString("userId", ""))
+        assertEquals("", prefs.getString("email", ""))
+        assertEquals("", prefs.getString("fullName", ""))
+        assertEquals(0, repo.getCachedRoster("TEST_CODE").size)
+    }
+
+    @Test
     fun testPhilippinePhoneValidationAndCharacterLimits() {
         val vu = com.example.syncedn.data.util.ValidationUtils
 
@@ -1195,6 +1218,61 @@ class ExampleUnitTest {
         assertEquals("http URL preserved", "http://example.com", com.example.syncedn.data.model.SongData.normalizeReferenceUrl("http://example.com"))
         assertEquals("Bare domain gets https", "https://youtu.be/xyz", com.example.syncedn.data.model.SongData.normalizeReferenceUrl("youtu.be/xyz"))
         assertEquals("www domain gets https", "https://www.youtube.com/watch?v=123", com.example.syncedn.data.model.SongData.normalizeReferenceUrl("www.youtube.com/watch?v=123"))
+    }
+
+    @Test
+    fun testSongDataYoutubeThumbnailExtractionAndSeedCatalogMetadata() {
+        val sd = com.example.syncedn.data.model.SongData
+
+        // 1. YouTube Video ID Extraction
+        assertEquals("f2OXgn6mHHY", sd.extractYoutubeVideoId("https://www.youtube.com/watch?v=f2OXgn6mHHY"))
+        assertEquals("y7495tY_k_8", sd.extractYoutubeVideoId("https://youtu.be/y7495tY_k_8"))
+        assertEquals("dQw4w9WgXcQ", sd.extractYoutubeVideoId("https://www.youtube.com/shorts/dQw4w9WgXcQ"))
+        assertEquals("dQw4w9WgXcQ", sd.extractYoutubeVideoId("https://www.youtube.com/watch?feature=shared&v=dQw4w9WgXcQ&t=120"))
+        assertEquals("Z32HiSuUY8o", sd.extractYoutubeVideoId("https://www.youtube.com/embed/Z32HiSuUY8o"))
+        assertEquals("y7495tY_k_8", sd.extractYoutubeVideoId("http://youtu.be/y7495tY_k_8?t=45"))
+        assertNull(sd.extractYoutubeVideoId(""))
+        assertNull(sd.extractYoutubeVideoId("   "))
+        assertNull(sd.extractYoutubeVideoId("https://example.com/not-youtube"))
+
+        // 2. YouTube Thumbnail URL Generation
+        assertEquals(
+            "https://img.youtube.com/vi/f2OXgn6mHHY/hqdefault.jpg",
+            sd.getYoutubeThumbnailUrl("https://www.youtube.com/watch?v=f2OXgn6mHHY")
+        )
+        assertEquals(
+            "https://img.youtube.com/vi/y7495tY_k_8/hqdefault.jpg",
+            sd.getYoutubeThumbnailUrl("https://youtu.be/y7495tY_k_8")
+        )
+        assertNull(sd.getYoutubeThumbnailUrl("invalid"))
+
+        // 3. Verify Seed Catalog has correct Keys, BPMs, and YouTube Reference URLs
+        val seeds = com.example.syncedn.data.database.TeamRepository.getDefaultSeedSongs("TEST")
+        assertEquals(7, seeds.size)
+        val praise = seeds.find { it.title == "Praise" }!!
+        assertEquals("Elevation Worship", praise.artist)
+        assertEquals("G", praise.key)
+        assertEquals(127, praise.bpm)
+        assertEquals("https://www.youtube.com/watch?v=f2OXgn6mHHY", praise.referenceUrl)
+        assertTrue("Praise sheet must contain chords", praise.sheet.contains("[G]"))
+
+        val trust = seeds.find { it.title == "Trust in God" }!!
+        assertEquals("C", trust.key)
+        assertEquals(74, trust.bpm)
+        assertEquals("https://www.youtube.com/watch?v=y7495tY_k_8", trust.referenceUrl)
+
+        val wayMaker = seeds.find { it.title == "Way Maker" }!!
+        assertEquals("E", wayMaker.key)
+        assertEquals(68, wayMaker.bpm)
+        assertEquals("https://www.youtube.com/watch?v=n4XWfwLHeLM", wayMaker.referenceUrl)
+
+        val gratitude = seeds.find { it.title == "Gratitude" }!!
+        assertEquals("B", gratitude.key)
+        assertEquals(78, gratitude.bpm)
+
+        val goodness = seeds.find { it.title == "Goodness of God" }!!
+        assertEquals("Ab", goodness.key)
+        assertEquals(70, goodness.bpm)
     }
 
     private class FakePreferences : android.content.SharedPreferences {

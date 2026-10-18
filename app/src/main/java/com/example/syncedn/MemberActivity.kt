@@ -521,6 +521,7 @@ open class MemberActivity : AppCompatActivity() {
                                 displayName = profile?.username?.ifBlank { emailStr.substringBefore("@") } ?: "Member"
                                 val (userRole, userTeam, userTeamCode) = resolveUserTeamSession(profile, emailStr)
                                 teamName = userTeam
+                                SessionManager.clearPreferencesOnly(preferences)
                                 SessionManager.saveSessionProfile(preferences, profile, displayName, emailStr)
                                 fullName = preferences.getString(SessionManager.KEY_FULL_NAME, "").orEmpty()
                                 displayName = preferences.getString(SessionManager.KEY_USERNAME, displayName).orEmpty()
@@ -587,7 +588,7 @@ open class MemberActivity : AppCompatActivity() {
                                 val registeredProfile = result.getOrNull()
                                 displayName = nameStr
                                 fullName = ""
-                                SessionManager.clearSession(preferences)
+                                SessionManager.clearPreferencesOnly(preferences)
                                 SessionManager.saveSessionProfile(preferences, registeredProfile, displayName, emailStr)
                                 preferences.edit {
                                     putString("role", "")
@@ -1050,8 +1051,12 @@ open class MemberActivity : AppCompatActivity() {
     }
     private fun homeUpcomingRecord(): org.json.JSONObject? {
         val today = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).format(java.util.Date())
-        return storedServices().filter { it.optString("status") == "Published" && it.optString("date") >= today }
-            .minByOrNull { it.optString("date") + it.optString("start") }
+        val published = storedServices().filter { it.optString("status") == "Published" }
+        val upcoming = published.filter { it.optString("date") >= today }
+        if (upcoming.isNotEmpty()) {
+            return upcoming.minByOrNull { it.optString("date") + it.optString("start") }
+        }
+        return published.maxByOrNull { it.optString("date") + it.optString("start") }
     }
     private fun formatBadgeDate(rawDate: String): String = try {
         if (rawDate.contains("\n")) rawDate
@@ -1775,12 +1780,13 @@ open class MemberActivity : AppCompatActivity() {
 
         val realServices = storedServices()
         val today = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).format(java.util.Date())
+        val hasUpcoming = realServices.any { it.optString("date") >= today }
         val filteredReal = realServices.filter { srv ->
             val date = srv.optString("date")
             val isPast = date < today
             when (scheduleFilter) {
                 "Past" -> isPast
-                "Upcoming" -> !isPast
+                "Upcoming" -> !isPast || !hasUpcoming
                 else -> true
             }
         }
@@ -2132,15 +2138,64 @@ open class MemberActivity : AppCompatActivity() {
             }); col.space(16)
         }
     }
-    private fun songCover(title: String): View = image("song_covers_source", "$title cover").apply {
-        val source = (drawable as android.graphics.drawable.BitmapDrawable).bitmap
-        val coverY = when (title) { "Praise" -> 210; "Trust in God" -> 320; "Way Maker" -> 430; else -> 540 }
-        setImageBitmap(bitmaps.getOrPut("song_cover_$title") {
-            Bitmap.createBitmap(source, 29, coverY, 120, 66)
-        })
-        scaleType = ImageView.ScaleType.CENTER_CROP
-        background = bg(navy, 6); outlineProvider = ViewOutlineProvider.BACKGROUND; clipToOutline = true
-        (drawable as? android.graphics.drawable.BitmapDrawable)?.setFilterBitmap(true)
+    private val youtubeThumbnailCache = java.util.concurrent.ConcurrentHashMap<String, Bitmap>()
+
+    private fun songCover(title: String, referenceUrl: String = ""): View {
+        val img = image("song_covers_source", "$title cover").apply {
+            scaleType = ImageView.ScaleType.CENTER_CROP
+            background = bg(navy, 6); outlineProvider = ViewOutlineProvider.BACKGROUND; clipToOutline = true
+            (drawable as? android.graphics.drawable.BitmapDrawable)?.setFilterBitmap(true)
+        }
+        val source = (img.drawable as? android.graphics.drawable.BitmapDrawable)?.bitmap
+        val defaultBitmap = if (source != null && !source.isRecycled) {
+            val coverY = when (title) { "Praise" -> 210; "Trust in God" -> 320; "Way Maker" -> 430; else -> 540 }
+            bitmaps.getOrPut("song_cover_$title") {
+                Bitmap.createBitmap(source, 29, coverY, 120, 66)
+            }
+        } else null
+
+        val videoId = com.example.syncedn.data.model.SongData.extractYoutubeVideoId(referenceUrl)
+        if (videoId != null) {
+            val cached = youtubeThumbnailCache[videoId]
+            if (cached != null && !cached.isRecycled) {
+                img.setImageBitmap(cached)
+            } else {
+                if (defaultBitmap != null) img.setImageBitmap(defaultBitmap)
+                img.tag = videoId
+                Thread {
+                    try {
+                        val thumbUrl = com.example.syncedn.data.model.SongData.getYoutubeThumbnailUrl(referenceUrl)
+                        if (thumbUrl != null) {
+                            val url = java.net.URL(thumbUrl)
+                            val conn = url.openConnection() as java.net.HttpURLConnection
+                            conn.connectTimeout = 4000
+                            conn.readTimeout = 4000
+                            conn.instanceFollowRedirects = true
+                            conn.connect()
+                            if (conn.responseCode == 200) {
+                                val stream = conn.inputStream
+                                val downloaded = BitmapFactory.decodeStream(stream)
+                                stream.close()
+                                if (downloaded != null) {
+                                    youtubeThumbnailCache[videoId] = downloaded
+                                    runOnUiThread {
+                                        if (img.tag == videoId) {
+                                            img.setImageBitmap(downloaded)
+                                        }
+                                    }
+                                }
+                            }
+                            conn.disconnect()
+                        }
+                    } catch (_: Exception) {}
+                }.start()
+            }
+        } else {
+            if (defaultBitmap != null) {
+                img.setImageBitmap(defaultBitmap)
+            }
+        }
+        return img
     }
     private fun songCatalog(): List<Pair<String, String>> {
         val activeCode = preferences.getString("teamCode", "").orEmpty()
@@ -2158,10 +2213,13 @@ open class MemberActivity : AppCompatActivity() {
             val matches = songs.filter { (title, artist) -> "$title $artist".contains(query, true) }
             if (matches.isEmpty()) results.add(text("No songs found.", 14, Color.GRAY))
             matches.forEach { (title, artist) ->
+                val currentSong = TeamRepository.getCachedSongs(activeCode, preferences).find { it.title.equals(title, ignoreCase = true) }
+                val refUrl = currentSong?.referenceUrl.orEmpty().ifBlank {
+                    try { org.json.JSONObject(preferences.getString("songData_$title", "{}").orEmpty()).optString("link") } catch (_: Exception) { "" }
+                }
                 results.add(panel().apply {
                     val row = horizontal()
-                    row.add(if (title in listOf("Praise", "Trust in God", "Way Maker", "Gratitude")) songCover(title)
-                    else text("♫", 30, navy, centered = true), 104, 60)
+                    row.add(songCover(title, refUrl), 104, 60)
                     row.add(vertical().apply {
                         setPadding(dp(14), 0, dp(8), 0)
                         add(text(title, 14, navy, true)); space(5); add(text(artist, 11, Color.GRAY))
