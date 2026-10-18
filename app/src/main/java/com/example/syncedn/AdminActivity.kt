@@ -2224,6 +2224,7 @@ class AdminActivity : AppCompatActivity() {
             val songKey = key.text.toString().trim()
             val sheetContent = lyrics.text.toString()
             val refUrl = link.text.toString().trim()
+            val normalizedRef = SongData.normalizeReferenceUrl(refUrl)
             when {
                 name.isBlank() -> invalid(title, "Enter a title.")
                 artistName.isBlank() -> invalid(artist, "Enter an artist.")
@@ -2231,6 +2232,8 @@ class AdminActivity : AppCompatActivity() {
                 tempo == null || tempo !in 1..400 -> invalid(bpm, "Enter BPM from 1 to 400.")
                 else -> {
                     val songId = currentSong?.id?.ifBlank { "song_${System.currentTimeMillis()}" } ?: "song_${System.currentTimeMillis()}"
+                    val currentUid = preferences.getString("userId", "").orEmpty().ifBlank { AuthManager.currentUser?.uid.orEmpty() }
+                    val creatorUid = SongData.resolveCreatorUid(currentSong?.createdBy, currentUid)
                     val songObj = SongData(
                         id = songId,
                         teamCode = activeCode,
@@ -2240,15 +2243,15 @@ class AdminActivity : AppCompatActivity() {
                         bpm = tempo,
                         sheet = sheetContent,
                         lyrics = sheetContent,
-                        referenceUrl = refUrl,
-                        createdBy = preferences.getString("userId", "").orEmpty(),
+                        referenceUrl = normalizedRef,
+                        createdBy = creatorUid,
                         createdAt = currentSong?.createdAt ?: System.currentTimeMillis(),
                         updatedAt = System.currentTimeMillis()
                     )
                     TeamRepository.saveSong(activeCode, songObj, preferences)
                     preferences.edit().putString("songData_$name", org.json.JSONObject().put("artist", artistName)
                         .put("key", songKey).put("bpm", tempo).put("lyrics", sheetContent).put("sheet", sheetContent)
-                        .put("link", refUrl).toString()).apply()
+                        .put("link", normalizedRef).toString()).apply()
                     selectedSong = name
                     toast("Song saved")
                     navigate("songDetails")

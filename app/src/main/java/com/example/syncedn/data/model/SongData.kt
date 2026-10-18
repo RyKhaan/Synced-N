@@ -74,5 +74,18 @@ data class SongData(
                 updatedAt = parseTimestamp(map["updatedAt"])
             )
         }
+
+        fun normalizeReferenceUrl(url: String): String {
+            val trimmed = url.trim()
+            return when {
+                trimmed.isBlank() -> ""
+                trimmed.startsWith("http://", ignoreCase = true) || trimmed.startsWith("https://", ignoreCase = true) -> trimmed
+                else -> "https://$trimmed"
+            }
+        }
+
+        fun resolveCreatorUid(existingCreator: String?, fallbackUid: String): String {
+            return existingCreator?.takeIf { it.isNotBlank() } ?: fallbackUid
+        }
     }
 }

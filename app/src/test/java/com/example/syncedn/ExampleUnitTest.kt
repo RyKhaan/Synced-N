@@ -1173,6 +1173,30 @@ class ExampleUnitTest {
         assertNull(repo.getCachedSongs("TEAM_B", prefs).find { it.id == "song_edit_1" })
     }
 
+    @Test
+    fun testSongDataUrlNormalizationAndCreatorPreservation() {
+        // 1. Creator resolution
+        val originalCreator = "creator_uid_123"
+        val currentLoggedInUser = "different_user_456"
+
+        val resolvedExisting = com.example.syncedn.data.model.SongData.resolveCreatorUid(originalCreator, currentLoggedInUser)
+        assertEquals("Original creator UID must be preserved on edit", "creator_uid_123", resolvedExisting)
+
+        val resolvedNew = com.example.syncedn.data.model.SongData.resolveCreatorUid(null, currentLoggedInUser)
+        assertEquals("Fallback UID must be used for new songs", "different_user_456", resolvedNew)
+
+        val resolvedBlank = com.example.syncedn.data.model.SongData.resolveCreatorUid("", currentLoggedInUser)
+        assertEquals("Fallback UID must be used if existing is blank", "different_user_456", resolvedBlank)
+
+        // 2. Reference URL normalization
+        assertEquals("Blank remains blank", "", com.example.syncedn.data.model.SongData.normalizeReferenceUrl(""))
+        assertEquals("Whitespace remains blank", "", com.example.syncedn.data.model.SongData.normalizeReferenceUrl("   "))
+        assertEquals("https URL preserved", "https://youtu.be/xyz", com.example.syncedn.data.model.SongData.normalizeReferenceUrl("https://youtu.be/xyz"))
+        assertEquals("http URL preserved", "http://example.com", com.example.syncedn.data.model.SongData.normalizeReferenceUrl("http://example.com"))
+        assertEquals("Bare domain gets https", "https://youtu.be/xyz", com.example.syncedn.data.model.SongData.normalizeReferenceUrl("youtu.be/xyz"))
+        assertEquals("www domain gets https", "https://www.youtube.com/watch?v=123", com.example.syncedn.data.model.SongData.normalizeReferenceUrl("www.youtube.com/watch?v=123"))
+    }
+
     private class FakePreferences : android.content.SharedPreferences {
         private val map = mutableMapOf<String, Any?>()
 
