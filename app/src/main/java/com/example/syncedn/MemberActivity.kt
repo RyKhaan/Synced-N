@@ -444,8 +444,14 @@ open class MemberActivity : AppCompatActivity() {
                 }
             }
             "home" -> {
-                if (triggerRefresh) refreshTeamRoster()
+                if (triggerRefresh) {
+                    refreshTeamRoster()
+                    refreshTeamServices()
+                }
                 setupHome()
+            }
+            "schedule" -> {
+                if (triggerRefresh) refreshTeamServices()
             }
             "teams" -> if (triggerRefresh) refreshTeamRoster()
             "settings" -> setupSettings()
@@ -1046,9 +1052,44 @@ open class MemberActivity : AppCompatActivity() {
         return storedServices().filter { it.optString("status") == "Published" && it.optString("date") >= today }
             .minByOrNull { it.optString("date") + it.optString("start") }
     }
+    private fun formatBadgeDate(rawDate: String): String = try {
+        if (rawDate.contains("\n")) rawDate
+        else {
+            val sdf = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US)
+            val parsed = sdf.parse(rawDate)
+            if (parsed != null) {
+                val month = java.text.SimpleDateFormat("MMM", java.util.Locale.US).format(parsed).uppercase()
+                val cal = java.util.Calendar.getInstance().apply { time = parsed }
+                "$month\n${cal.get(java.util.Calendar.DAY_OF_MONTH)}"
+            } else rawDate
+        }
+    } catch (_: Exception) { rawDate }
     private fun storedServices(): List<org.json.JSONObject> = try {
-        val records = org.json.JSONArray(preferences.getString("leaderServices", "[]"))
-        (0 until records.length()).map { records.getJSONObject(it) }
+        val currentCode = preferences.getString("teamCode", "").orEmpty()
+            .ifBlank { FirestoreManager.findCodeByTeamName(teamName).orEmpty() }
+        val cached = if (currentCode.isNotBlank()) {
+            TeamRepository.getCachedServices(currentCode, preferences).filter { it.status == "Published" }
+        } else emptyList()
+        if (cached.isNotEmpty()) {
+            cached.map { srv ->
+                val obj = org.json.JSONObject()
+                srv.toMap().forEach { (k, v) ->
+                    if (v is List<*>) {
+                        val arr = org.json.JSONArray()
+                        v.forEach { c -> if (c is Map<*, *>) arr.put(org.json.JSONObject(c)) else arr.put(c) }
+                        obj.put(k, arr)
+                    } else if (v is Map<*, *>) {
+                        obj.put(k, org.json.JSONObject(v))
+                    } else {
+                        obj.put(k, v)
+                    }
+                }
+                obj
+            }
+        } else {
+            val records = org.json.JSONArray(preferences.getString("leaderServices", "[]"))
+            (0 until records.length()).map { records.getJSONObject(it) }.filter { it.optString("status", "Published") == "Published" }
+        }
     } catch (_: Exception) { emptyList() }
     private fun formatServiceTime(value: String): String = try {
         val parts=value.split(":");val hour=parts[0].toInt()
@@ -1582,6 +1623,38 @@ open class MemberActivity : AppCompatActivity() {
         }
     }
 
+    private var isRefreshingServices = false
+    private var lastServicesRefreshTime = 0L
+
+    private fun refreshTeamServices(force: Boolean = false) {
+        val now = System.currentTimeMillis()
+        if (isRefreshingServices) return
+        if (!force && (now - lastServicesRefreshTime < 15_000L)) return
+
+        val currentCode = preferences.getString("teamCode", "").orEmpty()
+            .ifBlank { FirestoreManager.findCodeByTeamName(teamName).orEmpty() }
+        if (currentCode.isBlank()) return
+
+        isRefreshingServices = true
+        lastServicesRefreshTime = now
+
+        val previousStored = storedServices().toString()
+
+        TeamRepository.getServices(currentCode, isLeader = false, preferences) { result ->
+            isRefreshingServices = false
+            result.getOrNull()?.let { list ->
+                val currentStored = storedServices().toString()
+                if (currentStored != previousStored) {
+                    runOnUiThread {
+                        if (page == "schedule" || page == "home") {
+                            navigate(page, triggerRefresh = false)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     private val ministryMembers = listOf(
         Triple("Joshua Lagare", "Worship Leader", "Admin"),
         Triple("Ryan Lloyd Genturo", "Keyboardist", "Member"),
@@ -1692,6 +1765,54 @@ open class MemberActivity : AppCompatActivity() {
             Triple("AUG\n21", "Team Meeting", "7:00PM – 8:00PM"),
             Triple("AUG\n19", "Rehearsal", "7:00PM – 9:00PM"))
         val entries = when (scheduleFilter) { "Past" -> past; "All" -> upcoming + past; else -> upcoming }
+
+        val realServices = storedServices()
+        val today = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).format(java.util.Date())
+        val filteredReal = realServices.filter { srv ->
+            val date = srv.optString("date")
+            val isPast = date < today
+            when (scheduleFilter) {
+                "Past" -> isPast
+                "Upcoming" -> !isPast
+                else -> true
+            }
+        }
+
+        if (filteredReal.isNotEmpty()) {
+            filteredReal.forEach { record ->
+                val title = record.optString("title", "Sunday Worship Service")
+                val date = record.optString("date")
+                val badgeDate = formatBadgeDate(date)
+                val start = record.optString("start")
+                val end = record.optString("end")
+                val time = if (start.isNotBlank() && end.isNotBlank()) "${formatServiceTime(start)} – ${formatServiceTime(end)}" else if (start.isNotBlank()) formatServiceTime(start) else "6:00AM – 11:00AM"
+                val venue = record.optString("venue", "Main Sanctuary")
+
+                val row = horizontal().apply {
+                    background = bg(Color.WHITE, 20, if (preferences.getString("serviceDate", "") == date) purple else Color.rgb(230, 230, 235))
+                    elevation = dp(3).toFloat(); setPadding(dp(8), dp(10), dp(12), dp(10))
+                    add(text(badgeDate, 15, Color.WHITE, bold = true, centered = true).apply {
+                        background = GradientDrawable(GradientDrawable.Orientation.TL_BR,
+                            intArrayOf(purple, Color.rgb(167, 0, 214))).apply { cornerRadius = dp(14).toFloat() }
+                    }, 60, 66)
+                    add(vertical().apply {
+                        setPadding(dp(12), 0, dp(8), 0)
+                        add(text(title, 13, navy, true)); space(4); add(text(time, 11, navy))
+                        space(3); add(text(venue, 11, navy))
+                    }, 0, -2, 1f)
+                    add(Symbol(this@MemberActivity, "arrow", Color.GRAY), 18, 24)
+                    isClickable = true; isFocusable = true
+                    setOnClickListener {
+                        selectSheetService(record)
+                        selectedService = title; serviceReturnPage = "schedule"
+                        preferences.edit().putString("serviceTime", time).putString("serviceDate", date).putString("serviceVenue", venue).apply()
+                        navigate("service")
+                    }
+                }
+                col.add(row); col.space(16)
+            }
+        }
+
         col.add(text("Sample schedule • dates from your design", 11, Color.GRAY)); col.space(12)
         entries.forEach { (date, title, time) ->
             val row = horizontal().apply {
@@ -1907,7 +2028,20 @@ open class MemberActivity : AppCompatActivity() {
             add(memberButton("Song Lineups") { navigate("lineup") }, 0, 48, 1f)
         }); col.space(24)
         col.add(text("Assigned Members and their Roles", 13, navy)); col.space(12)
-        ministryMembers.take(4).forEach { (name, role, badge) -> col.add(memberRow(name, role, badge)) }
+        val assignments = selectedSheetService?.optJSONArray("assignments")
+        if (assignments != null && assignments.length() > 0) {
+            repeat(assignments.length()) { index ->
+                val item = assignments.getJSONObject(index)
+                val name = item.optString("name", "Member")
+                val role = item.optString("role", "Musician")
+                val isLeaderUser = item.optString("role").equals("Worship Leader", true)
+                val badge = if (isLeaderUser) "Leader" else null
+                col.add(memberRow(name, role, badge))
+                col.space(8)
+            }
+        } else {
+            ministryMembers.take(4).forEach { (name, role, badge) -> col.add(memberRow(name, role, badge)) }
+        }
         col.space(28)
         col.add(memberButton("Request Substitution") { navigate("substitution") }, -1, 48)
     }
@@ -2043,7 +2177,11 @@ open class MemberActivity : AppCompatActivity() {
         selectedSheetService = org.json.JSONObject(record.toString())
         record.optJSONArray("songs")?.let { songs ->
             lineupSongs.clear()
-            repeat(songs.length()) { lineupSongs.add(songs.getString(it)) }
+            repeat(songs.length()) { idx ->
+                val item = songs.get(idx)
+                val songTitle = if (item is org.json.JSONObject) item.optString("title") else item.toString()
+                if (songTitle.isNotBlank()) lineupSongs.add(songTitle)
+            }
         }
     }
     private fun songAssignedRoles(): String {
@@ -2154,7 +2292,7 @@ open class MemberActivity : AppCompatActivity() {
     }
 
     private fun lineupView(): View = memberPage("Song Lineup", "service") { col ->
-        col.add(text("Sunday Worship Service", 13, navy, true)); col.space(20)
+        col.add(text(selectedService.ifBlank { "Sunday Worship Service" }, 13, navy, true)); col.space(20)
         lineupSongs.forEachIndexed { index, title ->
             col.add(panel().apply {
                 val row = horizontal()
