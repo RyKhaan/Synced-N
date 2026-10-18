@@ -45,6 +45,25 @@ rules_version = '2';
 //   - createdAt: number | timestamp (optional, >= 0, immutable) - Timestamp when created
 //   - updatedAt: number | timestamp (optional, >= 0) - Timestamp when last updated
 //
+// Subcollection: teams/{teamCode}/substitutions
+// Document ID: {substitutionId} (matches id field)
+// Fields:
+//   - id: string (required, matches doc ID, immutable) - Unique substitution ID
+//   - teamCode: string (required, matches parent teamCode, immutable) - Team invite code
+//   - serviceId: string (optional, 0-128 chars) - Linked Service document ID
+//   - serviceTitle: string (required, 1-120 chars) - Service headline / title
+//   - serviceDate: string (optional, 0-50 chars) - Date of service (YYYY-MM-DD)
+//   - requesterUid: string (required, 1-128 chars, immutable) - Requesting member's UID
+//   - requesterName: string (required, 1-100 chars) - Full name of requester
+//   - role: string (required, 1-50 chars) - Assigned ministry role needing substitution
+//   - substituteUid: string (required, 1-128 chars) - Proposed substitute teammate's UID
+//   - substituteName: string (required, 1-100 chars) - Full name of proposed substitute
+//   - reason: string (required, 1-500 chars) - Explanation for substitution request
+//   - status: string (required, allowed: 'Pending', 'Accepted', 'Declined', 'Cancelled') - Request state
+//   - createdBy: string (required, matches requesterUid, immutable) - Creator's UID
+//   - createdAt: number | timestamp (optional, >= 0, immutable) - Creation timestamp
+//   - updatedAt: number | timestamp (optional, >= 0) - Last update timestamp
+//
 // Collection: password_resets
 // Document ID: {email} (User's normalized email address)
 // Fields:
@@ -329,6 +348,34 @@ service cloud.firestore {
       (!('updatedAt' in data) || (data.updatedAt is number && data.updatedAt >= 0) || (data.updatedAt is timestamp));
     }
 
+    // Strict validator for /teams/{teamCode}/substitutions/{substitutionId} documents (Group 6)
+    function isValidSubstitution(data, substitutionId, teamCode) {
+      return hasOnlyAllowedFields(data, [
+        'id', 'teamCode', 'serviceId', 'serviceTitle', 'serviceDate',
+        'requesterUid', 'requesterName', 'role', 'substituteUid',
+        'substituteName', 'reason', 'status', 'createdBy', 'createdAt', 'updatedAt'
+      ]) &&
+      hasRequiredFields(data, [
+        'id', 'teamCode', 'serviceTitle', 'requesterUid', 'requesterName',
+        'role', 'substituteUid', 'substituteName', 'reason', 'status', 'createdBy'
+      ]) &&
+      data.id is string && data.id == substitutionId &&
+      data.teamCode is string && data.teamCode == teamCode &&
+      data.serviceTitle is string && data.serviceTitle.size() > 0 && data.serviceTitle.size() <= 120 &&
+      (!('serviceId' in data) || (data.serviceId is string && data.serviceId.size() <= 128)) &&
+      (!('serviceDate' in data) || (data.serviceDate is string && data.serviceDate.size() <= 50)) &&
+      data.requesterUid is string && data.requesterUid.size() > 0 && data.requesterUid.size() <= 128 &&
+      data.requesterName is string && data.requesterName.size() > 0 && data.requesterName.size() <= 100 &&
+      data.role is string && data.role.size() > 0 && data.role.size() <= 50 &&
+      data.substituteUid is string && data.substituteUid.size() > 0 && data.substituteUid.size() <= 128 &&
+      data.substituteName is string && data.substituteName.size() > 0 && data.substituteName.size() <= 100 &&
+      data.reason is string && data.reason.size() > 0 && data.reason.size() <= 500 &&
+      data.status in ['Pending', 'Accepted', 'Declined', 'Cancelled'] &&
+      data.createdBy is string && data.createdBy.size() > 0 && data.createdBy.size() <= 128 &&
+      (!('createdAt' in data) || (data.createdAt is number && data.createdAt >= 0) || (data.createdAt is timestamp)) &&
+      (!('updatedAt' in data) || (data.updatedAt is number && data.updatedAt >= 0) || (data.updatedAt is timestamp));
+    }
+
     // ===============================================================
     // Collection Match Rules
     // ===============================================================
@@ -482,6 +529,34 @@ service cloud.firestore {
                          areImmutableFieldsUnchanged(['id', 'teamCode', 'createdBy', 'createdAt']);
 
         allow delete: if isLeaderOfTeam(teamCode);
+      }
+
+      // ---------------------------------------------------------------
+      // Subcollection: Substitutions (/teams/{teamCode}/substitutions/{substitutionId})
+      // ---------------------------------------------------------------
+      match /substitutions/{substitutionId} {
+        // Read: Any authenticated member of the team can view team substitutions.
+        allow read: if isAuthenticated() && isSameTeam(teamCode);
+
+        // Create: Authenticated team members can request a substitution for themselves.
+        allow create: if isAuthenticated() && isSameTeam(teamCode) &&
+                         isValidSubstitution(request.resource.data, substitutionId, teamCode) &&
+                         request.resource.data.requesterUid == request.auth.uid &&
+                         request.resource.data.createdBy == request.auth.uid;
+
+        // Update: The proposed substitute can accept/decline, the requester can cancel, or the Leader can manage.
+        allow update: if isAuthenticated() && isSameTeam(teamCode) &&
+                         isValidSubstitution(request.resource.data, substitutionId, teamCode) &&
+                         areImmutableFieldsUnchanged(['id', 'teamCode', 'requesterUid', 'createdBy', 'createdAt']) &&
+                         (
+                           request.auth.uid == resource.data.substituteUid ||
+                           request.auth.uid == resource.data.requesterUid ||
+                           isLeaderOfTeam(teamCode)
+                         );
+
+        // Delete: The Team Leader or original requester can delete the substitution.
+        allow delete: if isAuthenticated() && isSameTeam(teamCode) &&
+                         (isLeaderOfTeam(teamCode) || request.auth.uid == resource.data.requesterUid);
       }
     }
 
