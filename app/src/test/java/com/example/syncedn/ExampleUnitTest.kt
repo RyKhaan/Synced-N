@@ -1491,6 +1491,54 @@ class ExampleUnitTest {
         assertEquals(announcement.updatedAt, restored.updatedAt)
     }
 
+    @Test
+    fun testTeamRepositoryAnnouncementCachingAndSorting() {
+        val repo = com.example.syncedn.data.database.TeamRepository
+        val prefs = FakePreferences()
+        val code = "NGK8VN"
+
+        // 1. Initial cached announcements should be empty
+        val initial = repo.getCachedAnnouncements(code, prefs)
+        assertTrue(initial.isEmpty())
+
+        // 2. Add first announcement
+        val ann1 = com.example.syncedn.data.model.AnnouncementData(
+            id = "ann_1",
+            teamCode = code,
+            title = "Welcome Team",
+            message = "Welcome to the new worship season!",
+            urgent = false,
+            author = "Ryan",
+            createdAt = 1000L
+        )
+        repo.saveAnnouncementLocally(code, ann1, prefs)
+
+        // 3. Add second announcement (newer timestamp, urgent)
+        val ann2 = com.example.syncedn.data.model.AnnouncementData(
+            id = "ann_2",
+            teamCode = code,
+            title = "Urgent: Sound Check Moved",
+            message = "Sound check is moved to 7:00 AM.",
+            urgent = true,
+            author = "Ryan",
+            createdAt = 2000L
+        )
+        repo.saveAnnouncementLocally(code, ann2, prefs)
+
+        // 4. Verify sorting: ann2 (newer, 2000L) must appear before ann1 (1000L)
+        val cached = repo.getCachedAnnouncements(code, prefs)
+        assertEquals(2, cached.size)
+        assertEquals("ann_2", cached[0].id)
+        assertEquals(true, cached[0].urgent)
+        assertEquals("ann_1", cached[1].id)
+
+        // 5. Delete an announcement
+        repo.deleteAnnouncement(code, "ann_1", prefs)
+        val afterDelete = repo.getCachedAnnouncements(code, prefs)
+        assertEquals(1, afterDelete.size)
+        assertEquals("ann_2", afterDelete[0].id)
+    }
+
 
     private class FakePreferences : android.content.SharedPreferences {
         private val map = mutableMapOf<String, Any?>()

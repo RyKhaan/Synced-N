@@ -1,5 +1,6 @@
 package com.example.syncedn.data.database
 
+import com.example.syncedn.data.model.AnnouncementData
 import com.example.syncedn.data.model.ServiceData
 import com.example.syncedn.data.model.SongData
 import com.example.syncedn.data.model.TeamData
@@ -19,6 +20,7 @@ object TeamRepository {
     private const val TEAMS_COLLECTION = "teams"
     private const val SERVICES_SUBCOLLECTION = "services"
     private const val SONGS_SUBCOLLECTION = "songs"
+    private const val ANNOUNCEMENTS_SUBCOLLECTION = "announcements"
 
     // In-memory cache for fast UI updates, offline fallback, and unit tests
     private val cachedRosters = java.util.concurrent.ConcurrentHashMap<String, MutableList<TeamMember>>()
@@ -35,8 +37,12 @@ object TeamRepository {
     private val lastSongsFetchTimes = java.util.concurrent.ConcurrentHashMap<String, Long>()
     private val songsInFlight = java.util.concurrent.ConcurrentHashMap<String, Boolean>()
 
+    private val cachedAnnouncements = java.util.concurrent.ConcurrentHashMap<String, MutableList<AnnouncementData>>()
+    private val lastAnnouncementsFetchTimes = java.util.concurrent.ConcurrentHashMap<String, Long>()
+    private val announcementsInFlight = java.util.concurrent.ConcurrentHashMap<String, Boolean>()
+
     /**
-     * Clears all in-memory roster, role, service, and song caches (primarily for unit tests).
+     * Clears all in-memory roster, role, service, song, and announcement caches (primarily for unit tests).
      */
     @Synchronized
     fun clearCache() {
@@ -51,6 +57,9 @@ object TeamRepository {
         cachedSongs.clear()
         lastSongsFetchTimes.clear()
         songsInFlight.clear()
+        cachedAnnouncements.clear()
+        lastAnnouncementsFetchTimes.clear()
+        announcementsInFlight.clear()
     }
 
     /**
@@ -1449,6 +1458,247 @@ object TeamRepository {
                 }
         } catch (e: Throwable) {
             android.util.Log.e("TeamRepository", "Firestore deleteSong exception: ${e.message}", e)
+            onComplete?.invoke(Result.failure(e))
+        }
+    }
+
+    // ===============================================================
+    // Group 5: Team Announcements & Urgent Alerts
+    // ===============================================================
+
+    /**
+     * Retrieves cached announcements for a team, sorted with newest first (createdAt descending).
+     */
+    fun getCachedAnnouncements(
+        teamCode: String,
+        preferences: android.content.SharedPreferences? = null
+    ): List<AnnouncementData> {
+        val code = teamCode.trim().uppercase()
+        if (code.isBlank()) return emptyList()
+
+        val inMem = cachedAnnouncements[code]
+        if (!inMem.isNullOrEmpty()) {
+            return inMem.sortedByDescending { it.createdAt }
+        }
+
+        preferences?.let { prefs ->
+            val json = prefs.getString("cached_announcements_$code", null)
+            if (!json.isNullOrBlank()) {
+                try {
+                    val array = org.json.JSONArray(json)
+                    val list = mutableListOf<AnnouncementData>()
+                    for (i in 0 until array.length()) {
+                        val obj = array.getJSONObject(i)
+                        val map = mutableMapOf<String, Any?>()
+                        val keys = obj.keys()
+                        while (keys.hasNext()) {
+                            val k = keys.next()
+                            map[k] = obj.opt(k)
+                        }
+                        list.add(AnnouncementData.fromMap(map))
+                    }
+                    val sorted = list.sortedByDescending { it.createdAt }
+                    cachedAnnouncements[code] = java.util.Collections.synchronizedList(sorted.toMutableList())
+                    return sorted
+                } catch (_: Throwable) {}
+            }
+        }
+
+        return emptyList()
+    }
+
+    /**
+     * Saves a list of announcements into local cache and SharedPreferences.
+     */
+    fun saveAnnouncementsLocally(
+        teamCode: String,
+        announcements: List<AnnouncementData>,
+        preferences: android.content.SharedPreferences? = null
+    ) {
+        val code = teamCode.trim().uppercase()
+        if (code.isBlank()) return
+
+        val sorted = announcements.sortedByDescending { it.createdAt }
+        cachedAnnouncements[code] = java.util.Collections.synchronizedList(sorted.toMutableList())
+
+        preferences?.let { prefs ->
+            try {
+                val array = org.json.JSONArray()
+                sorted.forEach { item ->
+                    val obj = org.json.JSONObject()
+                    item.toMap().forEach { (k, v) -> obj.put(k, v) }
+                    array.put(obj)
+                }
+                prefs.edit().putString("cached_announcements_$code", array.toString()).apply()
+            } catch (_: Throwable) {}
+        }
+    }
+
+    /**
+     * Saves or updates a single announcement in the local cache.
+     */
+    fun saveAnnouncementLocally(
+        teamCode: String,
+        announcement: AnnouncementData,
+        preferences: android.content.SharedPreferences? = null
+    ) {
+        val code = teamCode.trim().uppercase()
+        if (code.isBlank() || announcement.id.isBlank()) return
+
+        val current = getCachedAnnouncements(code, preferences).filter { it.id != announcement.id }.toMutableList()
+        current.add(announcement)
+        saveAnnouncementsLocally(code, current, preferences)
+    }
+
+    /**
+     * Removes an announcement from the local cache and SharedPreferences.
+     */
+    fun removeAnnouncementLocally(
+        teamCode: String,
+        announcementId: String,
+        preferences: android.content.SharedPreferences? = null
+    ) {
+        val code = teamCode.trim().uppercase()
+        if (code.isBlank() || announcementId.isBlank()) return
+
+        val current = getCachedAnnouncements(code, preferences).filter { it.id != announcementId }
+        saveAnnouncementsLocally(code, current, preferences)
+    }
+
+    /**
+     * Fetches announcements from Cloud Firestore with 15-second debounce and offline cache fallback.
+     */
+    fun getAnnouncements(
+        teamCode: String,
+        forceRefresh: Boolean = false,
+        preferences: android.content.SharedPreferences? = null,
+        onResult: (Result<List<AnnouncementData>>) -> Unit = {}
+    ) {
+        val code = teamCode.trim().uppercase()
+        if (code.isBlank()) {
+            onResult(Result.success(emptyList()))
+            return
+        }
+
+        val cached = getCachedAnnouncements(code, preferences)
+        val now = System.currentTimeMillis()
+        val lastFetch = lastAnnouncementsFetchTimes[code] ?: 0L
+        val isThrottled = !forceRefresh && (now - lastFetch < 15_000L) && cached.isNotEmpty()
+
+        if (isThrottled) {
+            onResult(Result.success(cached))
+            return
+        }
+
+        if (announcementsInFlight[code] == true) {
+            onResult(Result.success(cached))
+            return
+        }
+
+        announcementsInFlight[code] = true
+        var delivered = false
+        fun finishOnce(result: Result<List<AnnouncementData>>) {
+            announcementsInFlight[code] = false
+            if (!delivered) {
+                delivered = true
+                onResult(result)
+            }
+        }
+
+        try {
+            db.collection(TEAMS_COLLECTION)
+                .document(code)
+                .collection(ANNOUNCEMENTS_SUBCOLLECTION)
+                .get()
+                .addOnSuccessListener { snapshot ->
+                    lastAnnouncementsFetchTimes[code] = System.currentTimeMillis()
+                    val remote = mutableListOf<AnnouncementData>()
+                    if (snapshot != null && !snapshot.isEmpty) {
+                        for (doc in snapshot.documents) {
+                            val data = doc.data
+                            if (data != null) {
+                                remote.add(AnnouncementData.fromMap(data))
+                            }
+                        }
+                    }
+                    val sorted = remote.sortedByDescending { it.createdAt }
+                    saveAnnouncementsLocally(code, sorted, preferences)
+                    finishOnce(Result.success(sorted))
+                }
+                .addOnFailureListener {
+                    finishOnce(Result.success(cached))
+                }
+        } catch (_: Throwable) {
+            finishOnce(Result.success(cached))
+        }
+    }
+
+    /**
+     * Saves an announcement to local cache and synchronizes to Cloud Firestore.
+     */
+    fun saveAnnouncement(
+        teamCode: String,
+        announcement: AnnouncementData,
+        preferences: android.content.SharedPreferences? = null,
+        onComplete: ((Result<AnnouncementData>) -> Unit)? = null
+    ) {
+        val code = teamCode.trim().uppercase()
+        if (code.isBlank() || announcement.id.isBlank()) {
+            onComplete?.invoke(Result.failure(IllegalArgumentException("teamCode and announcement.id cannot be blank")))
+            return
+        }
+
+        saveAnnouncementLocally(code, announcement, preferences)
+
+        try {
+            db.collection(TEAMS_COLLECTION)
+                .document(code)
+                .collection(ANNOUNCEMENTS_SUBCOLLECTION)
+                .document(announcement.id)
+                .set(announcement.toMap(), com.google.firebase.firestore.SetOptions.merge())
+                .addOnSuccessListener {
+                    onComplete?.invoke(Result.success(announcement))
+                }
+                .addOnFailureListener { err ->
+                    android.util.Log.e("TeamRepository", "Firestore saveAnnouncement failed: ${err.message}", err)
+                    onComplete?.invoke(Result.failure(err))
+                }
+        } catch (e: Throwable) {
+            android.util.Log.e("TeamRepository", "Firestore saveAnnouncement exception: ${e.message}", e)
+            onComplete?.invoke(Result.failure(e))
+        }
+    }
+
+    /**
+     * Deletes an announcement from local cache and Cloud Firestore.
+     */
+    fun deleteAnnouncement(
+        teamCode: String,
+        announcementId: String,
+        preferences: android.content.SharedPreferences? = null,
+        onComplete: ((Result<Boolean>) -> Unit)? = null
+    ) {
+        val code = teamCode.trim().uppercase()
+        if (code.isBlank() || announcementId.isBlank()) {
+            onComplete?.invoke(Result.failure(IllegalArgumentException("teamCode and announcementId cannot be blank")))
+            return
+        }
+
+        removeAnnouncementLocally(code, announcementId, preferences)
+
+        try {
+            db.collection(TEAMS_COLLECTION)
+                .document(code)
+                .collection(ANNOUNCEMENTS_SUBCOLLECTION)
+                .document(announcementId)
+                .delete()
+                .addOnSuccessListener { onComplete?.invoke(Result.success(true)) }
+                .addOnFailureListener { err ->
+                    android.util.Log.e("TeamRepository", "Firestore deleteAnnouncement failed: ${err.message}", err)
+                    onComplete?.invoke(Result.failure(err))
+                }
+        } catch (e: Throwable) {
+            android.util.Log.e("TeamRepository", "Firestore deleteAnnouncement exception: ${e.message}", e)
             onComplete?.invoke(Result.failure(e))
         }
     }
