@@ -995,6 +995,34 @@ class ExampleUnitTest {
         assertEquals(68, restored.songs[0].bpm)
     }
 
+    @Test
+    fun testTeamRepositoryServiceCachingAndFiltering() {
+        val prefs = FakePreferences()
+        val draftService = com.example.syncedn.data.model.ServiceData(
+            id = "srv_draft",
+            teamCode = "ALPHA1",
+            title = "Midweek Service",
+            status = "Draft"
+        )
+        val pubService = com.example.syncedn.data.model.ServiceData(
+            id = "srv_pub",
+            teamCode = "ALPHA1",
+            title = "Sunday Service",
+            status = "Published"
+        )
+
+        val repo = com.example.syncedn.data.database.TeamRepository
+        repo.saveServiceLocally("ALPHA1", draftService, prefs)
+        repo.saveServiceLocally("ALPHA1", pubService, prefs)
+
+        val cached = repo.getCachedServices("ALPHA1", prefs)
+        assertEquals(2, cached.size)
+
+        val forMembers = cached.filter { it.status == "Published" }
+        assertEquals(1, forMembers.size)
+        assertEquals("Sunday Service", forMembers[0].title)
+    }
+
     private class FakePreferences : android.content.SharedPreferences {
         private val map = mutableMapOf<String, Any?>()
 

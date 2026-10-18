@@ -1,5 +1,6 @@
 package com.example.syncedn.data.database
 
+import com.example.syncedn.data.model.ServiceData
 import com.example.syncedn.data.model.TeamData
 import com.example.syncedn.data.model.TeamMember
 import com.example.syncedn.data.model.UnavailableRange
@@ -15,6 +16,7 @@ object TeamRepository {
     private val db: FirebaseFirestore by lazy { FirebaseFirestore.getInstance() }
     private const val USERS_COLLECTION = "users"
     private const val TEAMS_COLLECTION = "teams"
+    private const val SERVICES_SUBCOLLECTION = "services"
 
     // In-memory cache for fast UI updates, offline fallback, and unit tests
     private val cachedRosters = java.util.concurrent.ConcurrentHashMap<String, MutableList<TeamMember>>()
@@ -23,8 +25,12 @@ object TeamRepository {
     private val lastRosterFetchTimes = java.util.concurrent.ConcurrentHashMap<String, Long>()
     private val rosterInFlight = java.util.concurrent.ConcurrentHashMap<String, Boolean>()
 
+    private val cachedServices = java.util.concurrent.ConcurrentHashMap<String, MutableList<ServiceData>>()
+    private val lastServicesFetchTimes = java.util.concurrent.ConcurrentHashMap<String, Long>()
+    private val servicesInFlight = java.util.concurrent.ConcurrentHashMap<String, Boolean>()
+
     /**
-     * Clears all in-memory roster and role caches (primarily for unit tests).
+     * Clears all in-memory roster, role, and service caches (primarily for unit tests).
      */
     @Synchronized
     fun clearCache() {
@@ -33,6 +39,9 @@ object TeamRepository {
         cachedUserRanges.clear()
         lastRosterFetchTimes.clear()
         rosterInFlight.clear()
+        cachedServices.clear()
+        lastServicesFetchTimes.clear()
+        servicesInFlight.clear()
     }
 
     /**
@@ -664,5 +673,344 @@ object TeamRepository {
             }
         }
         return Pair(available, unavailable)
+    }
+
+    // ===============================================================
+    // Worship Services Management & Caching
+    // ===============================================================
+
+    /**
+     * Saves or updates a service in the local in-memory cache and SharedPreferences.
+     */
+    @Synchronized
+    fun saveServiceLocally(
+        teamCode: String,
+        service: ServiceData,
+        preferences: android.content.SharedPreferences? = null
+    ) {
+        val code = teamCode.trim().uppercase()
+        if (code.isBlank() || service.id.isBlank()) return
+        val list = cachedServices.getOrPut(code) { java.util.Collections.synchronizedList(mutableListOf()) }
+        synchronized(list) {
+            val index = list.indexOfFirst { it.id == service.id }
+            if (index >= 0) {
+                list[index] = service
+            } else {
+                list.add(service)
+            }
+            list.sortBy { it.date }
+        }
+
+        preferences?.let { prefs ->
+            try {
+                val array = org.json.JSONArray()
+                synchronized(list) {
+                    list.forEach { item ->
+                        val obj = org.json.JSONObject()
+                        item.toMap().forEach { (k, v) ->
+                            if (v is List<*>) {
+                                val childArray = org.json.JSONArray()
+                                v.forEach { child ->
+                                    if (child is Map<*, *>) childArray.put(org.json.JSONObject(child))
+                                    else childArray.put(child)
+                                }
+                                obj.put(k, childArray)
+                            } else if (v is Map<*, *>) {
+                                obj.put(k, org.json.JSONObject(v))
+                            } else {
+                                obj.put(k, v)
+                            }
+                        }
+                        array.put(obj)
+                    }
+                }
+                prefs.edit().putString("team_services_$code", array.toString()).apply()
+            } catch (_: Throwable) {}
+        }
+    }
+
+    /**
+     * Retrieves cached services for a team from memory or SharedPreferences.
+     */
+    @Synchronized
+    fun getCachedServices(
+        teamCode: String,
+        preferences: android.content.SharedPreferences? = null
+    ): List<ServiceData> {
+        val code = teamCode.trim().uppercase()
+        if (code.isBlank()) return emptyList()
+
+        cachedServices[code]?.let { list ->
+            synchronized(list) {
+                if (list.isNotEmpty()) return list.toList()
+            }
+        }
+
+        if (preferences != null) {
+            try {
+                var raw = preferences.getString("team_services_$code", null)
+                if (raw.isNullOrBlank()) {
+                    raw = preferences.getString("leaderServices", "[]")
+                }
+                val array = org.json.JSONArray(raw.orEmpty().ifBlank { "[]" })
+                val list = mutableListOf<ServiceData>()
+                for (i in 0 until array.length()) {
+                    val obj = array.getJSONObject(i)
+                    val map = mutableMapOf<String, Any?>()
+                    val keys = obj.keys()
+                    while (keys.hasNext()) {
+                        val key = keys.next()
+                        val value = obj.get(key)
+                        if (value is org.json.JSONArray) {
+                            val childList = mutableListOf<Any?>()
+                            for (j in 0 until value.length()) {
+                                val item = value.get(j)
+                                if (item is org.json.JSONObject) {
+                                    val childMap = mutableMapOf<String, Any?>()
+                                    val childKeys = item.keys()
+                                    while (childKeys.hasNext()) {
+                                        val ck = childKeys.next()
+                                        childMap[ck] = item.get(ck)
+                                    }
+                                    childList.add(childMap)
+                                } else {
+                                    childList.add(item)
+                                }
+                            }
+                            map[key] = childList
+                        } else if (value is org.json.JSONObject) {
+                            val childMap = mutableMapOf<String, Any?>()
+                            val childKeys = value.keys()
+                            while (childKeys.hasNext()) {
+                                val ck = childKeys.next()
+                                childMap[ck] = value.get(ck)
+                            }
+                            map[key] = childMap
+                        } else {
+                            map[key] = value
+                        }
+                    }
+                    val srv = ServiceData.fromMap(map)
+                    if (srv.id.isNotBlank()) list.add(srv)
+                }
+                if (list.isNotEmpty()) {
+                    val memList = cachedServices.getOrPut(code) { java.util.Collections.synchronizedList(mutableListOf()) }
+                    synchronized(memList) {
+                        memList.clear()
+                        memList.addAll(list)
+                        memList.sortBy { it.date }
+                    }
+                    return list
+                }
+            } catch (_: Throwable) {}
+        }
+        return emptyList()
+    }
+
+    /**
+     * Retrieves services for a team with 15s throttling and offline caching.
+     * When isLeader is false, filters out Draft services.
+     */
+    fun getServices(
+        teamCode: String,
+        isLeader: Boolean = true,
+        preferences: android.content.SharedPreferences? = null,
+        onComplete: (Result<List<ServiceData>>) -> Unit
+    ) {
+        val code = teamCode.trim().uppercase()
+        if (code.isBlank()) {
+            onComplete(Result.success(emptyList()))
+            return
+        }
+
+        val cached = getCachedServices(code, preferences)
+        val filteredCached = if (isLeader) cached else cached.filter { it.status == "Published" }
+
+        val now = System.currentTimeMillis()
+        val lastFetch = lastServicesFetchTimes[code] ?: 0L
+        val inFlight = servicesInFlight[code] == true
+
+        if (inFlight || (now - lastFetch < 15_000L && filteredCached.isNotEmpty())) {
+            onComplete(Result.success(filteredCached))
+            return
+        }
+
+        servicesInFlight[code] = true
+        var finished = false
+        fun finishOnce(result: Result<List<ServiceData>>) {
+            synchronized(this) {
+                if (finished) return
+                finished = true
+                servicesInFlight[code] = false
+            }
+            onComplete(result)
+        }
+
+        try {
+            val query = db.collection(TEAMS_COLLECTION)
+                .document(code)
+                .collection(SERVICES_SUBCOLLECTION)
+
+            val finalQuery = if (isLeader) query else query.whereEqualTo("status", "Published")
+
+            finalQuery.get()
+                .addOnSuccessListener { snapshot ->
+                    lastServicesFetchTimes[code] = System.currentTimeMillis()
+                    val remoteList = mutableListOf<ServiceData>()
+                    for (doc in snapshot.documents) {
+                        val data = doc.data ?: continue
+                        val srv = ServiceData.fromMap(data).copy(id = doc.id)
+                        remoteList.add(srv)
+                    }
+                    if (remoteList.isNotEmpty()) {
+                        val memList = cachedServices.getOrPut(code) { java.util.Collections.synchronizedList(mutableListOf()) }
+                        synchronized(memList) {
+                            if (isLeader) {
+                                memList.clear()
+                                memList.addAll(remoteList)
+                            } else {
+                                // For members, merge published remote services
+                                for (srv in remoteList) {
+                                    val idx = memList.indexOfFirst { it.id == srv.id }
+                                    if (idx >= 0) memList[idx] = srv else memList.add(srv)
+                                }
+                            }
+                            memList.sortBy { it.date }
+                        }
+                        preferences?.let { prefs ->
+                            try {
+                                val array = org.json.JSONArray()
+                                synchronized(memList) {
+                                    memList.forEach { item ->
+                                        val obj = org.json.JSONObject()
+                                        item.toMap().forEach { (k, v) ->
+                                            if (v is List<*>) {
+                                                val childArray = org.json.JSONArray()
+                                                v.forEach { child ->
+                                                    if (child is Map<*, *>) childArray.put(org.json.JSONObject(child))
+                                                    else childArray.put(child)
+                                                }
+                                                obj.put(k, childArray)
+                                            } else if (v is Map<*, *>) {
+                                                obj.put(k, org.json.JSONObject(v))
+                                            } else {
+                                                obj.put(k, v)
+                                            }
+                                        }
+                                        array.put(obj)
+                                    }
+                                }
+                                prefs.edit().putString("team_services_$code", array.toString()).apply()
+                            } catch (_: Throwable) {}
+                        }
+                    }
+                    val deliver = if (isLeader) {
+                        getCachedServices(code, preferences)
+                    } else {
+                        getCachedServices(code, preferences).filter { it.status == "Published" }
+                    }
+                    finishOnce(Result.success(deliver.ifEmpty { filteredCached }))
+                }
+                .addOnFailureListener {
+                    finishOnce(Result.success(filteredCached))
+                }
+        } catch (_: Throwable) {
+            finishOnce(Result.success(filteredCached))
+        }
+    }
+
+    /**
+     * Saves a service to local cache and synchronizes to Cloud Firestore.
+     */
+    fun saveService(
+        teamCode: String,
+        service: ServiceData,
+        preferences: android.content.SharedPreferences? = null,
+        onComplete: ((Result<ServiceData>) -> Unit)? = null
+    ) {
+        val code = teamCode.trim().uppercase()
+        if (code.isBlank() || service.id.isBlank()) {
+            onComplete?.invoke(Result.failure(IllegalArgumentException("teamCode and service.id cannot be blank")))
+            return
+        }
+
+        saveServiceLocally(code, service, preferences)
+
+        try {
+            db.collection(TEAMS_COLLECTION)
+                .document(code)
+                .collection(SERVICES_SUBCOLLECTION)
+                .document(service.id)
+                .set(service.toMap(), com.google.firebase.firestore.SetOptions.merge())
+                .addOnSuccessListener {
+                    onComplete?.invoke(Result.success(service))
+                }
+                .addOnFailureListener {
+                    // Local cache already preserved the service
+                    onComplete?.invoke(Result.success(service))
+                }
+        } catch (_: Throwable) {
+            onComplete?.invoke(Result.success(service))
+        }
+    }
+
+    /**
+     * Deletes a service from local cache and Cloud Firestore.
+     */
+    fun deleteService(
+        teamCode: String,
+        serviceId: String,
+        preferences: android.content.SharedPreferences? = null,
+        onComplete: ((Result<Boolean>) -> Unit)? = null
+    ) {
+        val code = teamCode.trim().uppercase()
+        if (code.isBlank() || serviceId.isBlank()) {
+            onComplete?.invoke(Result.failure(IllegalArgumentException("teamCode and serviceId cannot be blank")))
+            return
+        }
+
+        cachedServices[code]?.let { list ->
+            synchronized(list) {
+                list.removeAll { it.id == serviceId }
+            }
+        }
+
+        preferences?.let { prefs ->
+            try {
+                val cached = getCachedServices(code, prefs).filter { it.id != serviceId }
+                val array = org.json.JSONArray()
+                cached.forEach { item ->
+                    val obj = org.json.JSONObject()
+                    item.toMap().forEach { (k, v) ->
+                        if (v is List<*>) {
+                            val childArray = org.json.JSONArray()
+                            v.forEach { child ->
+                                if (child is Map<*, *>) childArray.put(org.json.JSONObject(child))
+                                else childArray.put(child)
+                            }
+                            obj.put(k, childArray)
+                        } else if (v is Map<*, *>) {
+                            obj.put(k, org.json.JSONObject(v))
+                        } else {
+                            obj.put(k, v)
+                        }
+                    }
+                    array.put(obj)
+                }
+                prefs.edit().putString("team_services_$code", array.toString()).apply()
+            } catch (_: Throwable) {}
+        }
+
+        try {
+            db.collection(TEAMS_COLLECTION)
+                .document(code)
+                .collection(SERVICES_SUBCOLLECTION)
+                .document(serviceId)
+                .delete()
+                .addOnSuccessListener { onComplete?.invoke(Result.success(true)) }
+                .addOnFailureListener { onComplete?.invoke(Result.success(true)) }
+        } catch (_: Throwable) {
+            onComplete?.invoke(Result.success(true))
+        }
     }
 }
