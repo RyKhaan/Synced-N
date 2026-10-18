@@ -474,8 +474,14 @@ class AdminActivity : AppCompatActivity() {
                 }
             }
             "home" -> {
-                if (triggerRefresh) refreshTeamRoster()
+                if (triggerRefresh) {
+                    refreshTeamRoster()
+                    refreshTeamServices()
+                }
                 setupHome()
+            }
+            "schedule" -> {
+                if (triggerRefresh) refreshTeamServices()
             }
             "teams" -> if (triggerRefresh) refreshTeamRoster()
             "settings" -> setupSettings()
@@ -1634,6 +1640,56 @@ class AdminActivity : AppCompatActivity() {
             }
         }
     }
+
+    private var isRefreshingServices = false
+    private var lastServicesRefreshTime = 0L
+
+    private fun refreshTeamServices(force: Boolean = false) {
+        val now = System.currentTimeMillis()
+        if (isRefreshingServices) return
+        if (!force && (now - lastServicesRefreshTime < 15_000L)) return
+
+        val currentCode = preferences.getString("teamCode", "").orEmpty()
+            .ifBlank { FirestoreManager.findCodeByTeamName(teamName).orEmpty() }
+        if (currentCode.isBlank()) return
+
+        isRefreshingServices = true
+        lastServicesRefreshTime = now
+
+        TeamRepository.getServices(currentCode, isLeader = true, preferences) { result ->
+            isRefreshingServices = false
+            result.getOrNull()?.let { list ->
+                if (list.isNotEmpty()) {
+                    val newRecords = list.map { srv ->
+                        val obj = org.json.JSONObject()
+                        srv.toMap().forEach { (k, v) ->
+                            if (v is List<*>) {
+                                val arr = org.json.JSONArray()
+                                v.forEach { c -> if (c is Map<*, *>) arr.put(org.json.JSONObject(c)) else arr.put(c) }
+                                obj.put(k, arr)
+                            } else if (v is Map<*, *>) {
+                                obj.put(k, org.json.JSONObject(v))
+                            } else {
+                                obj.put(k, v)
+                            }
+                        }
+                        obj
+                    }
+                    val changed = (newRecords.toString() != localServices.toString())
+                    localServices.clear()
+                    localServices.addAll(newRecords)
+                    if (changed) {
+                        runOnUiThread {
+                            if (page == "schedule" || page == "home") {
+                                navigate(page, triggerRefresh = false)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     private var leaderDraft = org.json.JSONObject()
     private val localServices = mutableListOf<org.json.JSONObject>()
     private val leaderRoles = mutableListOf("Worship Leader", "Substitute Leader", "Vocalist", "Guitarist", "Keyboardist", "Bassist", "Drummer", "Sound Operator")
@@ -1642,9 +1698,33 @@ class AdminActivity : AppCompatActivity() {
         activeServiceIndex = preferences.getInt("activeServiceIndex", -1)
         leaderDraft = try { org.json.JSONObject(preferences.getString("leaderDraft", "{}").orEmpty()) }
         catch (_: Exception) { org.json.JSONObject() }
+        localServices.clear()
+        val currentCode = preferences.getString("teamCode", "").orEmpty()
+            .ifBlank { FirestoreManager.findCodeByTeamName(teamName).orEmpty() }
+        val cached = TeamRepository.getCachedServices(currentCode, preferences)
+        if (cached.isNotEmpty()) {
+            cached.forEach { srv ->
+                val obj = org.json.JSONObject()
+                srv.toMap().forEach { (k, v) ->
+                    if (v is List<*>) {
+                        val arr = org.json.JSONArray()
+                        v.forEach { c -> if (c is Map<*, *>) arr.put(org.json.JSONObject(c)) else arr.put(c) }
+                        obj.put(k, arr)
+                    } else if (v is Map<*, *>) {
+                        obj.put(k, org.json.JSONObject(v))
+                    } else {
+                        obj.put(k, v)
+                    }
+                }
+                localServices.add(obj)
+            }
+        } else {
+            try {
+                val records = org.json.JSONArray(preferences.getString("leaderServices", "[]"))
+                repeat(records.length()) { localServices.add(records.getJSONObject(it)) }
+            } catch (_: Exception) {}
+        }
         try {
-            val records = org.json.JSONArray(preferences.getString("leaderServices", "[]"))
-            repeat(records.length()) { localServices.add(records.getJSONObject(it)) }
             val roles = org.json.JSONArray(preferences.getString("leaderRoles", "[]"))
             if (roles.length() > 0) { leaderRoles.clear(); repeat(roles.length()) { leaderRoles.add(roles.getString(it)) } }
         } catch (_: Exception) { toast("Could not restore some local demo data.") }
@@ -1980,13 +2060,71 @@ class AdminActivity : AppCompatActivity() {
     }
     private fun storeService(status: String) {
         leaderDraft.put("status", status)
+        val srvId = leaderDraft.optString("id").ifBlank { "srv_" + System.currentTimeMillis() }
+        leaderDraft.put("id", srvId)
         val record = org.json.JSONObject(leaderDraft.toString())
         if (activeServiceIndex in localServices.indices) localServices[activeServiceIndex] = record
         else { localServices.add(record); activeServiceIndex = localServices.lastIndex }
         val records = org.json.JSONArray(); localServices.forEach { records.put(it) }
         preferences.edit().putString("leaderServices", records.toString()).apply()
         serviceWizard = false; saveLeaderDraft()
-        toast(if (status == "Published") "Schedule published in the local demo." else "Draft saved on this phone.")
+
+        val activeCode = preferences.getString("teamCode", "").orEmpty()
+            .ifBlank { preferences.getString(SessionManager.KEY_TEAM_CODE, "").orEmpty() }
+            .ifBlank { FirestoreManager.findCodeByTeamName(teamName).orEmpty() }
+        val activeUid = preferences.getString(SessionManager.KEY_USER_ID, "").orEmpty()
+            .ifBlank { preferences.getString("userId", "").orEmpty() }
+            .ifBlank { AuthManager.currentUser?.uid.orEmpty() }
+
+        if (activeCode.isNotBlank()) {
+            val assignmentsList = mutableListOf<com.example.syncedn.data.model.ServiceAssignment>()
+            val draftAssigned = draftAssignments()
+            repeat(draftAssigned.length()) { idx ->
+                val a = draftAssigned.getJSONObject(idx)
+                assignmentsList.add(com.example.syncedn.data.model.ServiceAssignment(
+                    uid = a.optString("uid"),
+                    email = a.optString("email"),
+                    name = a.optString("name"),
+                    role = a.optString("role")
+                ))
+            }
+            val rehearsalData = com.example.syncedn.data.model.RehearsalData(
+                date = leaderDraft.optString("rehearsalDate"),
+                start = leaderDraft.optString("rehearsalStart"),
+                end = leaderDraft.optString("rehearsalEnd"),
+                venue = leaderDraft.optString("rehearsalVenue"),
+                notes = leaderDraft.optString("rehearsalNotes")
+            )
+            val songsList = mutableListOf<com.example.syncedn.data.model.ServiceSong>()
+            val draftSongsArr = draftSongs()
+            repeat(draftSongsArr.length()) { idx ->
+                val songTitle = draftSongsArr.getString(idx)
+                val songData = try { org.json.JSONObject(preferences.getString("songData_$songTitle", "{}").orEmpty()) } catch (_: Exception) { org.json.JSONObject() }
+                songsList.add(com.example.syncedn.data.model.ServiceSong(
+                    title = songTitle,
+                    artist = songData.optString("artist", songCatalog().find { it.first == songTitle }?.second ?: ""),
+                    key = songData.optString("key", "C"),
+                    bpm = songData.optInt("bpm", 74)
+                ))
+            }
+            val serviceObj = com.example.syncedn.data.model.ServiceData(
+                id = srvId,
+                teamCode = activeCode,
+                title = leaderDraft.optString("title"),
+                date = leaderDraft.optString("date"),
+                start = leaderDraft.optString("start"),
+                end = leaderDraft.optString("end"),
+                venue = leaderDraft.optString("venue"),
+                status = status,
+                assignments = assignmentsList,
+                rehearsal = rehearsalData,
+                songs = songsList,
+                createdBy = activeUid
+            )
+            TeamRepository.saveService(activeCode, serviceObj, preferences)
+        }
+
+        toast(if (status == "Published") "Schedule published." else "Draft saved.")
         navigate("schedule")
     }
     private fun reviewServiceView(): View = memberPage("Review Service", "scheduleRehearsal") { col ->
