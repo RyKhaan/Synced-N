@@ -6,6 +6,7 @@ import com.example.syncedn.data.auth.SessionManager
 import com.example.syncedn.data.database.FirestoreManager
 import com.example.syncedn.data.database.TeamRepository
 import com.example.syncedn.data.model.SongData
+import com.example.syncedn.data.model.AnnouncementData
 import com.example.syncedn.data.model.TeamMember
 import com.example.syncedn.data.model.UnavailableRange
 import com.example.syncedn.data.util.ValidationUtils
@@ -1111,9 +1112,45 @@ open class MemberActivity : AppCompatActivity() {
         navigate("service")
     }
     private fun announcementHomeTile(): View = memberTile(UI.announcementsButton, "announcement", "Announcements", 11).apply {
-        val count = try { org.json.JSONArray(preferences.getString("leaderPosts", "[]")).length() } catch (_: Exception) { 0 }
-        if (count > 0) { space(3); add(text("$count local post${if(count == 1) "" else "s"}", 10, purple, centered = true)) }
+        val activeCode = preferences.getString("teamCode", "").orEmpty()
+        val announcements = TeamRepository.getCachedAnnouncements(activeCode, preferences)
+        val count = announcements.size
+        if (count > 0) {
+            space(3)
+            val hasUrgent = announcements.any { it.urgent }
+            val label = if (hasUrgent) "🚨 $count post${if (count == 1) "" else "s"}" else "$count post${if (count == 1) "" else "s"}"
+            add(text(label, 10, if (hasUrgent) Color.rgb(220, 53, 69) else purple, centered = true))
+        }
         setOnClickListener { navigate("announcements") }
+    }
+
+    private fun urgentAlertBanner(): View? {
+        val activeCode = preferences.getString("teamCode", "").orEmpty()
+        val urgentItem = TeamRepository.getCachedAnnouncements(activeCode, preferences).firstOrNull { it.urgent } ?: return null
+        return vertical().apply {
+            background = bg(Color.rgb(255, 240, 240), 16, Color.rgb(220, 53, 69))
+            setPadding(dp(16), dp(14), dp(16), dp(14))
+            elevation = dp(2).toFloat()
+            isClickable = true
+            isFocusable = true
+            contentDescription = "Urgent announcement: ${urgentItem.title}. Tap to view."
+            setOnClickListener { navigate("announcements") }
+
+            val row = horizontal().apply { gravity = Gravity.CENTER_VERTICAL }
+            row.add(text("🚨 URGENT ALERT", 11, Color.rgb(220, 53, 69), bold = true).apply {
+                background = bg(Color.rgb(255, 220, 224), 8)
+                setPadding(dp(6), dp(2), dp(6), dp(2))
+            })
+            row.add(View(this@MemberActivity), 8, 1)
+            val dateStr = formatAnnouncementDate(urgentItem.createdAt)
+            row.add(text(dateStr, 11, Color.rgb(180, 40, 50)), 0, -2, 1f)
+            add(row)
+            space(6)
+            add(text(urgentItem.title, 14, navy, bold = true))
+            space(4)
+            val snippet = if (urgentItem.message.length > 90) urgentItem.message.take(87) + "..." else urgentItem.message
+            add(text(snippet, 12, Color.rgb(66, 82, 114)))
+        }
     }
     private fun homeView(): View {
         val root=vertical().apply { setBackgroundColor(Color.WHITE) }
@@ -1215,6 +1252,13 @@ open class MemberActivity : AppCompatActivity() {
             }
             upper.add(rightColumn,0,-2,0.37f)
             add(upper);space(18)
+            val activeCode = preferences.getString("teamCode", "").orEmpty()
+            if (activeCode.isNotBlank()) {
+                TeamRepository.getAnnouncements(activeCode, false, preferences)
+            }
+            urgentAlertBanner()?.let { alertCard ->
+                add(alertCard); space(18)
+            }
             add(text("Upcoming",17,navy,true));space(12)
             val upcoming=horizontal().apply { gravity=Gravity.TOP }
             val service=vertical().apply {
@@ -2091,15 +2135,83 @@ open class MemberActivity : AppCompatActivity() {
             }
         }, -1, 48)
     }
+    private fun formatAnnouncementDate(timestamp: Long): String {
+        return try {
+            val date = java.util.Date(timestamp)
+            java.text.SimpleDateFormat("MMM d, yyyy", java.util.Locale.US).format(date)
+        } catch (_: Exception) {
+            "Recent"
+        }
+    }
+
     private fun leaderPosts(col: LinearLayout) {
-        val posts = org.json.JSONArray(preferences.getString("leaderPosts", "[]"))
-        for (index in posts.length() - 1 downTo 0) {
-            val post = posts.getJSONObject(index)
-            col.add(panel().apply {
-                add(text(post.optString("title") + if (post.optBoolean("urgent")) " • Urgent" else "", 14, purple, true))
-                space(8); add(text(post.optString("message"), 13, navy))
-                space(8); add(text("By " + post.optString("author"), 11, Color.GRAY))
-            }); col.space(16)
+        val activeCode = preferences.getString("teamCode", "").orEmpty()
+        // Migrate legacy local demo posts if needed
+        val legacyJson = preferences.getString("leaderPosts", null)
+        val cached = TeamRepository.getCachedAnnouncements(activeCode, preferences)
+        if (!legacyJson.isNullOrBlank() && cached.isEmpty()) {
+            try {
+                val posts = org.json.JSONArray(legacyJson)
+                val migrated = mutableListOf<AnnouncementData>()
+                for (i in 0 until posts.length()) {
+                    val p = posts.getJSONObject(i)
+                    migrated.add(AnnouncementData(
+                        id = "legacy_ann_$i",
+                        teamCode = activeCode,
+                        title = p.optString("title", "Announcement"),
+                        message = p.optString("message", ""),
+                        urgent = p.optBoolean("urgent", false),
+                        author = p.optString("author", "Leader"),
+                        createdBy = "",
+                        createdAt = System.currentTimeMillis() - (posts.length() - i) * 60_000L
+                    ))
+                }
+                if (migrated.isNotEmpty()) {
+                    TeamRepository.saveAnnouncementsLocally(activeCode, migrated, preferences)
+                    preferences.edit().remove("leaderPosts").apply()
+                }
+            } catch (_: Throwable) {}
+        }
+
+        fun populateList() {
+            col.removeAllViews()
+            val list = TeamRepository.getCachedAnnouncements(activeCode, preferences)
+            if (list.isEmpty()) {
+                col.add(panel().apply {
+                    add(text("No announcements yet.", 13, Color.GRAY, centered = true))
+                }); col.space(16)
+                return
+            }
+            for (post in list) {
+                col.add(panel().apply {
+                    if (post.urgent) {
+                        val badgeRow = horizontal().apply { gravity = Gravity.CENTER_VERTICAL }
+                        badgeRow.add(text("🚨 URGENT ALERT", 11, Color.rgb(220, 53, 69), bold = true).apply {
+                            background = bg(Color.rgb(255, 235, 238), 12, Color.rgb(220, 53, 69))
+                            setPadding(dp(8), dp(4), dp(8), dp(4))
+                        })
+                        add(badgeRow)
+                        space(6)
+                    }
+                    add(text(post.title, 14, if (post.urgent) Color.rgb(220, 53, 69) else purple, bold = true))
+                    space(8); add(text(post.message, 13, navy))
+                    val authorLabel = if (post.author.isNotBlank()) post.author else "Leader"
+                    val dateLabel = formatAnnouncementDate(post.createdAt)
+                    space(8); add(text("By $authorLabel • $dateLabel", 11, Color.GRAY))
+                }); col.space(16)
+            }
+        }
+
+        populateList()
+
+        if (activeCode.isNotBlank()) {
+            TeamRepository.getAnnouncements(activeCode, false, preferences) { result ->
+                runOnUiThread {
+                    if (result.isSuccess && page == "announcements") {
+                        populateList()
+                    }
+                }
+            }
         }
     }
     private fun announcementsView(): View = memberPage("Announcement", "home") { col ->
