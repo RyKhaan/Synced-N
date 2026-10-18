@@ -253,6 +253,30 @@ service cloud.firestore {
       (!('updatedAt' in data) || (data.updatedAt is number && data.updatedAt >= 0) || (data.updatedAt is timestamp));
     }
 
+    // Strict validator for /teams/{teamCode}/services/{serviceId} documents
+    function isValidService(data, serviceId, teamCode) {
+      return hasOnlyAllowedFields(data, [
+        'id', 'teamCode', 'title', 'date', 'start', 'end', 'venue',
+        'status', 'assignments', 'rehearsal', 'songs', 'createdBy',
+        'createdAt', 'updatedAt'
+      ]) &&
+      hasRequiredFields(data, ['id', 'teamCode', 'title', 'date', 'start', 'end', 'venue', 'status', 'createdBy']) &&
+      data.id is string && data.id == serviceId &&
+      data.teamCode is string && data.teamCode == teamCode &&
+      data.title is string && data.title.size() > 0 && data.title.size() <= 100 &&
+      data.date is string && data.date.size() <= 20 &&
+      data.start is string && data.start.size() <= 10 &&
+      data.end is string && data.end.size() <= 10 &&
+      data.venue is string && data.venue.size() > 0 && data.venue.size() <= 100 &&
+      data.status is string && data.status in ['Draft', 'Published'] &&
+      (!('assignments' in data) || (data.assignments is list && data.assignments.size() <= 50)) &&
+      (!('rehearsal' in data) || data.rehearsal is map) &&
+      (!('songs' in data) || (data.songs is list && data.songs.size() <= 50)) &&
+      data.createdBy is string && data.createdBy.size() > 0 &&
+      (!('createdAt' in data) || (data.createdAt is number && data.createdAt >= 0) || (data.createdAt is timestamp)) &&
+      (!('updatedAt' in data) || (data.updatedAt is number && data.updatedAt >= 0) || (data.updatedAt is timestamp));
+    }
+
     // ===============================================================
     // Collection Match Rules
     // ===============================================================
@@ -347,6 +371,28 @@ service cloud.firestore {
 
       // Deletion of team records is disallowed to prevent accidental data loss
       allow delete: if false;
+
+      // -------------------------------------------------------------
+      // Subcollection: /teams/{teamCode}/services/{serviceId}
+      // -------------------------------------------------------------
+      match /services/{serviceId} {
+        // Read: Members can read Published services; Leader can read all.
+        allow read: if isAuthenticated() && isSameTeam(teamCode) && (
+          isLeaderOfTeam(teamCode) ||
+          (resource != null && resource.data.status == 'Published')
+        );
+
+        // Write: Only the verified Team Leader can manage worship services.
+        allow create: if isLeaderOfTeam(teamCode) &&
+                         isValidService(request.resource.data, serviceId, teamCode) &&
+                         request.resource.data.createdBy == request.auth.uid;
+
+        allow update: if isLeaderOfTeam(teamCode) &&
+                         isValidService(request.resource.data, serviceId, teamCode) &&
+                         areImmutableFieldsUnchanged(['id', 'teamCode', 'createdBy', 'createdAt']);
+
+        allow delete: if isLeaderOfTeam(teamCode);
+      }
     }
 
     // ---------------------------------------------------------------
