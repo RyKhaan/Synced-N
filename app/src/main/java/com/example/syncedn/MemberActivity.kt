@@ -43,7 +43,7 @@ import android.widget.Button
 import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
-import android.widget.ScrollView
+import androidx.core.view.doOnLayout
 import android.animation.ObjectAnimator
 import android.animation.ValueAnimator
 import android.view.animation.LinearInterpolator
@@ -303,6 +303,16 @@ open class MemberActivity : AppCompatActivity() {
         super.onSaveInstanceState(outState)
     }
 
+    override fun onPause() {
+        sheetAutoScroll?.pause()
+        super.onPause()
+    }
+
+    override fun onStop() {
+        songMetronome?.stop()
+        super.onStop()
+    }
+
     protected open fun navigate(next: String) {
         navigate(next, true)
     }
@@ -313,8 +323,14 @@ open class MemberActivity : AppCompatActivity() {
             finish()
             return
         }
+        sheetAutoScroll?.close()
+        sheetAutoScroll = null
+        songMetronome?.close()
+        songMetronome = null
         page = next
+        homeMemberCount = null
         val root = buildScreen(page)
+        screenRoot = root
         setContentView(root)
         ViewCompat.setOnApplyWindowInsetsListener(root) { view, insets ->
             val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
@@ -828,7 +844,7 @@ open class MemberActivity : AppCompatActivity() {
     }
     private fun form(right: Boolean = false): Pair<FrameLayout, LinearLayout> {
         val root = FrameLayout(this).apply { setBackgroundColor(Color.WHITE) }
-        val scroll = ScrollView(this).apply { isFillViewport = true }
+        val scroll = StableScrollView(this).apply { isFillViewport = true }
         val col = vertical()
         scroll.addView(col, FrameLayout.LayoutParams(-1, -2))
         root.addView(scroll, FrameLayout.LayoutParams(-1, -1))
@@ -1169,9 +1185,9 @@ open class MemberActivity : AppCompatActivity() {
     }
     private fun homeView(): View {
         val root=vertical().apply { setBackgroundColor(Color.WHITE) }
-        val scroll=ScrollView(this).apply { isFillViewport=true }
+        val scroll=StableScrollView(this).apply { isFillViewport=true }
         val content=vertical(); scroll.addView(content, FrameLayout.LayoutParams(-1,-2)); root.add(scroll,-1,0,1f)
-        val hero=FrameLayout(this)
+        val hero=HomeHeroLayout(this)
         val header=View(this).apply {
             background=GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,intArrayOf(Color.rgb(8,7,32),Color.rgb(21,18,105))).apply { cornerRadii=floatArrayOf(0f,0f,0f,0f,dp(60).toFloat(),dp(60).toFloat(),dp(60).toFloat(),dp(60).toFloat()) }
         }
@@ -1222,22 +1238,8 @@ open class MemberActivity : AppCompatActivity() {
             rightMargin = dp(24)
             topMargin = dp(132)
         })
-        hero.addOnLayoutChangeListener { view, left, _, right, _, _, _, _, _ ->
-            val cardHeight = ((right - left - dp(48)).coerceAtLeast(1) * 200f / 312f).toInt()
-            val cardTop = dp(132)
-            val desiredHeight = cardTop + cardHeight + dp(16)
-            if (card.layoutParams.height != cardHeight || view.layoutParams.height != desiredHeight) {
-                view.post {
-                    if (card.layoutParams.height != cardHeight) {
-                        card.layoutParams = card.layoutParams.apply { height = cardHeight }
-                    }
-                    if (view.layoutParams.height != desiredHeight) {
-                        view.layoutParams = view.layoutParams.apply { height = desiredHeight }
-                    }
-                }
-            }
-        }
-        content.add(hero, -1, 348)
+        hero.card = card
+        content.add(hero, -1, -2)
         content.space(2)
         content.section(15).apply {
             add(text("Ministry Hub",17,navy,true)); space(12)
@@ -1257,7 +1259,9 @@ open class MemberActivity : AppCompatActivity() {
                 },0,-2,1f)
                 add(titleRow);space(8)
                 val memberCount = getActiveRoster().size
-                add(text("$memberCount Member${if (memberCount == 1) "" else "s"}",11,Color.rgb(84,91,116),true))
+                add(text("$memberCount Member${if (memberCount == 1) "" else "s"}",11,Color.rgb(84,91,116),true).also {
+                    homeMemberCount = it
+                })
             }
             team.addView(teamInfo,FrameLayout.LayoutParams(-1,-1))
             val teamArrow=FrameLayout(this@MemberActivity).apply {background=bg(Color.WHITE,24,navy)}
@@ -1340,7 +1344,7 @@ open class MemberActivity : AppCompatActivity() {
     private fun settingsView(): View {
         val root=vertical().apply {setBackgroundColor(Color.WHITE)}
         root.add(settingsHeader("Settings",false))
-        val scroll=ScrollView(this).apply {isFillViewport=true; clipToPadding=true}
+        val scroll=StableScrollView(this).apply {isFillViewport=true; clipToPadding=true}
         val col=vertical();scroll.addView(col,FrameLayout.LayoutParams(-1,-2));root.add(scroll,-1,0,1f)
         col.space(24)
         col.section(18).apply {
@@ -1479,7 +1483,7 @@ open class MemberActivity : AppCompatActivity() {
         displayName = preferences.getString(SessionManager.KEY_USERNAME, displayName).orEmpty()
         val root=vertical().apply {setBackgroundColor(Color.WHITE)}
         root.add(settingsHeader("Profile",true))
-        val scroll=ScrollView(this).apply {isFillViewport=true; clipToPadding=true}
+        val scroll=StableScrollView(this).apply {isFillViewport=true; clipToPadding=true}
         val col=vertical();scroll.addView(col,FrameLayout.LayoutParams(-1,-2));root.add(scroll,-1,0,1f)
         col.space(28)
         val avatar=FrameLayout(this)
@@ -1583,6 +1587,8 @@ open class MemberActivity : AppCompatActivity() {
     private var teamTab = "Team Chat"
     private var expandedRole: String? = null
     private var selectedSong = "Trust in God"
+    private var sheetAutoScroll: SheetAutoScrollControls? = null
+    private var songMetronome: MetronomeView? = null
     private var songDetailsBack = "songs"
     private var selectedSheetService: org.json.JSONObject? = null
     private var selectedService = "Sunday Worship Service"
@@ -1621,9 +1627,6 @@ open class MemberActivity : AppCompatActivity() {
             }
         }
 
-        if (currentCode.isNotBlank()) {
-            TeamRepository.syncFromPreferences(preferences, currentCode)
-        }
         val cached = TeamRepository.getCachedRoster(currentCode)
         if (cached.isNotEmpty()) return applyOverrides(cached)
         if (teamRoster.isNotEmpty()) return applyOverrides(teamRoster)
@@ -1656,34 +1659,60 @@ open class MemberActivity : AppCompatActivity() {
         })
     }
 
-    private var isRefreshingRoster = false
-    private var lastRosterRefreshTime = 0L
+
+
+    private val rosterRefreshGate = RosterRefreshGate()
+    private var screenRoot: View? = null
+    private var homeMemberCount: TextView? = null
+
+    private fun activeTeamCode(): String = preferences.getString("teamCode", "").orEmpty()
+        .ifBlank { FirestoreManager.findCodeByTeamName(teamName).orEmpty() }
+        .trim().uppercase(java.util.Locale.ROOT)
+
+    private fun primaryScroll(view: View?): StableScrollView? {
+        if (view is StableScrollView) return view
+        if (view is android.view.ViewGroup) {
+            for (index in 0 until view.childCount) {
+                primaryScroll(view.getChildAt(index))?.let { return it }
+            }
+        }
+        return null
+    }
+
+    private fun updateRosterViews() {
+        if (page == "home") {
+            // Updating one label preserves the current gesture, fling and scroll offset.
+            val count = getActiveRoster().size
+            val label = "$count Member${if (count == 1) "" else "s"}"
+            homeMemberCount?.let { if (it.text.toString() != label) it.text = label }
+        } else if (page == "teams" && teamTab != "Team Chat") {
+            val oldRoot = screenRoot
+            val oldScroll = primaryScroll(oldRoot) ?: return
+            oldScroll.whenIdle {
+                if (screenRoot === oldRoot && page == "teams") {
+                    val position = oldScroll.scrollY
+                    // Render updated rows once, without starting another roster request.
+                    navigate("teams", triggerRefresh = false)
+                    primaryScroll(screenRoot)?.let { scroll ->
+                        scroll.doOnLayout { scroll.scrollTo(0, position) }
+                    }
+                }
+            }
+        }
+    }
 
     private fun refreshTeamRoster(force: Boolean = false) {
-        val now = System.currentTimeMillis()
-        if (isRefreshingRoster) return
-        if (!force && (now - lastRosterRefreshTime < 15_000L)) return
-
-        val currentCode = preferences.getString("teamCode", "").orEmpty()
-            .ifBlank { FirestoreManager.findCodeByTeamName(teamName).orEmpty() }
-        if (currentCode.isBlank()) return
-
-        isRefreshingRoster = true
-        lastRosterRefreshTime = now
+        val currentCode = activeTeamCode()
+        val ticket = rosterRefreshGate.begin(currentCode)
+        if (ticket == -1L && !force) return
         TeamRepository.syncFromPreferences(preferences, currentCode)
-
+        val previous = getActiveRoster().sortedBy { it.uid }
         TeamRepository.getTeamRoster(currentCode, force) { result ->
-            isRefreshingRoster = false
-            result.getOrNull()?.let { list ->
-                if (list.isNotEmpty()) {
-                    val changed = (list != teamRoster)
-                    teamRoster = list
-                    if (changed) {
-                        runOnUiThread {
-                            if (page == "teams") {
-                                navigate(page, triggerRefresh = false)
-                            }
-                        }
+            runOnUiThread {
+                if ((ticket == -1L || rosterRefreshGate.finish(ticket)) && !isFinishing && !isDestroyed && activeTeamCode() == currentCode) {
+                    result.getOrNull()?.let { list ->
+                        teamRoster = list
+                        if (list.sortedBy { it.uid } != previous) updateRosterViews()
                     }
                 }
             }
@@ -1743,16 +1772,18 @@ open class MemberActivity : AppCompatActivity() {
         clipToOutline = true
     }
     private fun memberPage(title: String, back: String, tab: String? = null,
+                           footer: (() -> View?)? = null,
                            body: (LinearLayout) -> Unit): View {
         val root = vertical().apply { setBackgroundColor(Color.WHITE) }
         val header = settingsHeader(title, true)
         header.findViewById<View>(UI.pageBack).setOnClickListener { navigate(back) }
         root.add(header)
-        val scroll = ScrollView(this).apply { isFillViewport = true; clipToPadding = true }
+        val scroll = StableScrollView(this).apply { isFillViewport = true; clipToPadding = true }
         val col = vertical().apply { setPadding(dp(20), dp(24), dp(20), dp(24)) }
         scroll.addView(col, FrameLayout.LayoutParams(-1, -2))
         body(col)
         root.add(scroll, -1, 0, 1f)
+        footer?.invoke()?.let { root.add(it) }
         if (tab != null) root.add(memberNavigation(tab), -1, 64)
         return root
     }
@@ -1813,7 +1844,11 @@ open class MemberActivity : AppCompatActivity() {
         }
     }
     private fun scheduleView(): View {
-        val root = vertical().apply { setBackgroundColor(Color.WHITE) }
+        val root = vertical().apply {
+            setBackgroundColor(Color.WHITE)
+            clipChildren = true
+            clipToPadding = true
+        }
         val header = settingsHeader("Schedule", true)
         header.findViewById<View>(UI.pageBack).setOnClickListener { navigate("home") }
         root.add(header)
@@ -1826,7 +1861,7 @@ open class MemberActivity : AppCompatActivity() {
             })
         }
         root.add(topNav)
-        val scroll = ScrollView(this).apply { isFillViewport = true; clipToPadding = true }
+        val scroll = StableScrollView(this).apply { isFillViewport = true; clipToPadding = true }
         val col = vertical().apply { setPadding(dp(20), dp(8), dp(20), dp(24)) }
         scroll.addView(col, FrameLayout.LayoutParams(-1, -2))
         val upcoming = listOf(Triple("SEPT\n6", "Sunday Worship Service", "6:00AM – 11:00AM"),
@@ -2650,7 +2685,7 @@ open class MemberActivity : AppCompatActivity() {
             rows.find { it.first.trim().equals(identity.trim(),true) }?.second?.takeIf { it.isNotBlank() }
         }.orEmpty()
     }
-    private fun songDetailsView(): View = memberPage("Song Details", songDetailsBack) { col ->
+    private fun songDetailsView(): View = memberPage("Song Details", songDetailsBack, footer = { sheetAutoScroll }) { col ->
         val activeCode = preferences.getString("teamCode", "").orEmpty()
         val currentSong = TeamRepository.getCachedSongs(activeCode, preferences).find { it.title.equals(selectedSong, ignoreCase = true) }
         val savedSong = try { org.json.JSONObject(preferences.getString("songData_$selectedSong", "{}").orEmpty()) }
@@ -2669,26 +2704,31 @@ open class MemberActivity : AppCompatActivity() {
         val tempo = currentSong?.bpm?.toString() ?: savedSong.optString("bpm", "74")
         var offset = ((preferences.getInt("chord_transpose_$selectedSong", 0) % 12) + 12) % 12
         val key = text("", 13, purple, true)
-        val maxLineLen = sheet.lines().maxOfOrNull { it.length } ?: 0
-        val sheetText = text("", if (showChords && maxLineLen > 40) 12 else 13, navy).apply {
+        val sheetText = text("", 13, navy).apply {
             if (showChords) typeface = Typeface.MONOSPACE
-            setLineSpacing(dp(4).toFloat(), 1.18f)
+            includeFontPadding = true
+            setLineSpacing(0f, 1.15f)
             setTextIsSelectable(true)
             isSingleLine = false
             setHorizontallyScrolling(false)
         }
-        val chordButtons = mutableMapOf<String, TextView>()
+        sheetAutoScroll = SheetAutoScrollControls(
+            this@MemberActivity, preferences, selectedSong, col.parent as StableScrollView, sheetText
+        )
+        val keyButtons = mutableListOf<Pair<Int, TextView>>()
         fun renderTarget(target: Int) {
             offset = (target - basePitch + 12) % 12
             val root = roots[target]
             key.text = "Key: $root${if(minor) "m" else ""}    •    $tempo BPM"
             sheetText.text = ChordSheet.render(sheet, offset, !showChords, root.contains('b') || root == "F")
-            preferences.edit().putInt("chord_transpose_$selectedSong", offset).apply()
-            chordButtons.forEach { (chord, tv) ->
-                val isActive = (chord == root)
-                tv.background = bg(if (isActive) navy else Color.rgb(228, 220, 235), 8)
-                tv.setTextColor(if (isActive) Color.WHITE else navy)
+            keyButtons.forEach { (pitch, button) ->
+                val selected = pitch == target
+                button.setTextColor(if(selected) Color.WHITE else navy)
+                button.background = SongControlStyle.background(resources, selected)
+                button.isSelected = selected
             }
+            preferences.edit().putInt("chord_transpose_$selectedSong", offset).apply()
+
         }
         
         col.add(panel().apply {
@@ -2709,23 +2749,32 @@ open class MemberActivity : AppCompatActivity() {
                         }.setNeutralButton("Original") { _,_ -> renderTarget(basePitch) }
                         .setNegativeButton("Cancel",null).show()
                 }
-                add(text("Transpose preview", 12, Color.GRAY)); space(8)
-                add(horizontal().apply {
-                    val previewChords = listOf("C", "Db", "D", "Eb", "E", "F")
-                    previewChords.forEachIndexed { idx, chord ->
-                        val btn = text(chord, 12, navy, true, true).apply {
-                            background = bg(Color.rgb(228, 220, 235), 8)
-                            setOnClickListener { renderTarget(ChordSheet.pitch(chord)) }
-                            isFocusable = true
+                add(text("Transpose", 12, Color.GRAY)); space(8)
+                roots.chunked(6).forEachIndexed { rowIndex, row ->
+                    if(rowIndex > 0) space(8)
+                    add(horizontal().apply {
+                        row.forEach { chord ->
+                            val pitch = ChordSheet.pitch(chord)
+                            add(text(chord + if(minor) "m" else "", 12, navy, true, true).apply {
+                                background = SongControlStyle.background(resources)
+                                contentDescription = "Transpose to $text"
+                                setOnClickListener { renderTarget(pitch) }
+                                isFocusable = true
+                                keyButtons.add(pitch to this)
+                            }, 0, 48, 1f)
                         }
-                        chordButtons[chord] = btn
-                        val lp = LinearLayout.LayoutParams(0, dp(38), 1f).apply {
-                            if (idx > 0) leftMargin = dp(6)
-                        }
-                        addView(btn, lp)
-                    }
-                })
+                    })
+                }
+                add(text("Original key", 12, purple).apply {
+                    isFocusable = true
+                    setOnClickListener { renderTarget(basePitch) }
+                }, -1, 36)
             }
+        }); col.space(24)
+        col.add(panel().apply {
+            val metronome = MetronomeView(this@MemberActivity, preferences, selectedSong, tempo.toIntOrNull() ?: 74)
+            songMetronome = metronome
+            add(metronome)
         }); col.space(24)
         col.add(text(if(showChords) "Lyrics & Chords Sheet" else "Lyrics", 13, navy, true)); col.space(10)
         col.add(panel().apply {
@@ -2871,7 +2920,7 @@ open class MemberActivity : AppCompatActivity() {
         val root = vertical().apply { setBackgroundColor(Color.WHITE) }
         root.add(teamHeader(showDetails = true), -1, 156)
         root.add(teamTabs())
-        val scroll = ScrollView(this).apply { isFillViewport = true; clipToPadding = true }
+        val scroll = StableScrollView(this).apply { isFillViewport = true; clipToPadding = true }
         val col = vertical().apply { setPadding(dp(20), dp(16), dp(20), dp(20)) }
         scroll.addView(col, FrameLayout.LayoutParams(-1, -2)); root.add(scroll, -1, 0, 1f)
         when (teamTab) {
@@ -2999,7 +3048,7 @@ open class MemberActivity : AppCompatActivity() {
     private fun teamDetailsView(): View {
         val root = vertical().apply { setBackgroundColor(Color.WHITE) }
         root.add(teamHeader(), -1, 88)
-        val scroll = ScrollView(this).apply { isFillViewport = true; clipToPadding = true }
+        val scroll = StableScrollView(this).apply { isFillViewport = true; clipToPadding = true }
         val col = vertical().apply { setPadding(dp(20), dp(32), dp(20), dp(24)) }
         scroll.addView(col, FrameLayout.LayoutParams(-1, -2)); root.add(scroll, -1, 0, 1f)
         col.add(text("Team Name", 13, Color.BLACK, true)); col.space(8)
