@@ -224,7 +224,6 @@ open class MemberActivity : AppCompatActivity() {
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
-        setTheme(R.style.Theme_MyApplication)
         super.onCreate(savedInstanceState)
         WindowCompat.setDecorFitsSystemWindows(window, false)
         syncLocalTeamsToMemory()
@@ -450,6 +449,11 @@ open class MemberActivity : AppCompatActivity() {
                 if (triggerRefresh) {
                     refreshTeamRoster()
                     refreshTeamServices()
+                    val activeCode = preferences.getString("teamCode", "").orEmpty()
+                        .ifBlank { FirestoreManager.findCodeByTeamName(teamName).orEmpty() }
+                    if (activeCode.isNotBlank()) {
+                        TeamRepository.getAnnouncements(activeCode, false, preferences)
+                    }
                 }
                 setupHome()
             }
@@ -1003,13 +1007,23 @@ open class MemberActivity : AppCompatActivity() {
 
         override fun onAttachedToWindow() {
             super.onAttachedToWindow()
-            lastFrameTime = android.os.SystemClock.uptimeMillis()
-            postInvalidateOnAnimation()
+            if (hasWindowFocus()) {
+                lastFrameTime = android.os.SystemClock.uptimeMillis()
+                postInvalidateOnAnimation()
+            }
+        }
+
+        override fun onWindowFocusChanged(hasWindowFocus: Boolean) {
+            super.onWindowFocusChanged(hasWindowFocus)
+            if (hasWindowFocus && isAttachedToWindow && windowVisibility == View.VISIBLE) {
+                lastFrameTime = android.os.SystemClock.uptimeMillis()
+                postInvalidateOnAnimation()
+            }
         }
 
         override fun onVisibilityChanged(changedView: View, visibility: Int) {
             super.onVisibilityChanged(changedView, visibility)
-            if (visibility == View.VISIBLE) {
+            if (visibility == View.VISIBLE && hasWindowFocus()) {
                 lastFrameTime = android.os.SystemClock.uptimeMillis()
                 postInvalidateOnAnimation()
             }
@@ -1017,7 +1031,7 @@ open class MemberActivity : AppCompatActivity() {
 
         override fun onWindowVisibilityChanged(visibility: Int) {
             super.onWindowVisibilityChanged(visibility)
-            if (visibility == View.VISIBLE) {
+            if (visibility == View.VISIBLE && hasWindowFocus()) {
                 lastFrameTime = android.os.SystemClock.uptimeMillis()
                 postInvalidateOnAnimation()
             }
@@ -1046,7 +1060,7 @@ open class MemberActivity : AppCompatActivity() {
             }
             canvas.restoreToCount(checkpoint)
 
-            if (isAttachedToWindow && windowVisibility == View.VISIBLE) {
+            if (isAttachedToWindow && windowVisibility == View.VISIBLE && hasWindowFocus()) {
                 postInvalidateOnAnimation()
             }
         }
@@ -1210,13 +1224,17 @@ open class MemberActivity : AppCompatActivity() {
         })
         hero.addOnLayoutChangeListener { view, left, _, right, _, _, _, _, _ ->
             val cardHeight = ((right - left - dp(48)).coerceAtLeast(1) * 200f / 312f).toInt()
-            if (card.layoutParams.height != cardHeight) {
-                card.layoutParams = card.layoutParams.apply { height = cardHeight }
-            }
             val cardTop = dp(132)
             val desiredHeight = cardTop + cardHeight + dp(16)
-            if (view.layoutParams.height != desiredHeight) {
-                view.layoutParams = view.layoutParams.apply { height = desiredHeight }
+            if (card.layoutParams.height != cardHeight || view.layoutParams.height != desiredHeight) {
+                view.post {
+                    if (card.layoutParams.height != cardHeight) {
+                        card.layoutParams = card.layoutParams.apply { height = cardHeight }
+                    }
+                    if (view.layoutParams.height != desiredHeight) {
+                        view.layoutParams = view.layoutParams.apply { height = desiredHeight }
+                    }
+                }
             }
         }
         content.add(hero, -1, 348)
@@ -1253,10 +1271,6 @@ open class MemberActivity : AppCompatActivity() {
             }
             upper.add(rightColumn,0,-2,0.37f)
             add(upper);space(18)
-            val activeCode = preferences.getString("teamCode", "").orEmpty()
-            if (activeCode.isNotBlank()) {
-                TeamRepository.getAnnouncements(activeCode, false, preferences)
-            }
             urgentAlertBanner()?.let { alertCard ->
                 add(alertCard); space(18)
             }
@@ -1666,7 +1680,7 @@ open class MemberActivity : AppCompatActivity() {
                     teamRoster = list
                     if (changed) {
                         runOnUiThread {
-                            if (page == "teams" || page == "home") {
+                            if (page == "teams") {
                                 navigate(page, triggerRefresh = false)
                             }
                         }
@@ -1699,7 +1713,7 @@ open class MemberActivity : AppCompatActivity() {
                 val currentStored = storedServices().toString()
                 if (currentStored != previousStored) {
                     runOnUiThread {
-                        if (page == "schedule" || page == "home") {
+                        if (page == "schedule") {
                             navigate(page, triggerRefresh = false)
                         }
                     }
@@ -2819,8 +2833,13 @@ open class MemberActivity : AppCompatActivity() {
         layoutParams = LinearLayout.LayoutParams(-1, dp(if (showDetails) 156 else 88))
         addOnLayoutChangeListener { _, left, _, right, _, _, _, _, _ ->
             val imageWidth = ((right - left) * (if (showDetails) 237f else 130f) / 360f).toInt()
-            if (photograph.layoutParams.width != imageWidth)
-                photograph.layoutParams = photograph.layoutParams.apply { width = imageWidth }
+            if (photograph.layoutParams.width != imageWidth) {
+                photograph.post {
+                    if (photograph.layoutParams.width != imageWidth) {
+                        photograph.layoutParams = photograph.layoutParams.apply { width = imageWidth }
+                    }
+                }
+            }
         }
     }
     private fun teamTabs(): View = horizontal().apply {
