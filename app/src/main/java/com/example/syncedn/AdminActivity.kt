@@ -283,6 +283,11 @@ class AdminActivity : AppCompatActivity() {
         }
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
+                if (activeTeamSheet != null) {
+                    activeTeamSheet = null
+                    navigate("teamDetails")
+                    return
+                }
                 val previous = when (page) {
                     "login" -> "start"
                     "register", "reset" -> "login"
@@ -3253,23 +3258,32 @@ class AdminActivity : AppCompatActivity() {
     }
     private fun roleEditView(): View {
         val root = vertical().apply { setBackgroundColor(Color.WHITE) }
-        root.add(teamHeader(), -1, 88)
+        root.add(teamHeader(showDetails = true), -1, 156)
+        teamTab = "Role"
+        root.add(teamTabs())
+
+        val bottomContainer = vertical().apply {
+            background = GradientDrawable(
+                GradientDrawable.Orientation.TOP_BOTTOM,
+                intArrayOf(Color.rgb(21, 29, 56), Color.rgb(46, 62, 120))
+            ).apply {
+                cornerRadii = floatArrayOf(
+                    dp(32).toFloat(), dp(32).toFloat(),
+                    dp(32).toFloat(), dp(32).toFloat(),
+                    0f, 0f,
+                    0f, 0f
+                )
+            }
+        }
+
         val scroll = StableScrollView(this).apply { isFillViewport = true; clipToPadding = true }
         val col = vertical().apply {
             setPadding(dp(20), dp(24), dp(20), dp(24))
-            background = GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,
-                intArrayOf(Color.rgb(21, 28, 50), Color.rgb(57, 79, 150)))
         }
-        scroll.addView(col, FrameLayout.LayoutParams(-1, -2)); root.add(scroll, -1, 0, 1f)
-        col.add(horizontal().apply {
-            add(memberAvatar(),52,52)
-            add(vertical().apply {
-                setPadding(dp(16),0,0,0)
-                add(text(roleMember,14,Color.WHITE,true));space(5)
-                add(text("Choose member role",12,Color.LTGRAY))
-            },0,-2,1f)
-        }); col.space(16)
-        val radios = android.widget.RadioGroup(this)
+        scroll.addView(col, FrameLayout.LayoutParams(-1, -2))
+        bottomContainer.addView(scroll, LinearLayout.LayoutParams(-1, 0, 1f))
+        root.addView(bottomContainer, LinearLayout.LayoutParams(-1, 0, 1f))
+
         val activeMember = getActiveRoster().find {
             (roleMemberUid.isNotBlank() && it.uid == roleMemberUid) ||
             (roleMemberEmail.isNotBlank() && it.email.equals(roleMemberEmail, ignoreCase = true)) ||
@@ -3286,20 +3300,68 @@ class AdminActivity : AppCompatActivity() {
                     }
                 }
             } catch (_: Exception) { "" }
-        val defaultRole = currentSavedRole.ifBlank { leaderRoles.firstOrNull() ?: "Vocalist" }
+        val defaultRole = currentSavedRole.ifBlank { leaderRoles.firstOrNull() ?: "Guitarist" }
+        var selectedRole = defaultRole
 
-        leaderRoles.forEach { role ->
-            radios.addView(android.widget.RadioButton(this).apply {
-                id = View.generateViewId(); text = role; textSize = 14f
-                setTextColor(Color.WHITE); minHeight = dp(48); isChecked = role.equals(defaultRole, ignoreCase = true)
-            })
+        val memberHeader = horizontal().apply {
+            gravity = Gravity.CENTER_VERTICAL
+            add(memberAvatar(), 56, 56)
+            val info = vertical().apply {
+                setPadding(dp(14), 0, 0, 0)
+                add(text(roleMember.ifBlank { "Member" }, 18, Color.WHITE, bold = true))
+                space(3)
+                add(text(currentSavedRole.ifBlank { "Member" }, 13, Color.rgb(203, 213, 225)))
+            }
+            add(info, 0, -2, 1f)
         }
-        col.add(radios); col.space(20)
-        col.add(memberButton("Save", Color.rgb(0, 155, 238)) {
-            val selected = radios.findViewById<android.widget.RadioButton>(radios.checkedRadioButtonId)
-            if (selected == null) toast("Choose a role.")
-            else {
-                val selectedRole = selected.text.toString()
+        col.add(memberHeader)
+        col.space(20)
+
+        val rolesContainer = vertical()
+        col.addView(rolesContainer)
+
+        fun renderRoles() {
+            rolesContainer.removeAllViews()
+            leaderRoles.forEach { role ->
+                val isSelected = role.equals(selectedRole, ignoreCase = true)
+                val item = horizontal().apply {
+                    gravity = Gravity.CENTER_VERTICAL
+                    background = if (isSelected) {
+                        bg(Color.rgb(45, 67, 121), 8)
+                    } else {
+                        bg(Color.rgb(217, 217, 217), 8)
+                    }
+                    setPadding(dp(16), 0, dp(16), 0)
+                    isClickable = true
+                    isFocusable = true
+                    setOnClickListener {
+                        selectedRole = role
+                        renderRoles()
+                    }
+                    add(text(role, 14, if (isSelected) Color.WHITE else Color.BLACK, bold = true), 0, -2, 1f)
+                }
+                rolesContainer.add(item, -1, 44)
+                rolesContainer.space(8)
+            }
+        }
+        renderRoles()
+
+        col.space(16)
+        val saveBtnRow = horizontal().apply { gravity = Gravity.CENTER }
+        val saveBtn = TextView(this).apply {
+            text = "Save"
+            textSize = 14f
+            setTypeface(typeface, Typeface.BOLD)
+            setTextColor(Color.WHITE)
+            gravity = Gravity.CENTER
+            background = bg(Color.rgb(0, 153, 255), 20)
+            isClickable = true
+            isFocusable = true
+            setOnClickListener {
+                if (selectedRole.isBlank()) {
+                    toast("Choose a role.")
+                    return@setOnClickListener
+                }
                 val targetMember = getActiveRoster().find {
                     (roleMemberUid.isNotBlank() && it.uid == roleMemberUid) ||
                     (roleMemberEmail.isNotBlank() && it.email.equals(roleMemberEmail, ignoreCase = true)) ||
@@ -3341,32 +3403,22 @@ class AdminActivity : AppCompatActivity() {
                 ) {
                     runOnUiThread { refreshTeamRoster(force = true) }
                 }
-                toast("Member role updated to $selectedRole"); navigate("teams")
+                toast("Member role updated to $selectedRole")
+                navigate("teams")
             }
-        }, -1, 48)
+        }
+        saveBtnRow.addView(saveBtn, dp(140), dp(40))
+        col.addView(saveBtnRow)
+
         return root
     }
-    private fun teamRolesView(): View = memberPage("Existing Roles", "teamDetails") { col ->
-        val fields = leaderRoles.map { role -> plainInput("Role").apply { setText(role) } }
-        fields.forEach { col.add(it, -1, 48); col.space(12) }
-        val newRole = plainInput("New Role"); col.add(newRole, -1, 48); col.space(24)
-        col.add(memberButton("Save", Color.rgb(0, 155, 238)) {
-            val roles = (fields.map { it.text.toString().trim() } + newRole.text.toString().trim()).filter { it.isNotBlank() }.distinct()
-            if (roles.isEmpty()) toast("Keep at least one role.")
-            else {
-                leaderRoles.clear(); leaderRoles.addAll(roles)
-                preferences.edit().putString("leaderRoles", org.json.JSONArray(roles).toString()).apply()
-                val currentCode = preferences.getString("teamCode", "").orEmpty()
-                    .ifBlank { FirestoreManager.findCodeByTeamName(teamName).orEmpty() }
-                if (currentCode.isNotBlank()) {
-                    TeamRepository.saveTeamCustomRoles(currentCode, roles) { }
-                }
-                toast("Team roles saved"); navigate("teamDetails")
-            }
-        }, -1, 48)
+    private fun teamRolesView(): View {
+        activeTeamSheet = "addRole"
+        return teamDetailsView()
     }
 
     // ---- MEMBER PAGES: shared 20dp margins, flexible rows, scrollable content. ----
+    private var activeTeamSheet: String? = null
     private var scheduleFilter = "Upcoming"
     private var teamTab = "Team Chat"
     private var expandedRole: String? = null
@@ -3970,7 +4022,6 @@ class AdminActivity : AppCompatActivity() {
     }
 
     private fun substitutionFeed(col: LinearLayout) {
-        col.add(text("Substitution Requests", 13, purple, true)); col.space(12)
         val subCol = vertical()
         col.addView(subCol)
 
@@ -4011,23 +4062,27 @@ class AdminActivity : AppCompatActivity() {
             for (sub in list) {
                 subCol.add(panel().apply {
                     val headerRow = horizontal().apply { gravity = Gravity.CENTER_VERTICAL }
-                    headerRow.add(text(sub.serviceTitle.ifBlank { "Sunday Worship Service" }, 14, purple, bold = true), 0, -2, 1f)
+                    headerRow.add(text(sub.serviceTitle.ifBlank { "Sunday Worship Service" }, 14, Color.BLACK, bold = true), 0, -2, 1f)
+
+                    val isPending = sub.status.equals("Pending", ignoreCase = true)
+                    val isAccepted = sub.status.equals("Accepted", ignoreCase = true)
+                    val isDeclined = sub.status.equals("Declined", ignoreCase = true)
 
                     val statusBadge = text(
-                        if (sub.status.equals("Pending", ignoreCase = true)) "WAITING FOR SUBSTITUTE" else sub.status.uppercase(),
-                        10,
-                        if (sub.status.equals("Accepted", ignoreCase = true)) Color.rgb(46, 125, 50)
-                        else if (sub.status.equals("Declined", ignoreCase = true)) Color.rgb(198, 40, 40)
-                        else purple,
+                        if (isPending) "WAITING FOR SUBSTITUTE" else sub.status.uppercase(),
+                        9,
+                        if (isAccepted) Color.rgb(46, 125, 50)
+                        else if (isDeclined) Color.rgb(198, 40, 40)
+                        else Color.rgb(192, 38, 211),
                         bold = true
                     ).apply {
                         background = bg(
-                            if (sub.status.equals("Accepted", ignoreCase = true)) Color.rgb(232, 245, 233)
-                            else if (sub.status.equals("Declined", ignoreCase = true)) Color.rgb(255, 235, 238)
-                            else Color.rgb(243, 229, 245),
-                            6
+                            if (isAccepted) Color.rgb(232, 245, 233)
+                            else if (isDeclined) Color.rgb(255, 235, 238)
+                            else Color.rgb(245, 208, 254),
+                            8
                         )
-                        setPadding(dp(8), dp(3), dp(8), dp(3))
+                        setPadding(dp(8), dp(4), dp(8), dp(4))
                     }
                     headerRow.add(statusBadge, -2, -2)
 
@@ -4054,32 +4109,33 @@ class AdminActivity : AppCompatActivity() {
                     }
                     add(headerRow); space(10)
 
-                    add(text("Requesting: ${sub.requesterName} (${sub.role})", 12, navy)); space(4)
+                    add(text("Requesting: ${sub.requesterName} (${sub.role})", 12, Color.rgb(51, 65, 85))); space(4)
                     val propRow = horizontal()
-                    propRow.add(text("Proposed Substitute: ", 12, navy))
-                    propRow.add(text(sub.substituteName, 12, navy, bold = true))
+                    propRow.add(text("Proposed Substitute: ", 12, Color.rgb(51, 65, 85)))
+                    propRow.add(text(sub.substituteName, 12, Color.BLACK, bold = true))
                     add(propRow); space(4)
-                    add(text("Reason: ${sub.reason}", 12, navy))
+                    add(text("Reason: ${sub.reason}", 12, Color.rgb(51, 65, 85)))
 
-                    if (sub.status.equals("Pending", ignoreCase = true)) {
+                    if (isPending) {
                         space(16)
                         val actions = horizontal()
                         val acceptBtn = Button(this@AdminActivity).apply {
-                            text = "Accept Substitution"
+                            text = "Approve & Reassign"
                             isAllCaps = false
-                            background = bg(purple, 10)
+                            background = bg(Color.rgb(80, 5, 104), 8)
                             setTextColor(Color.WHITE)
-                            minimumHeight = dp(40)
+                            minimumHeight = dp(38)
                             textSize = 12f
+                            setTypeface(typeface, Typeface.BOLD)
                             setOnClickListener {
-                                AlertDialog.Builder(this@AdminActivity).setTitle("Accept substitution as Leader?")
-                                    .setMessage("As Team Leader, do you want to approve this request for ${sub.role} (${sub.substituteName} replacing ${sub.requesterName})?")
+                                AlertDialog.Builder(this@AdminActivity).setTitle("Approve & Reassign as Leader?")
+                                    .setMessage("As Team Leader, do you want to approve this substitution for ${sub.role} (${sub.substituteName} replacing ${sub.requesterName})?")
                                     .setNegativeButton("Cancel", null)
-                                    .setPositiveButton("Accept") { _, _ ->
+                                    .setPositiveButton("Approve") { _, _ ->
                                         TeamRepository.acceptSubstitutionAndUpdateService(activeCode, sub, preferences) { res ->
                                             runOnUiThread {
-                                                if (res.isSuccess) toast("Substitution accepted and service roster updated!")
-                                                else toast("Failed to accept substitution: ${res.exceptionOrNull()?.message ?: "Unknown error"}")
+                                                if (res.isSuccess) toast("Substitution approved and service roster updated!")
+                                                else toast("Failed to approve substitution: ${res.exceptionOrNull()?.message ?: "Unknown error"}")
                                                 populateSubstitutions()
                                             }
                                         }
@@ -4089,10 +4145,11 @@ class AdminActivity : AppCompatActivity() {
                         val declineBtn = Button(this@AdminActivity).apply {
                             text = "Decline"
                             isAllCaps = false
-                            background = bg(Color.WHITE, 10, Color.rgb(217, 70, 239))
+                            background = bg(Color.WHITE, 8, Color.rgb(217, 70, 239))
                             setTextColor(Color.rgb(217, 70, 239))
-                            minimumHeight = dp(40)
+                            minimumHeight = dp(38)
                             textSize = 12f
+                            setTypeface(typeface, Typeface.BOLD)
                             setOnClickListener {
                                 AlertDialog.Builder(this@AdminActivity).setTitle("Decline substitution?")
                                     .setMessage("Do you want to decline this request?")
@@ -4108,9 +4165,9 @@ class AdminActivity : AppCompatActivity() {
                                     }.show()
                             }
                         }
-                        actions.add(acceptBtn, 0, 40, 1.2f)
+                        actions.add(acceptBtn, 0, 38, 1.25f)
                         actions.add(View(this@AdminActivity), 10, 1)
-                        actions.add(declineBtn, 0, 40, 0.8f)
+                        actions.add(declineBtn, 0, 38, 0.75f)
                         add(actions)
                     }
                 }); subCol.space(16)
@@ -4159,38 +4216,36 @@ class AdminActivity : AppCompatActivity() {
     }
 
     private fun notificationsView(): View = memberPage("Announcement", "home") { col ->
-        col.add(text("Substitution Request", 14, purple, bold = true)); col.space(12)
+        col.add(text("Substitution Request", 15, purple, bold = true)); col.space(12)
         substitutionFeed(col)
         col.space(16)
-        col.add(text("Recent Notifications", 14, purple, bold = true)); col.space(12)
+        col.add(text("Recent Notifications", 15, purple, bold = true)); col.space(12)
         recentNotificationsList(col)
     }
 
     private fun recentNotificationsList(col: LinearLayout) {
         val items = listOf(
             Triple("New Service Scheduled", "Sunday Worship Service scheduled for Oct 18, 2026 at 6:00 AM.", "Just now" to "calendar"),
-            Triple("Lineup Published", "4 songs attached to Sunday Worship Service.", "2 hours ago" to "music"),
-            Triple("Duty Assigned", "You are assigned as Keyboardist for Sunday Worship Service on Oct 11, 2026", "1 hour ago" to "person")
+            Triple("Lineup Published", "4 songs attached to Sunday Worship Service.", "2 hours ago" to "musical_notes")
         )
         for ((title, msg, meta) in items) {
             val (time, iconName) = meta
             col.add(panel().apply {
                 val row = horizontal().apply { gravity = Gravity.CENTER_VERTICAL }
                 val iconBox = FrameLayout(this@AdminActivity).apply {
-                    addView(Symbol(this@AdminActivity, iconName, purple), dp(24), dp(24))
+                    addView(Symbol(this@AdminActivity, iconName, purple), dp(26), dp(26))
                 }
-                row.addView(iconBox, dp(36), dp(36))
-                row.add(View(this@AdminActivity), 12, 1)
+                row.add(iconBox, 36, 36)
+                row.space(12)
                 val textCol = vertical()
                 textCol.add(text(title, 13, purple, bold = true))
-                textCol.space(4)
-                textCol.add(text(msg, 12, navy))
-                textCol.space(4)
+                textCol.space(2)
+                textCol.add(text(msg, 11, navy))
+                textCol.space(2)
                 textCol.add(text(time, 10, Color.GRAY))
-                row.addView(textCol, LinearLayout.LayoutParams(0, -2, 1f))
+                row.add(textCol, 0, -2, 1f)
                 add(row)
-            })
-            col.space(12)
+            }); col.space(12)
         }
     }
     private val youtubeThumbnailCache = java.util.concurrent.ConcurrentHashMap<String, Bitmap>()
@@ -4253,11 +4308,37 @@ class AdminActivity : AppCompatActivity() {
         return img
     }
     private fun songsView(): View = memberPage("Songs", songsReturnPage) { col ->
-        if (isLeader) {
-            col.add(memberButton("+ Add Song", navy) { selectedSong = ""; navigate("songEdit") }, -1, 48); col.space(16)
+        val search = EditText(this).apply {
+            hint = "Search by title or artist"
+            setHintTextColor(Color.rgb(107, 114, 128))
+            setTextColor(Color.rgb(30, 41, 59))
+            textSize = 14f
+            background = null
+            setSingleLine(true)
+            imeOptions = android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH
         }
-        val search = plainInput("Search by title or artist")
-        col.add(search, -1, 48); col.space(20)
+        val searchRow = horizontal().apply {
+            val searchBar = horizontal().apply {
+                background = bg(Color.rgb(217, 217, 217), 21)
+                setPadding(dp(14), 0, dp(14), 0)
+                add(Symbol(this@AdminActivity, "search", Color.rgb(75, 85, 99)), 20, 20)
+                space(8)
+                add(search, 0, -1, 1f)
+            }
+            add(searchBar, 0, 42, 1f)
+            if (isLeader) {
+                space(12)
+                val plusBtn = FrameLayout(this@AdminActivity).apply {
+                    val icon = Symbol(this@AdminActivity, "circle_plus", Color.BLACK)
+                    addView(icon, FrameLayout.LayoutParams(dp(36), dp(36), Gravity.CENTER))
+                    isClickable = true; isFocusable = true
+                    contentDescription = "Add new song"
+                    setOnClickListener { selectedSong = ""; navigate("songEdit") }
+                }
+                add(plusBtn, 42, 42)
+            }
+        }
+        col.add(searchRow, -1, 42); col.space(20)
         val results = vertical(); col.add(results)
         val activeCode = preferences.getString("teamCode", "").orEmpty()
         fun populate(query: String) {
@@ -4416,7 +4497,14 @@ class AdminActivity : AppCompatActivity() {
         row.add(FrameLayout(this@AdminActivity).apply {
             addView(Symbol(this@AdminActivity, "back", Color.WHITE),
                 FrameLayout.LayoutParams(dp(24), dp(24), Gravity.CENTER))
-            setOnClickListener { navigate(if (page in listOf("teamDetails", "roleEdit")) "teams" else "home") }
+            setOnClickListener {
+                if (activeTeamSheet != null) {
+                    activeTeamSheet = null
+                    navigate("teamDetails")
+                } else {
+                    navigate(if (page in listOf("teamDetails", "roleEdit")) "teams" else "home")
+                }
+            }
             contentDescription = if (page == "teamDetails") "Back to Teams" else "Back to Home"
             isFocusable = true
         }, 40, 48)
@@ -4620,17 +4708,25 @@ class AdminActivity : AppCompatActivity() {
         return root
     }
     private fun teamDetailsView(): View {
-        val root = vertical().apply { setBackgroundColor(Color.WHITE) }
-        root.add(teamHeader(), -1, 88)
+        val root = FrameLayout(this).apply { setBackgroundColor(Color.WHITE) }
+
+        val mainCol = vertical().apply { setBackgroundColor(Color.WHITE) }
+        mainCol.add(teamHeader(), -1, 88)
         val scroll = StableScrollView(this).apply { isFillViewport = true; clipToPadding = true }
-        val col = vertical().apply { setPadding(dp(20), dp(32), dp(20), dp(24)) }
+        val col = vertical().apply { setPadding(dp(20), dp(24), dp(20), dp(24)) }
         scroll.addView(col, FrameLayout.LayoutParams(-1, -2))
-        root.add(scroll, -1, 0, 1f)
-        col.add(text("Team Name", 13, Color.BLACK, true)); col.space(8)
-        col.add(text(teamName.ifBlank { "Worship Team" }, 14, Color.BLACK, true).apply {
-            background = bg(Color.rgb(217, 217, 217), 9)
-            setPadding(dp(10), 0, dp(10), 0)
-        }, -1, 32); col.space(20)
+        mainCol.add(scroll, -1, 0, 1f)
+        root.addView(mainCol, FrameLayout.LayoutParams(-1, -1))
+
+        col.add(text("Team Name", 14, Color.BLACK, true)); col.space(8)
+        val teamNameBox = horizontal().apply {
+            gravity = Gravity.CENTER_VERTICAL
+            background = bg(Color.rgb(217, 217, 217), 10)
+            setPadding(dp(16), 0, dp(16), 0)
+            add(text(teamName.ifBlank { "Worship Team" }, 14, Color.BLACK, bold = true), 0, -2, 1f)
+        }
+        col.add(teamNameBox, -1, 42); col.space(20)
+
         if (isLeader) {
             val emailLower = preferences.getString("email", "").orEmpty().trim().lowercase()
             val uid = preferences.getString("userId", "").orEmpty()
@@ -4643,10 +4739,17 @@ class AdminActivity : AppCompatActivity() {
             if (activeCode != "Generating...") {
                 saveUserTeamState("Leader", teamName, activeCode)
             }
-            col.add(text("Invite", 13, Color.BLACK, true)); col.space(8)
-            val inviteView = text("$activeCode    ▢", 14, navy, true).apply {
-                background = bg(Color.rgb(217,217,217),9);setPadding(dp(10),0,dp(10),0)
+            col.add(text("Invite", 14, Color.BLACK, true)); col.space(8)
+            val inviteCodeText = text(activeCode, 14, Color.BLACK, bold = true)
+            val inviteRow = horizontal().apply {
+                gravity = Gravity.CENTER_VERTICAL
+                background = bg(Color.rgb(217, 217, 217), 10)
+                setPadding(dp(16), 0, dp(16), 0)
+                isClickable = true
+                isFocusable = true
                 contentDescription = "Copy team invite code"
+                add(inviteCodeText, 0, -2, 1f)
+                add(Symbol(this@AdminActivity, "copy", Color.BLACK), 22, 22)
                 setOnClickListener {
                     val currentCode = preferences.getString("teamCode", "").orEmpty()
                     if (currentCode.isNotBlank()) {
@@ -4660,7 +4763,8 @@ class AdminActivity : AppCompatActivity() {
                     }
                 }
             }
-            col.add(inviteView, -1, 36); col.space(20)
+            col.add(inviteRow, -1, 42); col.space(24)
+
             if (activeCode == "Generating..." && teamName.isNotBlank()) {
                 val emailStr = preferences.getString("email", "").orEmpty()
                 FirestoreManager.createTeamWithCode(uid, displayName, teamName) { res ->
@@ -4668,29 +4772,43 @@ class AdminActivity : AppCompatActivity() {
                         res.getOrNull()?.let { newCode ->
                             saveUserTeamState("Leader", teamName, newCode)
                             FirestoreManager.updateUserRoleAndTeam(uid, "Leader", teamName, newCode, emailStr)
-                            inviteView.text = "$newCode    ▢"
+                            inviteCodeText.text = newCode
                         }
                     }
                 }
             }
-            col.add(teamDetailAction("teams", "Remove Member") { removeTeamMember() })
-            col.add(teamDetailAction("music", "Add Role") { navigate("teamRoles") }); col.space(8)
+
+            col.add(teamDetailAction("remove_member", "Remove member") {
+                activeTeamSheet = "removeMember"
+                navigate("teamDetails")
+            })
+            col.space(4)
+            col.add(teamDetailAction("musical_notes", "Add Role") {
+                activeTeamSheet = "addRole"
+                navigate("teamDetails")
+            })
+            col.space(4)
         }
-        val row = horizontal()
-        row.add(Symbol(this, "bell", navy), 36, 32)
-        row.add(text("Unmute Messages", 14, Color.BLACK, true).apply {
-            setPadding(dp(14), 0, dp(8), 0)
+
+        val unmuteRow = horizontal().apply {
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, dp(4), 0, dp(4))
+        }
+        unmuteRow.add(Symbol(this, "bell", Color.BLACK), 28, 28)
+        unmuteRow.add(text("Unmute Messages", 15, Color.BLACK, true).apply {
+            setPadding(dp(16), 0, dp(8), 0)
         }, 0, 48, 1f)
-        row.add(Switch(this).apply {
+        unmuteRow.add(Switch(this).apply {
             contentDescription = "Unmute team messages"
             val states = arrayOf(intArrayOf(android.R.attr.state_checked), intArrayOf())
             thumbTintList = ColorStateList(states, intArrayOf(Color.WHITE, Color.WHITE))
-            trackTintList = ColorStateList(states, intArrayOf(Color.rgb(0, 124, 224), Color.rgb(248, 35, 63)))
+            trackTintList = ColorStateList(states, intArrayOf(Color.rgb(0, 122, 255), Color.rgb(209, 213, 219)))
             splitTrack = false
             isChecked = preferences.getBoolean("teamUnmuted", true)
             setOnCheckedChangeListener { _, checked -> preferences.edit().putBoolean("teamUnmuted", checked).apply() }
         }, 52, 48)
-        col.add(row); col.space(4)
+        col.add(unmuteRow); col.space(4)
+
         col.add(teamDetailAction("warning", "Report") {
             val reason = plainInput("Describe the issue", true)
             AlertDialog.Builder(this).setTitle("Report Team").setView(reason)
@@ -4707,7 +4825,8 @@ class AdminActivity : AppCompatActivity() {
                     show()
                 }
         }); col.space(4)
-        col.add(teamDetailAction("logout", "Leave") {
+
+        col.add(teamDetailAction("leave_team", "Leave") {
             AlertDialog.Builder(this).setTitle("Leave Team?")
                 .setMessage("Are you sure you want to leave this team?")
                 .setNegativeButton("Cancel", null).setPositiveButton("Leave") { _, _ ->
@@ -4727,12 +4846,180 @@ class AdminActivity : AppCompatActivity() {
                     navigate("teamChoice")
                 }.show()
         })
+
+        // Overlay Sheet (Add Role or Remove Member)
+        if (activeTeamSheet != null) {
+            val scrim = View(this).apply {
+                setBackgroundColor(Color.argb(120, 0, 0, 0))
+                isClickable = true
+                isFocusable = true
+                setOnClickListener {
+                    activeTeamSheet = null
+                    navigate("teamDetails")
+                }
+            }
+            root.addView(scrim, FrameLayout.LayoutParams(-1, -1))
+
+            val sheetContainer = vertical().apply {
+                background = GradientDrawable(
+                    GradientDrawable.Orientation.TOP_BOTTOM,
+                    intArrayOf(Color.rgb(21, 29, 56), Color.rgb(46, 62, 120))
+                ).apply {
+                    cornerRadii = floatArrayOf(
+                        dp(32).toFloat(), dp(32).toFloat(),
+                        dp(32).toFloat(), dp(32).toFloat(),
+                        0f, 0f,
+                        0f, 0f
+                    )
+                }
+                setPadding(dp(20), dp(24), dp(20), dp(28))
+            }
+
+            if (activeTeamSheet == "addRole") {
+                // View Details (1).png
+                val sheetScroll = StableScrollView(this).apply { isFillViewport = true }
+                val sheetCol = vertical()
+                sheetScroll.addView(sheetCol, FrameLayout.LayoutParams(-1, -2))
+
+                sheetCol.add(text("Existing Roles", 18, Color.WHITE, bold = true, centered = true))
+                sheetCol.space(20)
+
+                val rolesCol = vertical()
+                sheetCol.addView(rolesCol)
+
+                leaderRoles.forEach { role ->
+                    val roleBox = horizontal().apply {
+                        gravity = Gravity.CENTER_VERTICAL
+                        background = bg(Color.rgb(217, 217, 217), 8)
+                        setPadding(dp(16), 0, dp(16), 0)
+                        add(text(role, 14, Color.BLACK, bold = true), 0, -2, 1f)
+                    }
+                    rolesCol.add(roleBox, -1, 44)
+                    rolesCol.space(8)
+                }
+
+                val newRoleInput = plainInput("New Role").apply {
+                    background = bg(Color.rgb(217, 217, 217), 8)
+                    setPadding(dp(16), 0, dp(16), 0)
+                    setTextColor(Color.BLACK)
+                    setHintTextColor(Color.rgb(117, 117, 117))
+                    textSize = 14f
+                }
+                sheetCol.add(newRoleInput, -1, 44)
+                sheetCol.space(24)
+
+                val saveBtnRow = horizontal().apply { gravity = Gravity.CENTER }
+                val saveBtn = TextView(this).apply {
+                    text = "Save"
+                    textSize = 14f
+                    setTypeface(typeface, Typeface.BOLD)
+                    setTextColor(Color.WHITE)
+                    gravity = Gravity.CENTER
+                    background = bg(Color.rgb(0, 153, 255), 20)
+                    isClickable = true
+                    isFocusable = true
+                    setOnClickListener {
+                        val entered = newRoleInput.text.toString().trim()
+                        if (entered.isNotBlank() && !leaderRoles.any { it.equals(entered, ignoreCase = true) }) {
+                            leaderRoles.add(entered)
+                            preferences.edit().putString("leaderRoles", org.json.JSONArray(leaderRoles).toString()).apply()
+                            val currentCode = preferences.getString("teamCode", "").orEmpty()
+                                .ifBlank { FirestoreManager.findCodeByTeamName(teamName).orEmpty() }
+                            if (currentCode.isNotBlank()) {
+                                TeamRepository.saveTeamCustomRoles(currentCode, leaderRoles) { }
+                            }
+                            toast("Role added: $entered")
+                        }
+                        activeTeamSheet = null
+                        navigate("teamDetails")
+                    }
+                }
+                saveBtnRow.addView(saveBtn, dp(140), dp(40))
+                sheetCol.addView(saveBtnRow)
+
+                sheetContainer.addView(sheetScroll, LinearLayout.LayoutParams(-1, -2))
+            } else if (activeTeamSheet == "removeMember") {
+                // Group 107.png
+                val sheetScroll = StableScrollView(this).apply { isFillViewport = true }
+                val sheetCol = vertical()
+                sheetScroll.addView(sheetCol, FrameLayout.LayoutParams(-1, -2))
+
+                val currentUid = preferences.getString("userId", "").orEmpty()
+                val currentName = fullName.ifBlank { displayName }
+                val roster = getActiveRoster().filter { it.uid != currentUid && it.fullName != currentName }
+
+                if (roster.isEmpty()) {
+                    sheetCol.add(text("No members to remove.", 14, Color.WHITE, centered = true))
+                    sheetCol.space(16)
+                } else {
+                    roster.forEach { member ->
+                        val mName = member.fullName.ifBlank { member.username.ifBlank { "Member" } }
+                        val mRole = member.ministryRole.ifBlank { "Member" }
+                        val memberRow = horizontal().apply {
+                            gravity = Gravity.CENTER_VERTICAL
+                            setPadding(dp(4), dp(10), dp(4), dp(10))
+                            isClickable = true
+                            isFocusable = true
+                            add(memberAvatar(), 56, 56)
+                            val info = vertical().apply {
+                                setPadding(dp(14), 0, 0, 0)
+                                add(text(mName, 16, Color.WHITE, bold = true))
+                                space(3)
+                                add(text(mRole, 13, Color.rgb(203, 213, 225)))
+                            }
+                            add(info, 0, -2, 1f)
+                            setOnClickListener {
+                                AlertDialog.Builder(this@AdminActivity).setTitle("Remove $mName?")
+                                    .setMessage("Are you sure you want to remove $mName from the team?")
+                                    .setNegativeButton("Cancel", null)
+                                    .setPositiveButton("Remove") { _, _ ->
+                                        val removed = preferences.getStringSet("removedMembers", emptySet()).orEmpty().toMutableSet()
+                                        removed.add(mName); preferences.edit().putStringSet("removedMembers", removed).apply()
+                                        if (member.uid.isNotBlank()) {
+                                            TeamRepository.removeMemberFromTeam(member.uid) { result ->
+                                                runOnUiThread {
+                                                    if (result.isSuccess) {
+                                                        toast("$mName removed from team.")
+                                                        refreshTeamRoster(force = true)
+                                                        activeTeamSheet = null
+                                                        navigate("teamDetails")
+                                                    } else {
+                                                        val err = result.exceptionOrNull()?.localizedMessage ?: "Failed to remove member."
+                                                        toast(err)
+                                                        activeTeamSheet = null
+                                                        navigate("teamDetails")
+                                                    }
+                                                }
+                                            }
+                                        } else {
+                                            toast("$mName removed.")
+                                            activeTeamSheet = null
+                                            navigate("teamDetails")
+                                        }
+                                    }.show()
+                            }
+                        }
+                        sheetCol.add(memberRow)
+                        sheetCol.space(4)
+                    }
+                }
+                sheetContainer.addView(sheetScroll, LinearLayout.LayoutParams(-1, -2))
+            }
+
+            val sheetLp = FrameLayout.LayoutParams(-1, -2).apply {
+                gravity = Gravity.BOTTOM
+            }
+            root.addView(sheetContainer, sheetLp)
+        }
+
         return root
     }
     private fun teamDetailAction(icon: String, label: String, action: () -> Unit): View = horizontal().apply {
-        add(Symbol(this@AdminActivity, icon, if (label == "Report") Color.BLACK else navy), 36, 32)
-        add(text(label, 14, Color.BLACK, true).apply { setPadding(dp(14), 0, 0, 0) }, 0, 48, 1f)
-        isFocusable = true; contentDescription = label; setOnClickListener { action() }
+        gravity = Gravity.CENTER_VERTICAL
+        setPadding(0, dp(4), 0, dp(4))
+        add(Symbol(this@AdminActivity, icon, Color.BLACK), 28, 28)
+        add(text(label, 15, Color.BLACK, true).apply { setPadding(dp(16), 0, 0, 0) }, 0, 48, 1f)
+        isFocusable = true; isClickable = true; contentDescription = label; setOnClickListener { action() }
     }
 
     private fun memberTile(id: Int, icon: String, label: String, labelSize: Int = 14) = vertical().apply {

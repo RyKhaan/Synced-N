@@ -2921,49 +2921,54 @@ open class MemberActivity : AppCompatActivity() {
             for (sub in list) {
                 subCol.add(panel().apply {
                     val headerRow = horizontal().apply { gravity = Gravity.CENTER_VERTICAL }
-                    headerRow.add(text(sub.serviceTitle.ifBlank { "Sunday Worship Service" }, 14, purple, bold = true), 0, -2, 1f)
+                    headerRow.add(text(sub.serviceTitle.ifBlank { "Sunday Worship Service" }, 14, Color.BLACK, bold = true), 0, -2, 1f)
+
+                    val isPending = sub.status.equals("Pending", ignoreCase = true)
+                    val isAccepted = sub.status.equals("Accepted", ignoreCase = true)
+                    val isDeclined = sub.status.equals("Declined", ignoreCase = true)
 
                     val statusBadge = text(
-                        if (sub.status.equals("Pending", ignoreCase = true)) "WAITING FOR SUBSTITUTE" else sub.status.uppercase(),
-                        10,
-                        if (sub.status.equals("Accepted", ignoreCase = true)) Color.rgb(46, 125, 50)
-                        else if (sub.status.equals("Declined", ignoreCase = true)) Color.rgb(198, 40, 40)
-                        else purple,
+                        if (isPending) "WAITING FOR SUBSTITUTE" else sub.status.uppercase(),
+                        9,
+                        if (isAccepted) Color.rgb(46, 125, 50)
+                        else if (isDeclined) Color.rgb(198, 40, 40)
+                        else Color.rgb(192, 38, 211),
                         bold = true
                     ).apply {
                         background = bg(
-                            if (sub.status.equals("Accepted", ignoreCase = true)) Color.rgb(232, 245, 233)
-                            else if (sub.status.equals("Declined", ignoreCase = true)) Color.rgb(255, 235, 238)
-                            else Color.rgb(243, 229, 245),
-                            6
+                            if (isAccepted) Color.rgb(232, 245, 233)
+                            else if (isDeclined) Color.rgb(255, 235, 238)
+                            else Color.rgb(245, 208, 254),
+                            8
                         )
-                        setPadding(dp(8), dp(3), dp(8), dp(3))
+                        setPadding(dp(8), dp(4), dp(8), dp(4))
                     }
                     headerRow.add(statusBadge, -2, -2)
                     add(headerRow); space(10)
 
-                    add(text("Requesting: ${sub.requesterName} (${sub.role})", 12, navy)); space(4)
+                    add(text("Requesting: ${sub.requesterName} (${sub.role})", 12, Color.rgb(51, 65, 85))); space(4)
                     val propRow = horizontal()
-                    propRow.add(text("Proposed Substitute: ", 12, navy))
-                    propRow.add(text(sub.substituteName, 12, navy, bold = true))
+                    propRow.add(text("Proposed Substitute: ", 12, Color.rgb(51, 65, 85)))
+                    propRow.add(text(sub.substituteName, 12, Color.BLACK, bold = true))
                     add(propRow); space(4)
-                    add(text("Reason: ${sub.reason}", 12, navy))
+                    add(text("Reason: ${sub.reason}", 12, Color.rgb(51, 65, 85)))
 
                     val isTargetSubstitute = (currentUid.isNotBlank() && sub.substituteUid == currentUid) ||
                             (currentName.isNotBlank() && sub.substituteName.equals(currentName, ignoreCase = true))
                     val isRequester = (currentUid.isNotBlank() && sub.requesterUid == currentUid) ||
                             (currentName.isNotBlank() && sub.requesterName.equals(currentName, ignoreCase = true))
 
-                    if (sub.status.equals("Pending", ignoreCase = true) && isTargetSubstitute) {
+                    if (isPending && isTargetSubstitute) {
                         space(16)
                         val actions = horizontal()
                         val acceptBtn = Button(this@MemberActivity).apply {
                             text = "Accept Substitution"
                             isAllCaps = false
-                            background = bg(purple, 10)
+                            background = bg(Color.rgb(80, 5, 104), 8)
                             setTextColor(Color.WHITE)
-                            minimumHeight = dp(40)
+                            minimumHeight = dp(38)
                             textSize = 12f
+                            setTypeface(typeface, Typeface.BOLD)
                             setOnClickListener {
                                 AlertDialog.Builder(this@MemberActivity).setTitle("Accept substitution?")
                                     .setMessage("Are you sure you want to accept this substitution request for ${sub.role}?")
@@ -2982,10 +2987,11 @@ open class MemberActivity : AppCompatActivity() {
                         val declineBtn = Button(this@MemberActivity).apply {
                             text = "Decline"
                             isAllCaps = false
-                            background = bg(Color.WHITE, 10, Color.rgb(217, 70, 239))
+                            background = bg(Color.WHITE, 8, Color.rgb(217, 70, 239))
                             setTextColor(Color.rgb(217, 70, 239))
-                            minimumHeight = dp(40)
+                            minimumHeight = dp(38)
                             textSize = 12f
+                            setTypeface(typeface, Typeface.BOLD)
                             setOnClickListener {
                                 AlertDialog.Builder(this@MemberActivity).setTitle("Decline substitution?")
                                     .setMessage("Are you sure you want to decline this substitution request?")
@@ -3001,11 +3007,11 @@ open class MemberActivity : AppCompatActivity() {
                                     }.show()
                             }
                         }
-                        actions.add(acceptBtn, 0, 40, 1.2f)
+                        actions.add(acceptBtn, 0, 38, 1.25f)
                         actions.add(View(this@MemberActivity), 10, 1)
-                        actions.add(declineBtn, 0, 40, 0.8f)
+                        actions.add(declineBtn, 0, 38, 0.75f)
                         add(actions)
-                    } else if (sub.status.equals("Pending", ignoreCase = true) && isRequester) {
+                    } else if (isPending && isRequester) {
                         space(14)
                         val cancelBtn = memberButton("Cancel Request", Color.rgb(180, 50, 50)) {
                             AlertDialog.Builder(this@MemberActivity).setTitle("Cancel substitution request?")
@@ -3021,7 +3027,7 @@ open class MemberActivity : AppCompatActivity() {
                                     }
                                 }.show()
                         }
-                        add(cancelBtn, -1, 44)
+                        add(cancelBtn, -1, 40)
                     }
                 }); subCol.space(16)
             }
@@ -3046,37 +3052,36 @@ open class MemberActivity : AppCompatActivity() {
     }
 
     private fun notificationsView(): View = memberPage("Announcement", "home") { col ->
-        col.add(text("Substitution Request", 14, purple, bold = true)); col.space(12)
+        col.add(text("Substitution Request", 15, purple, bold = true)); col.space(12)
         substitutionFeed(col)
         col.space(16)
-        col.add(text("Recent Notifications", 14, purple, bold = true)); col.space(12)
+        col.add(text("Recent Notifications", 15, purple, bold = true)); col.space(12)
         recentNotificationsList(col)
     }
 
     private fun recentNotificationsList(col: LinearLayout) {
         val items = listOf(
             Triple("New Service Scheduled", "Sunday Worship Service scheduled for Oct 18, 2026 at 6:00 AM.", "Just now" to "calendar"),
-            Triple("Duty Assigned", "You are assigned as Keyboardist for Sunday Worship Service on Oct 11, 2026", "1 hour ago" to "person")
+            Triple("Lineup Published", "4 songs attached to Sunday Worship Service.", "2 hours ago" to "musical_notes")
         )
         for ((title, msg, meta) in items) {
             val (time, iconName) = meta
             col.add(panel().apply {
                 val row = horizontal().apply { gravity = Gravity.CENTER_VERTICAL }
                 val iconBox = FrameLayout(this@MemberActivity).apply {
-                    addView(Symbol(this@MemberActivity, iconName, purple), dp(24), dp(24))
+                    addView(Symbol(this@MemberActivity, iconName, purple), dp(26), dp(26))
                 }
-                row.addView(iconBox, dp(36), dp(36))
-                row.add(View(this@MemberActivity), 12, 1)
+                row.add(iconBox, 36, 36)
+                row.space(12)
                 val textCol = vertical()
                 textCol.add(text(title, 13, purple, bold = true))
-                textCol.space(4)
-                textCol.add(text(msg, 12, navy))
-                textCol.space(4)
+                textCol.space(2)
+                textCol.add(text(msg, 11, navy))
+                textCol.space(2)
                 textCol.add(text(time, 10, Color.GRAY))
-                row.addView(textCol, LinearLayout.LayoutParams(0, -2, 1f))
+                row.add(textCol, 0, -2, 1f)
                 add(row)
-            })
-            col.space(12)
+            }); col.space(12)
         }
     }
     private val youtubeThumbnailCache = java.util.concurrent.ConcurrentHashMap<String, Bitmap>()
@@ -3144,8 +3149,23 @@ open class MemberActivity : AppCompatActivity() {
         return songs.map { it.title to it.artist }
     }
     private fun songsView(): View = memberPage("Songs", songsReturnPage) { col ->
-        val search = plainInput("Search by title or artist")
-        col.add(search, -1, 48); col.space(20)
+        val search = EditText(this).apply {
+            hint = "Search by title or artist"
+            setHintTextColor(Color.rgb(107, 114, 128))
+            setTextColor(Color.rgb(30, 41, 59))
+            textSize = 14f
+            background = null
+            setSingleLine(true)
+            imeOptions = android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH
+        }
+        val searchBar = horizontal().apply {
+            background = bg(Color.rgb(217, 217, 217), 21)
+            setPadding(dp(14), 0, dp(14), 0)
+            add(Symbol(this@MemberActivity, "search", Color.rgb(75, 85, 99)), 20, 20)
+            space(8)
+            add(search, 0, -1, 1f)
+        }
+        col.add(searchBar, -1, 42); col.space(20)
         val results = vertical(); col.add(results)
         val activeCode = preferences.getString("teamCode", "").orEmpty()
         fun populate(query: String) {
@@ -3599,23 +3619,29 @@ open class MemberActivity : AppCompatActivity() {
         val root = vertical().apply { setBackgroundColor(Color.WHITE) }
         root.add(teamHeader(), -1, 88)
         val scroll = StableScrollView(this).apply { isFillViewport = true; clipToPadding = true }
-        val col = vertical().apply { setPadding(dp(20), dp(32), dp(20), dp(24)) }
+        val col = vertical().apply { setPadding(dp(20), dp(24), dp(20), dp(24)) }
         scroll.addView(col, FrameLayout.LayoutParams(-1, -2)); root.add(scroll, -1, 0, 1f)
-        col.add(text("Team Name", 13, Color.BLACK, true)); col.space(8)
-        col.add(text(teamName.ifBlank { "Worship Team" }, 14, Color.BLACK, true).apply {
-            background = bg(Color.rgb(217, 217, 217), 9)
-            setPadding(dp(10), 0, dp(10), 0)
-        }, -1, 32); col.space(32)
-        val row = horizontal()
-        row.add(Symbol(this, "bell", navy), 36, 32)
-        row.add(text("Unmute Messages", 14, Color.BLACK, true).apply {
-            setPadding(dp(14), 0, dp(8), 0)
+        col.add(text("Team Name", 14, Color.BLACK, true)); col.space(8)
+        val teamNameBox = horizontal().apply {
+            gravity = Gravity.CENTER_VERTICAL
+            background = bg(Color.rgb(217, 217, 217), 10)
+            setPadding(dp(16), 0, dp(16), 0)
+            add(text(teamName.ifBlank { "Worship Team" }, 14, Color.BLACK, bold = true), 0, -2, 1f)
+        }
+        col.add(teamNameBox, -1, 42); col.space(24)
+        val row = horizontal().apply {
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, dp(4), 0, dp(4))
+        }
+        row.add(Symbol(this, "bell", Color.BLACK), 28, 28)
+        row.add(text("Unmute Messages", 15, Color.BLACK, true).apply {
+            setPadding(dp(16), 0, dp(8), 0)
         }, 0, 48, 1f)
         row.add(Switch(this).apply {
             contentDescription = "Unmute team messages"
             val states = arrayOf(intArrayOf(android.R.attr.state_checked), intArrayOf())
             thumbTintList = ColorStateList(states, intArrayOf(Color.WHITE, Color.WHITE))
-            trackTintList = ColorStateList(states, intArrayOf(Color.rgb(0, 124, 224), Color.rgb(248, 35, 63)))
+            trackTintList = ColorStateList(states, intArrayOf(Color.rgb(0, 122, 255), Color.rgb(209, 213, 219)))
             splitTrack = false
             isChecked = preferences.getBoolean("teamUnmuted", true)
             setOnCheckedChangeListener { _, checked -> preferences.edit().putBoolean("teamUnmuted", checked).apply() }
@@ -3637,7 +3663,7 @@ open class MemberActivity : AppCompatActivity() {
                     show()
                 }
         }); col.space(4)
-        col.add(teamDetailAction("logout", "Leave") {
+        col.add(teamDetailAction("leave_team", "Leave") {
             AlertDialog.Builder(this).setTitle("Leave Team?")
                 .setMessage("Are you sure you want to leave this team?")
                 .setNegativeButton("Cancel", null).setPositiveButton("Leave") { _, _ ->
@@ -3660,9 +3686,11 @@ open class MemberActivity : AppCompatActivity() {
         return root
     }
     private fun teamDetailAction(icon: String, label: String, action: () -> Unit): View = horizontal().apply {
-        add(Symbol(this@MemberActivity, icon, if (label == "Report") Color.BLACK else navy), 36, 32)
-        add(text(label, 14, Color.BLACK, true).apply { setPadding(dp(14), 0, 0, 0) }, 0, 48, 1f)
-        isFocusable = true; contentDescription = label; setOnClickListener { action() }
+        gravity = Gravity.CENTER_VERTICAL
+        setPadding(0, dp(4), 0, dp(4))
+        add(Symbol(this@MemberActivity, icon, Color.BLACK), 28, 28)
+        add(text(label, 15, Color.BLACK, true).apply { setPadding(dp(16), 0, 0, 0) }, 0, 48, 1f)
+        isFocusable = true; isClickable = true; contentDescription = label; setOnClickListener { action() }
     }
 
     private fun memberTile(id: Int, icon: String, label: String, labelSize: Int = 14) = vertical().apply {
