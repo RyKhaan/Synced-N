@@ -2600,13 +2600,17 @@ open class MemberActivity : AppCompatActivity() {
         col.add(memberButton("Request Substitution") { navigate("substitution") }, -1, 48)
     }
     private fun substitutionView(): View = memberPage("Request Substitution", "service") { col ->
-        val activeCode = preferences.getString("teamCode", "").orEmpty()
+        val activeCode = preferences.getString(SessionManager.KEY_TEAM_CODE, "").orEmpty().ifBlank { preferences.getString("teamCode", "").orEmpty() }
         val currentUid = com.example.syncedn.data.auth.AuthManager.currentUser?.uid?.takeIf { it.isNotBlank() }
             ?: preferences.getString(SessionManager.KEY_USER_ID, "").orEmpty().ifBlank {
                 preferences.getString("userId", "").orEmpty()
             }
-        val currentName = preferences.getString("fullName", "").orEmpty().ifBlank {
-            preferences.getString("username", "Member").orEmpty()
+        val currentName = preferences.getString(SessionManager.KEY_FULL_NAME, "").orEmpty().ifBlank {
+            preferences.getString(SessionManager.KEY_USERNAME, "").orEmpty()
+        }.ifBlank {
+            preferences.getString("fullName", "").orEmpty().ifBlank {
+                preferences.getString("username", "Member").orEmpty()
+            }
         }
 
         // Determine current role in selectedSheetService or fallback
@@ -2891,10 +2895,14 @@ open class MemberActivity : AppCompatActivity() {
         val subCol = vertical()
         col.addView(subCol)
 
-        val activeCode = preferences.getString("teamCode", "").orEmpty()
-        val currentUid = preferences.getString("userId", "").orEmpty()
-        val currentName = preferences.getString("fullName", "").orEmpty().ifBlank {
-            preferences.getString("username", "").orEmpty()
+        val activeCode = preferences.getString(SessionManager.KEY_TEAM_CODE, "").orEmpty().ifBlank { preferences.getString("teamCode", "").orEmpty() }
+        val currentUid = preferences.getString(SessionManager.KEY_USER_ID, "").orEmpty().ifBlank { preferences.getString("userId", "").orEmpty() }.ifBlank { AuthManager.currentUser?.uid.orEmpty() }
+        val currentName = preferences.getString(SessionManager.KEY_FULL_NAME, "").orEmpty().ifBlank {
+            preferences.getString(SessionManager.KEY_USERNAME, "").orEmpty()
+        }.ifBlank {
+            preferences.getString("fullName", "").orEmpty().ifBlank {
+                preferences.getString("username", "").orEmpty()
+            }
         }
 
         // Migrate legacy demo substitution if needed
@@ -2932,7 +2940,7 @@ open class MemberActivity : AppCompatActivity() {
             for (sub in list) {
                 subCol.add(panel().apply {
                     val headerRow = horizontal().apply { gravity = Gravity.CENTER_VERTICAL }
-                    headerRow.add(text(sub.serviceTitle.ifBlank { "Sunday Worship Service" }, 14, Color.BLACK, bold = true), 0, -2, 1f)
+                    headerRow.add(text(sub.serviceTitle.ifBlank { "Sunday Worship Service" }, 15, Color.rgb(80, 5, 104), bold = true), 0, -2, 1f)
 
                     val isPending = sub.status.equals("Pending", ignoreCase = true)
                     val isAccepted = sub.status.equals("Accepted", ignoreCase = true)
@@ -2960,19 +2968,16 @@ open class MemberActivity : AppCompatActivity() {
                     headerRow.add(statusBadge, -2, -2)
                     add(headerRow); space(10)
 
-                    add(text("Requesting: ${sub.requesterName} (${sub.role})", 12, Color.rgb(51, 65, 85))); space(4)
-                    val propRow = horizontal()
-                    propRow.add(text("Proposed Substitute: ", 12, Color.rgb(51, 65, 85)))
-                    propRow.add(text(sub.substituteName, 12, Color.BLACK, bold = true))
-                    add(propRow); space(4)
-                    add(text("Reason: ${sub.reason}", 12, Color.rgb(51, 65, 85)))
+                    add(text("Requesting: ${sub.requesterName} (${sub.role})", 12, Color.rgb(30, 41, 59))); space(4)
+                    add(text("Proposed Substitute: ${sub.substituteName}", 12, Color.BLACK, bold = true)); space(4)
+                    add(text("Reason: ${sub.reason}", 12, Color.rgb(30, 41, 59)))
 
                     val isTargetSubstitute = (currentUid.isNotBlank() && sub.substituteUid == currentUid) ||
                             (currentName.isNotBlank() && sub.substituteName.equals(currentName, ignoreCase = true))
                     val isRequester = (currentUid.isNotBlank() && sub.requesterUid == currentUid) ||
                             (currentName.isNotBlank() && sub.requesterName.equals(currentName, ignoreCase = true))
 
-                    if (isPending && isTargetSubstitute) {
+                    if (isPending && (isTargetSubstitute || !isRequester)) {
                         space(16)
                         val actions = horizontal()
                         val acceptBtn = Button(this@MemberActivity).apply {

@@ -4034,7 +4034,7 @@ class AdminActivity : AppCompatActivity() {
         val subCol = vertical()
         col.addView(subCol)
 
-        val activeCode = preferences.getString("teamCode", "").orEmpty()
+        val activeCode = preferences.getString(SessionManager.KEY_TEAM_CODE, "").orEmpty().ifBlank { preferences.getString("teamCode", "").orEmpty() }
 
         // Migrate legacy demo substitution if needed
         val legacyServiceName = preferences.getString("requestServiceName", null)
@@ -4071,7 +4071,7 @@ class AdminActivity : AppCompatActivity() {
             for (sub in list) {
                 subCol.add(panel().apply {
                     val headerRow = horizontal().apply { gravity = Gravity.CENTER_VERTICAL }
-                    headerRow.add(text(sub.serviceTitle.ifBlank { "Sunday Worship Service" }, 14, Color.BLACK, bold = true), 0, -2, 1f)
+                    headerRow.add(text(sub.serviceTitle.ifBlank { "Sunday Worship Service" }, 15, Color.rgb(80, 5, 104), bold = true), 0, -2, 1f)
 
                     val isPending = sub.status.equals("Pending", ignoreCase = true)
                     val isAccepted = sub.status.equals("Accepted", ignoreCase = true)
@@ -4121,18 +4121,15 @@ class AdminActivity : AppCompatActivity() {
                     }
                     add(headerRow); space(10)
 
-                    add(text("Requesting: ${sub.requesterName} (${sub.role})", 12, Color.rgb(51, 65, 85))); space(4)
-                    val propRow = horizontal()
-                    propRow.add(text("Proposed Substitute: ", 12, Color.rgb(51, 65, 85)))
-                    propRow.add(text(sub.substituteName, 12, Color.BLACK, bold = true))
-                    add(propRow); space(4)
-                    add(text("Reason: ${sub.reason}", 12, Color.rgb(51, 65, 85)))
+                    add(text("Requesting: ${sub.requesterName} (${sub.role})", 12, Color.rgb(30, 41, 59))); space(4)
+                    add(text("Proposed Substitute: ${sub.substituteName}", 12, Color.BLACK, bold = true)); space(4)
+                    add(text("Reason: ${sub.reason}", 12, Color.rgb(30, 41, 59)))
 
                     if (isPending) {
                         space(16)
                         val actions = horizontal()
                         val acceptBtn = Button(this@AdminActivity).apply {
-                            text = "Approve & Reassign"
+                            text = "Accept Substitution"
                             isAllCaps = false
                             background = bg(Color.rgb(80, 5, 104), 8)
                             setTextColor(Color.WHITE)
@@ -4140,14 +4137,14 @@ class AdminActivity : AppCompatActivity() {
                             textSize = 12f
                             setTypeface(typeface, Typeface.BOLD)
                             setOnClickListener {
-                                AlertDialog.Builder(this@AdminActivity).setTitle("Approve & Reassign as Leader?")
-                                    .setMessage("As Team Leader, do you want to approve this substitution for ${sub.role} (${sub.substituteName} replacing ${sub.requesterName})?")
+                                AlertDialog.Builder(this@AdminActivity).setTitle("Accept substitution?")
+                                    .setMessage("As Team Leader, do you want to accept this substitution for ${sub.role} (${sub.substituteName} replacing ${sub.requesterName})?")
                                     .setNegativeButton("Cancel", null)
-                                    .setPositiveButton("Approve") { _, _ ->
+                                    .setPositiveButton("Accept") { _, _ ->
                                         TeamRepository.acceptSubstitutionAndUpdateService(activeCode, sub, preferences) { res ->
                                             runOnUiThread {
-                                                if (res.isSuccess) toast("Substitution approved and service roster updated!")
-                                                else toast("Failed to approve substitution: ${res.exceptionOrNull()?.message ?: "Unknown error"}")
+                                                if (res.isSuccess) toast("Substitution accepted and service roster updated!")
+                                                else toast("Failed to accept substitution: ${res.exceptionOrNull()?.message ?: "Unknown error"}")
                                                 populateSubstitutions()
                                             }
                                         }

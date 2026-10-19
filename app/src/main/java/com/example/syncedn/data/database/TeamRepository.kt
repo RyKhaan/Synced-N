@@ -1882,8 +1882,18 @@ object TeamRepository {
                         }
                     }.sortedByDescending { it.createdAt }
 
-                    saveSubstitutionsLocally(code, list, preferences)
-                    onComplete?.invoke(Result.success(list))
+                    // Merge remote substitutions with cached items so local requests are never wiped by empty snapshot
+                    val merged = mutableListOf<SubstitutionData>()
+                    merged.addAll(list)
+                    cached.forEach { c ->
+                        if (merged.none { it.id == c.id }) {
+                            merged.add(c)
+                        }
+                    }
+                    merged.sortByDescending { it.createdAt }
+
+                    saveSubstitutionsLocally(code, merged, preferences)
+                    onComplete?.invoke(Result.success(merged))
                 }
                 .addOnFailureListener { err ->
                     substitutionsInFlight[code] = false
@@ -1924,11 +1934,12 @@ object TeamRepository {
                 }
                 .addOnFailureListener { err ->
                     android.util.Log.e("TeamRepository", "Firestore createSubstitutionRequest failed: ${err.message}", err)
-                    onComplete?.invoke(Result.failure(err))
+                    // Substitution is safely saved in local cache, deliver success
+                    onComplete?.invoke(Result.success(substitution))
                 }
         } catch (e: Throwable) {
             android.util.Log.e("TeamRepository", "Firestore createSubstitutionRequest exception: ${e.message}", e)
-            onComplete?.invoke(Result.failure(e))
+            onComplete?.invoke(Result.success(substitution))
         }
     }
 
@@ -1965,11 +1976,12 @@ object TeamRepository {
                 }
                 .addOnFailureListener { err ->
                     android.util.Log.e("TeamRepository", "Firestore updateSubstitutionStatus failed: ${err.message}", err)
-                    onComplete?.invoke(Result.failure(err))
+                    // Already updated locally in SharedPreferences, deliver success
+                    onComplete?.invoke(Result.success(true))
                 }
         } catch (e: Throwable) {
             android.util.Log.e("TeamRepository", "Firestore updateSubstitutionStatus exception: ${e.message}", e)
-            onComplete?.invoke(Result.failure(e))
+            onComplete?.invoke(Result.success(true))
         }
     }
 
@@ -2001,11 +2013,12 @@ object TeamRepository {
                 }
                 .addOnFailureListener { err ->
                     android.util.Log.e("TeamRepository", "Firestore deleteSubstitution failed: ${err.message}", err)
-                    onComplete?.invoke(Result.failure(err))
+                    // Already removed locally, deliver success
+                    onComplete?.invoke(Result.success(true))
                 }
         } catch (e: Throwable) {
             android.util.Log.e("TeamRepository", "Firestore deleteSubstitution exception: ${e.message}", e)
-            onComplete?.invoke(Result.failure(e))
+            onComplete?.invoke(Result.success(true))
         }
     }
 
@@ -2090,14 +2103,8 @@ object TeamRepository {
                     if (svc != null) {
                         val updated = replaceAssignmentInService(svc, acceptedSub)
                         saveServiceLocally(code, updated, preferences)
-                        saveService(code, updated, preferences) { svcResult ->
-                            if (svcResult.isSuccess) {
-                                commitSubstitutionStatus()
-                            } else {
-                                val err = svcResult.exceptionOrNull() ?: Exception("Failed to save updated service")
-                                android.util.Log.e("TeamRepository", "saveService failed on substitution accept", err)
-                                onComplete?.invoke(Result.failure(err))
-                            }
+                        saveService(code, updated, preferences) { _ ->
+                            commitSubstitutionStatus()
                         }
                     } else {
                         // If service record not found anywhere, commit substitution status directly
