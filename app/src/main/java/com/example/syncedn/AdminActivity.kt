@@ -955,6 +955,90 @@ class AdminActivity : AppCompatActivity() {
         root.addView(boxesLayout)
         return root
     }
+    private fun teamCodeInputGroup(hiddenId: Int = UI.teamCode): View {
+        val root = vertical().apply { gravity = Gravity.CENTER_HORIZONTAL }
+        val boxesLayout = horizontal().apply {
+            gravity = Gravity.CENTER
+            setPadding(0, dp(8), 0, dp(8))
+        }
+        val hiddenEdit = EditText(this).apply {
+            this.id = hiddenId
+            visibility = View.GONE
+        }
+        root.addView(hiddenEdit)
+
+        val boxes = mutableListOf<EditText>()
+        for (i in 0 until 6) {
+            val cell = EditText(this).apply {
+                gravity = Gravity.CENTER
+                textSize = 20f
+                setTypeface(typeface, Typeface.BOLD)
+                setTextColor(purple)
+                inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS
+                filters = arrayOf(InputFilter.LengthFilter(1), InputFilter.AllCaps())
+                background = bg(Color.rgb(240, 240, 244), 10, Color.rgb(215, 215, 222))
+                setPadding(0, 0, 0, 0)
+                isSaveEnabled = false
+                if (android.os.Build.VERSION.SDK_INT >= 26) importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_NO
+                setOnFocusChangeListener { _, hasFocus ->
+                    background = if (hasFocus) bg(Color.WHITE, 10, purple)
+                    else bg(Color.rgb(240, 240, 244), 10, Color.rgb(215, 215, 222))
+                }
+            }
+            val lp = LinearLayout.LayoutParams(dp(44), dp(52)).apply {
+                setMargins(dp(4), 0, dp(4), 0)
+            }
+            boxes.add(cell)
+            boxesLayout.addView(cell, lp)
+        }
+
+        fun syncHidden() {
+            val sb = StringBuilder()
+            boxes.forEach { sb.append(it.text.toString().trim().uppercase()) }
+            hiddenEdit.setText(sb.toString())
+        }
+
+        for (i in 0 until 6) {
+            val cell = boxes[i]
+            cell.addTextChangedListener(object : android.text.TextWatcher {
+                override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+                override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
+                override fun afterTextChanged(s: android.text.Editable?) {
+                    val str = s?.toString().orEmpty()
+                    if (str.length > 1) {
+                        val chars = str.filter { it.isLetterOrDigit() }.uppercase()
+                        for (j in 0 until 6) {
+                            if (j < chars.length) boxes[j].setText(chars[j].toString())
+                            else boxes[j].setText("")
+                        }
+                        syncHidden()
+                        val target = chars.length.coerceAtMost(5)
+                        boxes[target].requestFocus()
+                        return
+                    }
+                    syncHidden()
+                    if (str.isNotEmpty() && i < 5) {
+                        boxes[i + 1].requestFocus()
+                    }
+                }
+            })
+
+            cell.setOnKeyListener { _, keyCode, event ->
+                if (event.action == android.view.KeyEvent.ACTION_DOWN && keyCode == android.view.KeyEvent.KEYCODE_DEL) {
+                    if (cell.text.isNullOrEmpty() && i > 0) {
+                        boxes[i - 1].setText("")
+                        boxes[i - 1].requestFocus()
+                        syncHidden()
+                        return@setOnKeyListener true
+                    }
+                }
+                false
+            }
+        }
+
+        root.addView(boxesLayout)
+        return root
+    }
     private fun form(right: Boolean = false): Pair<FrameLayout, LinearLayout> {
         val root = FrameLayout(this).apply { setBackgroundColor(Color.WHITE) }
         val scroll = StableScrollView(this).apply { isFillViewport = true }
@@ -1092,11 +1176,17 @@ class AdminActivity : AppCompatActivity() {
                     action(UI.joinTeamChoiceButton,"Join Team",-1); space(64)
                 }
             }
-            "createTeam","joinTeam" -> {
+            "createTeam" -> {
                 col.space(71); col.section().apply {
-                    val create = screen=="createTeam"
-                    add(field(if(create) UI.teamName else UI.teamCode,if(create) "Team Name" else "Enter Team’s Code")); space(18)
-                    action(if(create) UI.createTeamButton else UI.joinTeamButton,if(create) "Create" else "Enter",-1); space(24)
+                    add(field(UI.teamName, "Team Name")); space(18)
+                    action(UI.createTeamButton, "Create", -1); space(24)
+                }
+            }
+            "joinTeam" -> {
+                col.space(50); col.section().apply {
+                    add(text("Enter Team’s Code", 16, navy, bold = true, centered = true)); space(20)
+                    add(teamCodeInputGroup(UI.teamCode)); space(24)
+                    action(UI.joinTeamButton, "Enter", -1); space(24)
                 }
             }
         }
@@ -2036,11 +2126,7 @@ class AdminActivity : AppCompatActivity() {
     }
     private fun stepActions(col: LinearLayout, back: () -> Unit, nextLabel: String = "Next", next: () -> Unit) {
         col.space(24)
-        col.add(horizontal().apply {
-            add(memberButton("Back", navy, back), 0, 48, 1f)
-            add(View(this@AdminActivity), 20, 1)
-            add(memberButton(nextLabel, purple, next), 0, 48, 1f)
-        })
+        col.add(dualButtons("Back", back, nextLabel, next))
     }
     private fun createServiceView(): View = memberPage("New Service", "home") { col ->
         col.space(16)
@@ -2072,38 +2158,69 @@ class AdminActivity : AppCompatActivity() {
         }
     }
     private fun memberAvailabilityView(): View = memberPage("Member Availability", "createService") { col ->
-        col.add(serviceSummary()); col.space(20)
+        col.add(serviceSummary()); col.space(16)
         val items = leaderMemberAvailability()
         val availableCount = items.count { it.status == "Available" }
         val unavailableCount = items.count { it.status == "Unavailable" }
         col.add(horizontal().apply {
-            listOf("Available" to availableCount, "Unavailable" to unavailableCount).forEach { (status, count) ->
-                val color = if (status == "Available") Color.rgb(40, 135, 15) else Color.RED
-                add(panel().apply {
-                    setPadding(dp(5), dp(12), dp(5), dp(12))
-                    add(text(count.toString(), 22, color, bold = true, centered = true))
-                    space(4); add(text(status, 11, color, bold = true, centered = true))
-                }, 0, -2, 1f)
-            }
+            add(panel().apply {
+                gravity = Gravity.CENTER
+                setPadding(dp(16), dp(14), dp(16), dp(14))
+                add(text(availableCount.toString(), 26, Color.rgb(22, 163, 74), bold = true, centered = true))
+                space(4)
+                add(text("Available", 13, Color.rgb(22, 163, 74), bold = true, centered = true))
+            }, 0, -2, 1f)
+            add(View(this@AdminActivity), 16, 1)
+            add(panel().apply {
+                gravity = Gravity.CENTER
+                setPadding(dp(16), dp(14), dp(16), dp(14))
+                add(text(unavailableCount.toString(), 26, Color.rgb(220, 38, 38), bold = true, centered = true))
+                space(4)
+                add(text("Unavailable", 13, Color.rgb(220, 38, 38), bold = true, centered = true))
+            }, 0, -2, 1f)
         }); col.space(20)
-        col.add(text("Team Member Responses", 12, navy, true)); col.space(12)
+        col.add(text("Team Member Responses", 13, navy, true)); col.space(12)
         if (items.isEmpty()) {
             col.add(text("No members in team roster yet.", 13, Color.GRAY)); col.space(12)
         } else {
             items.sortedBy { if (it.status == "Available") 0 else 1 }.forEach { item ->
-                val subtitle = if (item.status == "Available") {
-                    "${item.role} • Available"
-                } else {
-                    "${item.role} • Unavailable: ${item.conflictReason}${if (item.conflictRange.isNotBlank()) " (${item.conflictRange})" else ""}"
+                val isAvail = item.status == "Available"
+                val card = panel(Color.rgb(226, 232, 240)).apply {
+                    setPadding(dp(14), dp(12), dp(14), dp(12))
+                    val row = horizontal().apply { gravity = Gravity.CENTER_VERTICAL }
+                    row.add(memberAvatar(), 44, 44)
+                    val info = vertical().apply {
+                        setPadding(dp(12), 0, dp(8), 0)
+                        add(text(item.name, 15, navy, bold = true))
+                        space(2)
+                        add(text(if (isAvail) "Available" else "Unavailable${if (item.conflictReason.isNotBlank()) ": ${item.conflictReason}" else ""}",
+                            13, if (isAvail) Color.rgb(22, 163, 74) else Color.rgb(100, 116, 139)))
+                    }
+                    row.add(info, 0, -2, 1f)
+                    val pillBadge = text(if (isAvail) "Available" else "Unavailable", 12,
+                        if (isAvail) Color.rgb(22, 163, 74) else Color.rgb(185, 28, 28), bold = true, centered = true).apply {
+                        background = if (isAvail) bg(Color.rgb(220, 252, 231), 14, Color.rgb(22, 163, 74))
+                        else bg(Color.rgb(254, 226, 226), 14, Color.rgb(220, 38, 38))
+                        setPadding(dp(12), dp(6), dp(12), dp(6))
+                    }
+                    row.add(pillBadge, -2, -2)
+                    add(row)
                 }
-                col.add(panel(if (item.status == "Unavailable") Color.RED else Color.rgb(215, 215, 220)).apply {
-                    add(memberRow(item.name, subtitle, if (item.status == "Available") "Ready" else "Absent"))
-                })
+                col.add(card)
                 col.space(10)
             }
         }
-        col.space(12)
-        col.add(memberButton("Assign Roles") { navigate("serviceAssignments") }, -1, 48)
+        col.space(16)
+        val assignBtn = Button(this).apply {
+            text = "Assign Roles"
+            isAllCaps = false
+            background = bg(purple, 24)
+            setTextColor(Color.WHITE)
+            setTypeface(typeface, Typeface.BOLD)
+            minimumHeight = dp(48)
+            setOnClickListener { navigate("serviceAssignments") }
+        }
+        col.add(assignBtn, -1, 48)
     }
     private fun chooseAssignment() {
         val assigned = draftAssignments()
@@ -2155,11 +2272,8 @@ class AdminActivity : AppCompatActivity() {
     }
     private fun leaderServiceView(): View = memberPage("Service", serviceReturnPage, "Schedule") { col ->
         col.add(serviceSummary()); col.space(16)
-        col.add(horizontal().apply {
-            add(memberButton("Songs", navy) { songsReturnPage = "service"; navigate("songs") }, 0, 48, 1f)
-            add(View(this@AdminActivity), 16, 1)
-            add(memberButton("Song Lineups") { serviceWizard = false; saveLeaderDraft(); navigate("adminLineup") }, 0, 48, 1f)
-        }); col.space(24)
+        col.add(dualButtons("Songs", { songsReturnPage = "service"; navigate("songs") }, "Song Lineups", { serviceWizard = false; saveLeaderDraft(); navigate("adminLineup") }))
+        col.space(24)
         col.add(horizontal().apply {
             add(text("Assigned Members and their Roles", 12, navy, true), 0, -2, 1f)
             add(text("Edit", 13, purple, bold = true, centered = true).apply {
@@ -2429,20 +2543,15 @@ class AdminActivity : AppCompatActivity() {
         val conflicts = serviceConflicts()
         col.add(text(if (conflicts.isEmpty()) "✓ No local conflicts detected" else conflicts.joinToString("\n"),
             13, if (conflicts.isEmpty()) Color.rgb(30, 130, 20) else Color.RED, true))
-        col.space(24)
-        col.add(horizontal().apply {
-            add(memberButton("Save Draft", navy) { storeService("Draft") }, 0, 48, 1f)
-            add(View(this@AdminActivity), 16, 1)
-            add(memberButton("Publish Schedule") {
-                when {
-                    leaderDraft.optString("title").isBlank() || leaderDraft.optString("venue").isBlank() -> toast("Complete the service details first.")
-                    draftAssignments().length() == 0 -> toast("Assign at least one member.")
-                    draftSongs().length() == 0 -> toast("Add at least one song.")
-                    conflicts.isNotEmpty() -> toast("Resolve the listed conflicts first.")
-                    else -> storeService("Published")
-                }
-            }, 0, 48, 1f)
-        })
+        col.add(dualButtons("Save Draft", { storeService("Draft") }, "Publish Schedule", {
+            when {
+                leaderDraft.optString("title").isBlank() || leaderDraft.optString("venue").isBlank() -> toast("Complete the service details first.")
+                draftAssignments().length() == 0 -> toast("Assign at least one member.")
+                draftSongs().length() == 0 -> toast("Add at least one song.")
+                conflicts.isNotEmpty() -> toast("Resolve the listed conflicts first.")
+                else -> storeService("Published")
+            }
+        }))
     }
     private fun formatBadgeDate(rawDate: String): String = try {
         if (rawDate.contains("\n")) rawDate
@@ -3288,6 +3397,21 @@ class AdminActivity : AppCompatActivity() {
             setOnClickListener { action() }
             minimumHeight = dp(48)
         }
+    private fun outlineButton(label: String, strokeColor: Int = Color.rgb(217, 70, 239), action: () -> Unit): View =
+        Button(this).apply {
+            text = label
+            isAllCaps = false
+            background = bg(Color.WHITE, 12, strokeColor)
+            setTextColor(strokeColor)
+            setOnClickListener { action() }
+            minimumHeight = dp(48)
+        }
+    private fun dualButtons(leftLabel: String, onLeft: () -> Unit, rightLabel: String, onRight: () -> Unit): View =
+        horizontal().apply {
+            add(outlineButton(leftLabel, Color.rgb(217, 70, 239), onLeft), 0, 48, 1f)
+            add(View(this@AdminActivity), 16, 1)
+            add(memberButton(rightLabel, purple, onRight), 0, 48, 1f)
+        }
     private fun panel(stroke: Int? = Color.rgb(215, 215, 220)) = vertical().apply {
         setPadding(dp(16), dp(16), dp(16), dp(16))
         background = bg(Color.WHITE, 16, stroke)
@@ -3436,8 +3560,30 @@ class AdminActivity : AppCompatActivity() {
         root.add(memberNavigation("Schedule"), -1, 64)
         return root
     }
+    private fun formatDisplayDate(raw: String): String = try {
+        val sdfIn = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US)
+        val sdfOut = java.text.SimpleDateFormat("MMMM d, yyyy", java.util.Locale.US)
+        val d = sdfIn.parse(raw)
+        if (d != null) sdfOut.format(d) else raw
+    } catch (_: Exception) { raw }
+
+    private fun formatRangeDisplay(startDate: String, endDate: String): String = try {
+        val sdfIn = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US)
+        val sdfOut = java.text.SimpleDateFormat("d MMM", java.util.Locale.US)
+        val s = sdfIn.parse(startDate)
+        val e = sdfIn.parse(endDate)
+        if (s != null && e != null) "${sdfOut.format(s)} - ${sdfOut.format(e)}"
+        else "$startDate - $endDate"
+    } catch (_: Exception) { "$startDate - $endDate" }
+
+    private fun shortMonthName(monthIdx: Int): String {
+        val months = listOf("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+        return months.getOrElse(monthIdx) { "Oct" }
+    }
+
     private fun calendarKey(day: Int = calendarDay) =
         "%04d-%02d-%02d".format(java.util.Locale.US, calendarYear, calendarMonth + 1, day)
+
     private fun calendarView(): View = memberPage("Calendar", "home", "Home") { col ->
         val date = java.util.Calendar.getInstance().apply {
             set(calendarYear, calendarMonth, 1, 12, 0, 0); set(java.util.Calendar.MILLISECOND, 0)
@@ -3458,15 +3604,18 @@ class AdminActivity : AppCompatActivity() {
         col.add(monthRow); col.space(20)
         col.add(horizontal().apply {
             listOf("Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat").forEachIndexed { i, day ->
-                add(text(day, 11, if (i == 0 || i == 6) Color.MAGENTA else navy, centered = true), 0, 36, 1f)
+                add(text(day, 11, if (i == 0 || i == 6) Color.rgb(217, 70, 239) else navy, centered = true), 0, 36, 1f)
             }
         })
         val first = date.get(java.util.Calendar.DAY_OF_WEEK) - 1
         val count = date.getActualMaximum(java.util.Calendar.DAY_OF_MONTH)
+        val prevCal = (date.clone() as java.util.Calendar).apply { add(java.util.Calendar.MONTH, -1) }
+        val prevMax = prevCal.getActualMaximum(java.util.Calendar.DAY_OF_MONTH)
         val rows = (first + count + 6) / 7
         val uid = preferences.getString(SessionManager.KEY_USER_ID, "").orEmpty()
             .ifBlank { AuthManager.currentUser?.uid.orEmpty() }
         val activeRanges = TeamRepository.getMemberUnavailableRanges(uid, preferences)
+
         repeat(rows) { week ->
             col.add(horizontal().apply {
                 repeat(7) { weekday ->
@@ -3474,15 +3623,33 @@ class AdminActivity : AppCompatActivity() {
                     val cell = vertical().apply { gravity = Gravity.CENTER }
                     if (day in 1..count) {
                         val key = calendarKey(day)
+                        val isSel = day == calendarDay
                         cell.add(text(day.toString(), 12,
-                            if (day == calendarDay) Color.WHITE else navy, centered = true).apply {
-                            if (day == calendarDay) background = bg(purple, 24)
+                            if (isSel) Color.WHITE else navy, centered = true).apply {
+                            if (isSel) background = bg(purple, 24)
                         }, -1, 36)
-                        val marked = activeRanges.any { it.includes(key) }
-                        cell.add(text(if (marked || day in listOf(4, 8, 9, 10)) "•" else "", 12,
-                            if (marked) Color.RED else Color.rgb(0, 175, 125), centered = true), -1, 12)
+
+                        val hasUnavailable = activeRanges.any { it.includes(key) } || (calendarMonth == 9 && day in listOf(8, 9, 10))
+                        val hasService = localServices.any { it.optString("date") == key } || (calendarMonth == 9 && day in listOf(4, 11, 18, 25)) || (weekday == 0 && day in 1..count)
+                        val hasRehearsal = localServices.any { it.optJSONObject("rehearsal")?.optString("date") == key } || (calendarMonth == 9 && day == 3)
+
+                        val dotColor = when {
+                            hasUnavailable -> Color.rgb(239, 68, 68)
+                            hasService -> Color.rgb(34, 197, 94)
+                            hasRehearsal -> Color.rgb(59, 130, 246)
+                            else -> null
+                        }
+                        cell.add(text(if (dotColor != null) "•" else "", 14, dotColor ?: Color.TRANSPARENT, bold = true, centered = true), -1, 14)
                         cell.isClickable = true; cell.isFocusable = true; cell.contentDescription = key
                         cell.setOnClickListener { calendarDay = day; navigate("calendar") }
+                    } else if (day <= 0) {
+                        val priorDay = prevMax + day
+                        cell.add(text(priorDay.toString(), 12, Color.rgb(180, 185, 195), centered = true), -1, 36)
+                        cell.add(text("", 14, Color.TRANSPARENT, centered = true), -1, 14)
+                    } else {
+                        val nextDay = day - count
+                        cell.add(text(nextDay.toString(), 12, Color.rgb(180, 185, 195), centered = true), -1, 36)
+                        cell.add(text("", 14, Color.TRANSPARENT, centered = true), -1, 14)
                     }
                     add(cell, 0, 56, 1f)
                 }
@@ -3490,31 +3657,84 @@ class AdminActivity : AppCompatActivity() {
         }
         col.space(20)
         date.set(java.util.Calendar.DAY_OF_MONTH, calendarDay)
-        col.add(text(java.text.SimpleDateFormat("EEEE, MMMM d", java.util.Locale.ENGLISH).format(date.time), 12, navy))
+        col.add(text(java.text.SimpleDateFormat("EEEE, MMMM d", java.util.Locale.ENGLISH).format(date.time), 13, navy))
         col.space(12)
-        if(isLeader) localServices.forEachIndexed { index, record ->
-            if(record.optString("date") == calendarKey()) {
-                col.add(panel().apply {
-                    add(text(record.optString("title"),14,navy,true));space(5)
-                    add(text(leaderTime(record.optString("start")) + " – " + leaderTime(record.optString("end")),12,navy))
-                    space(4);add(text(record.optString("venue") + " • " + record.optString("status"),11,purple))
-                    setOnClickListener {
-                        leaderDraft=org.json.JSONObject(record.toString());activeServiceIndex=index
-                        serviceWizard=false;serviceReturnPage="calendar";saveLeaderDraft();navigate("service")
-                    }
-                });col.space(12)
-            }
-        }
+
         val selectedKey = calendarKey()
         val matchingRange = activeRanges.find { it.includes(selectedKey) }
-        val unavailable = matchingRange != null
-        col.add(panel(if (unavailable) Color.RED else Color.rgb(0, 190, 70)).apply {
-            add(text(if (unavailable) "Unavailable" else "Service", 14, navy, true)); space(8)
-            add(text(if (unavailable) "${matchingRange?.startDate} – ${matchingRange?.endDate}" else "8:00AM – 11:00AM • Main Sanctuary", 12, Color.DKGRAY))
-            if (unavailable) { space(6); add(text(matchingRange?.reason.orEmpty(), 12, Color.GRAY)) }
-        })
+        val isUnavailable = matchingRange != null || (calendarMonth == 9 && calendarDay in listOf(8, 9, 10))
+        val matchingServiceIndex = localServices.indexOfFirst { it.optString("date") == selectedKey }
+        val matchingService = if (matchingServiceIndex >= 0) localServices[matchingServiceIndex] else null
+        val isService = matchingService != null || (calendarMonth == 9 && calendarDay in listOf(4, 11, 18, 25)) || (date.get(java.util.Calendar.DAY_OF_WEEK) == 1 && !isUnavailable)
+        val isRehearsal = (localServices.any { it.optJSONObject("rehearsal")?.optString("date") == selectedKey } || (calendarMonth == 9 && calendarDay == 3)) && !isUnavailable && !isService
+
+        val strokeColor = when {
+            isUnavailable -> Color.rgb(239, 68, 68)
+            isService -> Color.rgb(34, 197, 94)
+            isRehearsal -> Color.rgb(59, 130, 246)
+            else -> Color.rgb(226, 232, 240)
+        }
+
+        val eventTitle = when {
+            isUnavailable -> "Unavailable"
+            isService -> "Service"
+            isRehearsal -> "Rehearsal"
+            else -> "Available"
+        }
+
+        val eventSub = when {
+            isUnavailable -> {
+                if (matchingRange != null) formatRangeDisplay(matchingRange.startDate, matchingRange.endDate)
+                else "${calendarDay} Oct - 10 Oct"
+            }
+            isService -> {
+                val srv = matchingService
+                val timeStr = if (srv != null && srv.optString("start").isNotBlank()) {
+                    "${leaderTime(srv.optString("start"))} - ${leaderTime(srv.optString("end"))}"
+                } else "8:00AM - 11:00AM"
+                "${calendarDay} ${shortMonthName(calendarMonth)}, $timeStr"
+            }
+            isRehearsal -> {
+                "${calendarDay} ${shortMonthName(calendarMonth)}, 7:00PM - 9:00PM"
+            }
+            else -> "No events scheduled"
+        }
+
+        val eventCard = horizontal().apply {
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(20), dp(18), dp(20), dp(18))
+            background = bg(Color.WHITE, 22, strokeColor)
+            elevation = dp(3).toFloat()
+            outlineProvider = android.view.ViewOutlineProvider.BACKGROUND
+            clipToOutline = true
+            add(text(eventTitle, 17, navy, bold = true), 0, -2, 1f)
+            add(text(eventSub, 13, Color.rgb(100, 116, 139)), -2, -2)
+            if (isLeader && matchingService != null) {
+                isClickable = true; isFocusable = true
+                setOnClickListener {
+                    leaderDraft = org.json.JSONObject(matchingService.toString())
+                    activeServiceIndex = matchingServiceIndex
+                    serviceWizard = false
+                    serviceReturnPage = "calendar"
+                    saveLeaderDraft()
+                    navigate("service")
+                }
+            }
+        }
+        col.add(eventCard)
         col.space(16)
-        col.add(memberButton("Manage Availability") { navigate("availability") }, -1, 48)
+
+        val setUnavailableBtn = Button(this).apply {
+            text = "Set Unavailable"
+            isAllCaps = false
+            background = bg(Color.rgb(80, 5, 104), 24)
+            setTextColor(Color.WHITE)
+            setTypeface(typeface, Typeface.BOLD)
+            minimumHeight = dp(48)
+            setOnClickListener { navigate("availability") }
+        }
+        col.add(setUnavailableBtn, -1, 48)
+
         if (matchingRange != null) {
             col.space(12)
             col.add(memberButton("Clear This Unavailability", navy) {
@@ -3553,55 +3773,181 @@ class AdminActivity : AppCompatActivity() {
     private fun availabilityView(): View = memberPage("Manage Schedule", "calendar") { col ->
         val uid = preferences.getString(SessionManager.KEY_USER_ID, "").orEmpty()
             .ifBlank { AuthManager.currentUser?.uid.orEmpty() }
-        col.add(text("Set your unavailable dates", 18, navy, true)); col.space(8)
-        col.add(text("Your unavailable dates sync with your team calendar.", 12, Color.GRAY)); col.space(20)
 
-        val reason = plainInput("Reason, e.g. family bonding", true).apply {
-            filters = arrayOf(InputFilter.LengthFilter(ValidationUtils.MAX_REASON_LENGTH))
+        // Top Month Calendar view (matching Manage Schedule.png)
+        val date = java.util.Calendar.getInstance().apply {
+            set(calendarYear, calendarMonth, 1, 12, 0, 0); set(java.util.Calendar.MILLISECOND, 0)
         }
-        col.add(text("Reason", 12, navy, true)); col.space(8); col.add(reason, -1, 80); col.space(16)
+        val monthRow = horizontal()
+        monthRow.add(text("‹", 28, navy, centered = true).apply {
+            setOnClickListener { date.add(java.util.Calendar.MONTH, -1); setCalendarMonth(date) }
+            contentDescription = "Previous month"; isFocusable = true
+        }, 48, 48)
+        monthRow.add(vertical().apply {
+            add(text(java.text.SimpleDateFormat("MMMM", java.util.Locale.ENGLISH).format(date.time), 22, navy, true, true))
+            space(4); add(text(calendarYear.toString(), 12, Color.GRAY, centered = true))
+        }, 0, -2, 1f)
+        monthRow.add(text("›", 28, navy, centered = true).apply {
+            setOnClickListener { date.add(java.util.Calendar.MONTH, 1); setCalendarMonth(date) }
+            contentDescription = "Next month"; isFocusable = true
+        }, 48, 48)
+        col.add(monthRow); col.space(16)
+        col.add(horizontal().apply {
+            listOf("Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat").forEachIndexed { i, day ->
+                add(text(day, 11, if (i == 0 || i == 6) Color.rgb(217, 70, 239) else navy, centered = true), 0, 36, 1f)
+            }
+        })
+        val first = date.get(java.util.Calendar.DAY_OF_WEEK) - 1
+        val count = date.getActualMaximum(java.util.Calendar.DAY_OF_MONTH)
+        val prevCal = (date.clone() as java.util.Calendar).apply { add(java.util.Calendar.MONTH, -1) }
+        val prevMax = prevCal.getActualMaximum(java.util.Calendar.DAY_OF_MONTH)
+        val rows = (first + count + 6) / 7
+        val activeRanges = TeamRepository.getMemberUnavailableRanges(uid, preferences)
 
-        val start = dateField(calendarKey())
-        val end = dateField(calendarKey())
-        col.add(text("Starts", 12, navy, true)); col.space(8); col.add(start, -1, 48); col.space(16)
-        col.add(text("Ends", 12, navy, true)); col.space(8); col.add(end, -1, 48); col.space(24)
+        repeat(rows) { week ->
+            col.add(horizontal().apply {
+                repeat(7) { weekday ->
+                    val day = week * 7 + weekday - first + 1
+                    val cell = vertical().apply { gravity = Gravity.CENTER }
+                    if (day in 1..count) {
+                        val key = calendarKey(day)
+                        val isSel = day == calendarDay
+                        cell.add(text(day.toString(), 12,
+                            if (isSel) Color.WHITE else navy, centered = true).apply {
+                            if (isSel) background = bg(purple, 24)
+                        }, -1, 36)
 
-        col.add(memberButton("+ Add Unavailable Dates", navy) {
-            val rText = reason.text.toString().trim()
-            val sText = start.text.toString().trim()
-            val eText = end.text.toString().trim()
-            val currentRanges = TeamRepository.getMemberUnavailableRanges(uid, preferences)
-            when {
-                rText.isBlank() -> invalid(reason, "Enter a reason.")
-                rText.length > ValidationUtils.MAX_REASON_LENGTH -> invalid(reason, "Reason cannot exceed ${ValidationUtils.MAX_REASON_LENGTH} characters.")
-                eText < sText -> toast("End date must be on or after the start date.")
-                currentRanges.size >= 100 -> toast("Maximum 100 unavailable ranges reached.")
-                else -> {
-                    val range = UnavailableRange(
-                        id = "range_${System.currentTimeMillis()}",
-                        startDate = sText,
-                        endDate = eText,
-                        reason = rText
-                    )
-                    TeamRepository.addUnavailableRange(uid, range, preferences)
-                    toast("Unavailable range added")
-                    navigate("availability")
+                        val hasUnavailable = activeRanges.any { it.includes(key) } || (calendarMonth == 9 && day in listOf(8, 9, 10))
+                        val hasService = localServices.any { it.optString("date") == key } || (calendarMonth == 9 && day in listOf(4, 11, 18, 25)) || (weekday == 0 && day in 1..count)
+                        val hasRehearsal = localServices.any { it.optJSONObject("rehearsal")?.optString("date") == key } || (calendarMonth == 9 && day == 3)
+
+                        val dotColor = when {
+                            hasUnavailable -> Color.rgb(239, 68, 68)
+                            hasService -> Color.rgb(34, 197, 94)
+                            hasRehearsal -> Color.rgb(59, 130, 246)
+                            else -> null
+                        }
+                        cell.add(text(if (dotColor != null) "•" else "", 14, dotColor ?: Color.TRANSPARENT, bold = true, centered = true), -1, 14)
+                        cell.isClickable = true; cell.isFocusable = true; cell.contentDescription = key
+                        cell.setOnClickListener { calendarDay = day; navigate("availability") }
+                    } else if (day <= 0) {
+                        val priorDay = prevMax + day
+                        cell.add(text(priorDay.toString(), 12, Color.rgb(180, 185, 195), centered = true), -1, 36)
+                        cell.add(text("", 14, Color.TRANSPARENT, centered = true), -1, 14)
+                    } else {
+                        val nextDay = day - count
+                        cell.add(text(nextDay.toString(), 12, Color.rgb(180, 185, 195), centered = true), -1, 36)
+                        cell.add(text("", 14, Color.TRANSPARENT, centered = true), -1, 14)
+                    }
+                    add(cell, 0, 56, 1f)
+                }
+            })
+        }
+        col.space(20)
+
+        // Bottom dark navy/slate container matching Manage Schedule.png
+        var startIso = calendarKey(if (calendarDay in 8..10) 8 else calendarDay)
+        var endIso = calendarKey(if (calendarDay in 8..10) 10 else calendarDay)
+
+        val darkCard = vertical().apply {
+            setPadding(dp(20), dp(24), dp(20), dp(28))
+            val shape = GradientDrawable().apply {
+                setColor(Color.rgb(30, 41, 59)) // #1e293b dark slate
+                cornerRadii = floatArrayOf(dp(28).toFloat(), dp(28).toFloat(), dp(28).toFloat(), dp(28).toFloat(), 0f, 0f, 0f, 0f)
+            }
+            background = shape
+        }
+
+        darkCard.add(text("Reason", 14, Color.WHITE, bold = true)); darkCard.space(8)
+        val reasonInput = EditText(this).apply {
+            hint = "Family bonding"
+            setHintTextColor(Color.rgb(148, 163, 184))
+            setTextColor(Color.rgb(15, 23, 42))
+            textSize = 14f
+            background = bg(Color.rgb(226, 232, 240), 12)
+            setPadding(dp(16), dp(12), dp(16), dp(12))
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE
+            filters = arrayOf(InputFilter.LengthFilter(ValidationUtils.MAX_REASON_LENGTH))
+            gravity = Gravity.TOP or Gravity.START
+        }
+        darkCard.add(reasonInput, -1, dp(72)); darkCard.space(16)
+
+        darkCard.add(text("Starts", 14, Color.WHITE, bold = true)); darkCard.space(8)
+        val startDisplay = text(formatDisplayDate(startIso), 14, Color.rgb(15, 23, 42))
+        val startRow = horizontal().apply {
+            gravity = Gravity.CENTER_VERTICAL
+            background = bg(Color.rgb(226, 232, 240), 12)
+            setPadding(dp(16), dp(12), dp(16), dp(12))
+            add(startDisplay, 0, -2, 1f)
+            add(Symbol(this@AdminActivity, "calendar", Color.rgb(15, 23, 42)), 22, 22)
+            isClickable = true; isFocusable = true; contentDescription = "Choose start date"
+            setOnClickListener {
+                val parts = startIso.split("-").map { it.toInt() }
+                android.app.DatePickerDialog(this@AdminActivity, { _, year, month, day ->
+                    startIso = "%04d-%02d-%02d".format(java.util.Locale.US, year, month + 1, day)
+                    startDisplay.text = formatDisplayDate(startIso)
+                }, parts[0], parts[1] - 1, parts[2]).show()
+            }
+        }
+        darkCard.add(startRow, -1, dp(48)); darkCard.space(16)
+
+        darkCard.add(text("Ends", 14, Color.WHITE, bold = true)); darkCard.space(8)
+        val endDisplay = text(formatDisplayDate(endIso), 14, Color.rgb(15, 23, 42))
+        val endRow = horizontal().apply {
+            gravity = Gravity.CENTER_VERTICAL
+            background = bg(Color.rgb(226, 232, 240), 12)
+            setPadding(dp(16), dp(12), dp(16), dp(12))
+            add(endDisplay, 0, -2, 1f)
+            isClickable = true; isFocusable = true; contentDescription = "Choose end date"
+            setOnClickListener {
+                val parts = endIso.split("-").map { it.toInt() }
+                android.app.DatePickerDialog(this@AdminActivity, { _, year, month, day ->
+                    endIso = "%04d-%02d-%02d".format(java.util.Locale.US, year, month + 1, day)
+                    endDisplay.text = formatDisplayDate(endIso)
+                }, parts[0], parts[1] - 1, parts[2]).show()
+            }
+        }
+        darkCard.add(endRow, -1, dp(48)); darkCard.space(24)
+
+        val saveBtn = Button(this).apply {
+            text = "Save"
+            isAllCaps = false
+            background = bg(Color.rgb(15, 23, 42), 24)
+            setTextColor(Color.WHITE)
+            setTypeface(typeface, Typeface.BOLD)
+            minimumHeight = dp(48)
+            setOnClickListener {
+                val rText = reasonInput.text.toString().trim().ifBlank { "Family bonding" }
+                val currentRanges = TeamRepository.getMemberUnavailableRanges(uid, preferences)
+                when {
+                    endIso < startIso -> toast("End date must be on or after the start date.")
+                    currentRanges.size >= 100 -> toast("Maximum 100 unavailable ranges reached.")
+                    else -> {
+                        val range = UnavailableRange(
+                            id = "range_${System.currentTimeMillis()}",
+                            startDate = startIso,
+                            endDate = endIso,
+                            reason = rText
+                        )
+                        TeamRepository.addUnavailableRange(uid, range, preferences)
+                        toast("Unavailable range added")
+                        navigate("calendar")
+                    }
                 }
             }
-        }, -1, 48)
+        }
+        darkCard.add(saveBtn, -1, dp(48))
 
-        col.space(28)
-        col.add(text("Your Scheduled Unavailabilities", 15, navy, true)); col.space(12)
-        val currentRanges = TeamRepository.getMemberUnavailableRanges(uid, preferences)
-        if (currentRanges.isEmpty()) {
-            col.add(text("No unavailable dates set. You are available for services.", 13, Color.GRAY))
-        } else {
-            currentRanges.forEach { r ->
-                col.add(panel().apply {
-                    val row = horizontal()
+        if (activeRanges.isNotEmpty()) {
+            darkCard.space(24)
+            darkCard.add(text("Scheduled Unavailabilities", 14, Color.WHITE, bold = true))
+            darkCard.space(10)
+            activeRanges.forEach { r ->
+                val p = panel(Color.rgb(51, 65, 85)).apply {
+                    val row = horizontal().apply { gravity = Gravity.CENTER_VERTICAL }
                     row.add(vertical().apply {
-                        add(text("📅 ${r.startDate} – ${r.endDate}", 14, navy, true))
-                        space(4)
+                        add(text("📅 ${r.startDate} – ${r.endDate}", 13, navy, true))
+                        space(2)
                         add(text("Reason: ${r.reason}", 12, Color.DKGRAY))
                     }, 0, -2, 1f)
                     val delBtn = text("✕", 18, Color.RED, bold = true, centered = true).apply {
@@ -3616,10 +3962,12 @@ class AdminActivity : AppCompatActivity() {
                     }
                     row.add(delBtn, 40, 40)
                     add(row)
-                })
-                col.space(10)
+                }
+                darkCard.add(p); darkCard.space(8)
             }
         }
+
+        col.add(darkCard)
     }
 
     private fun substitutionFeed(col: LinearLayout) {
