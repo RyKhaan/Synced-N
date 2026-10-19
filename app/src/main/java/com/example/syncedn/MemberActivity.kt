@@ -1347,8 +1347,11 @@ open class MemberActivity : AppCompatActivity() {
         if (count > 0) {
             space(3)
             val hasUrgent = announcements.any { it.urgent }
-            val label = if (hasUrgent) "🚨 $count post${if (count == 1) "" else "s"}" else "$count post${if (count == 1) "" else "s"}"
-            add(text(label, 10, if (hasUrgent) Color.rgb(220, 53, 69) else purple, centered = true))
+            if (hasUrgent) {
+                add(text("$count post${if (count == 1) "" else "s"} • Urgent", 10, Color.rgb(220, 38, 38), bold = true, centered = true))
+            } else {
+                add(text("$count post${if (count == 1) "" else "s"}", 10, purple, centered = true))
+            }
         }
         setOnClickListener { navigate("announcements") }
     }
@@ -1357,7 +1360,7 @@ open class MemberActivity : AppCompatActivity() {
         val activeCode = preferences.getString("teamCode", "").orEmpty()
         val urgentItem = TeamRepository.getCachedAnnouncements(activeCode, preferences).firstOrNull { it.urgent } ?: return null
         return vertical().apply {
-            background = bg(Color.rgb(255, 240, 240), 16, Color.rgb(220, 53, 69))
+            background = bg(Color.rgb(255, 250, 250), 16, Color.rgb(254, 202, 202))
             setPadding(dp(16), dp(14), dp(16), dp(14))
             elevation = dp(2).toFloat()
             isClickable = true
@@ -1366,19 +1369,25 @@ open class MemberActivity : AppCompatActivity() {
             setOnClickListener { navigate("announcements") }
 
             val row = horizontal().apply { gravity = Gravity.CENTER_VERTICAL }
-            row.add(text("🚨 URGENT ALERT", 11, Color.rgb(220, 53, 69), bold = true).apply {
-                background = bg(Color.rgb(255, 220, 224), 8)
-                setPadding(dp(6), dp(2), dp(6), dp(2))
-            })
-            row.add(View(this@MemberActivity), 8, 1)
+            val iconBadge = horizontal().apply {
+                gravity = Gravity.CENTER_VERTICAL
+                background = bg(Color.rgb(254, 226, 226), 8)
+                setPadding(dp(8), dp(4), dp(8), dp(4))
+                add(Symbol(this@MemberActivity, "warning", Color.rgb(220, 38, 38)), 14, 14)
+                addView(View(this@MemberActivity), LinearLayout.LayoutParams(dp(6), 1))
+                add(text("Urgent Notice", 11, Color.rgb(185, 28, 28), bold = true))
+            }
+            row.addView(iconBadge)
+            row.addView(View(this@MemberActivity), LinearLayout.LayoutParams(dp(10), 1))
             val dateStr = formatAnnouncementDate(urgentItem.createdAt)
-            row.add(text(dateStr, 11, Color.rgb(180, 40, 50)), 0, -2, 1f)
+            row.add(text(dateStr, 11, Color.rgb(120, 113, 108)), 0, -2, 1f)
+            row.add(text("›", 18, Color.rgb(156, 163, 175), bold = true), -2, -2)
             add(row)
-            space(6)
-            add(text(urgentItem.title, 14, navy, bold = true))
+            space(8)
+            add(text(urgentItem.title, 14, Color.rgb(15, 23, 42), bold = true))
             space(4)
             val snippet = if (urgentItem.message.length > 90) urgentItem.message.take(87) + "..." else urgentItem.message
-            add(text(snippet, 12, Color.rgb(66, 82, 114)))
+            add(text(snippet, 12, Color.rgb(71, 85, 105)))
         }
     }
     private fun homeView(): View {
@@ -2592,7 +2601,10 @@ open class MemberActivity : AppCompatActivity() {
     }
     private fun substitutionView(): View = memberPage("Request Substitution", "service") { col ->
         val activeCode = preferences.getString("teamCode", "").orEmpty()
-        val currentUid = preferences.getString("userId", "").orEmpty()
+        val currentUid = com.example.syncedn.data.auth.AuthManager.currentUser?.uid?.takeIf { it.isNotBlank() }
+            ?: preferences.getString(SessionManager.KEY_USER_ID, "").orEmpty().ifBlank {
+                preferences.getString("userId", "").orEmpty()
+            }
         val currentName = preferences.getString("fullName", "").orEmpty().ifBlank {
             preferences.getString("username", "Member").orEmpty()
         }
@@ -2731,9 +2743,8 @@ open class MemberActivity : AppCompatActivity() {
                     toast("Please select a substitute teammate.")
                     return@setOnClickListener
                 }
-                if (selectedSubstituteUid.isBlank() || selectedSubstituteUid.startsWith("seed_")) {
-                    toast("Please select a registered teammate from the roster.")
-                    return@setOnClickListener
+                if (selectedSubstituteUid.isBlank()) {
+                    selectedSubstituteUid = "sub_${selectedSubstituteName.lowercase().replace(" ", "_")}"
                 }
                 if (currentUid.isNotBlank() && selectedSubstituteUid == currentUid) {
                     toast("You cannot select yourself as a substitute.")
@@ -2928,7 +2939,10 @@ open class MemberActivity : AppCompatActivity() {
                     val isDeclined = sub.status.equals("Declined", ignoreCase = true)
 
                     val statusBadge = text(
-                        if (isPending) "WAITING FOR SUBSTITUTE" else sub.status.uppercase(),
+                        if (isPending) "WAITING FOR SUBSTITUTE"
+                        else if (isAccepted) "APPROVED"
+                        else if (isDeclined) "DECLINED"
+                        else sub.status.uppercase(),
                         9,
                         if (isAccepted) Color.rgb(46, 125, 50)
                         else if (isDeclined) Color.rgb(198, 40, 40)
@@ -3037,7 +3051,7 @@ open class MemberActivity : AppCompatActivity() {
         populateSubstitutions()
 
         if (activeCode.isNotBlank()) {
-            TeamRepository.getSubstitutions(activeCode, false, preferences) { result ->
+            TeamRepository.getSubstitutions(activeCode, true, preferences) { result ->
                 runOnUiThread {
                     if (result.isSuccess && (page == "notifications" || page == "announcements")) {
                         populateSubstitutions()

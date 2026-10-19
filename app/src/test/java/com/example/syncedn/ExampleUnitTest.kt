@@ -1756,6 +1756,55 @@ class ExampleUnitTest {
         assertEquals("Main Sanctuary", updatedService.venue)
     }
 
+    @Test
+    fun testSubstitutionStatusBadgeMapping() {
+        fun badgeLabel(status: String): String {
+            val isPending = status.equals("Pending", ignoreCase = true)
+            val isAccepted = status.equals("Accepted", ignoreCase = true)
+            val isDeclined = status.equals("Declined", ignoreCase = true)
+            return if (isPending) "WAITING FOR SUBSTITUTE"
+            else if (isAccepted) "APPROVED"
+            else if (isDeclined) "DECLINED"
+            else status.uppercase()
+        }
+
+        assertEquals("WAITING FOR SUBSTITUTE", badgeLabel("Pending"))
+        assertEquals("APPROVED", badgeLabel("Accepted"))
+        assertEquals("DECLINED", badgeLabel("Declined"))
+        assertEquals("CANCELLED", badgeLabel("Cancelled"))
+
+        val repo = com.example.syncedn.data.database.TeamRepository
+        val prefs = FakePreferences()
+        val sub = com.example.syncedn.data.model.SubstitutionData(
+            id = "sub_status_test",
+            teamCode = "TEST01",
+            serviceTitle = "Youth Service",
+            requesterUid = "req_1",
+            requesterName = "Member One",
+            role = "Vocalist",
+            substituteUid = "sub_1",
+            substituteName = "Member Two",
+            reason = "Sick leave",
+            status = "Pending"
+        )
+        repo.saveSubstitutionLocally("TEST01", sub, prefs)
+        val initial = repo.getCachedSubstitutions("TEST01", prefs).find { it.id == "sub_status_test" }
+        assertEquals("Pending", initial?.status)
+        assertEquals("WAITING FOR SUBSTITUTE", badgeLabel(initial!!.status))
+
+        // Update to Accepted -> should map to APPROVED
+        repo.updateSubstitutionStatusLocally("TEST01", "sub_status_test", "Accepted", prefs)
+        val approved = repo.getCachedSubstitutions("TEST01", prefs).find { it.id == "sub_status_test" }
+        assertEquals("Accepted", approved?.status)
+        assertEquals("APPROVED", badgeLabel(approved!!.status))
+
+        // Update to Declined -> should map to DECLINED
+        repo.updateSubstitutionStatusLocally("TEST01", "sub_status_test", "Declined", prefs)
+        val declined = repo.getCachedSubstitutions("TEST01", prefs).find { it.id == "sub_status_test" }
+        assertEquals("Declined", declined?.status)
+        assertEquals("DECLINED", badgeLabel(declined!!.status))
+    }
+
     private class FakePreferences : android.content.SharedPreferences {
         private val map = mutableMapOf<String, Any?>()
 

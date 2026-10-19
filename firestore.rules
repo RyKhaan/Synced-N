@@ -198,6 +198,7 @@ service cloud.firestore {
     // Check if the authenticated user belongs to the same team
     function isSameTeam(teamCode) {
       return isAuthenticated() && teamCode != null && teamCode != '' && (
+        isLeaderOfTeam(teamCode) ||
         (request.auth.token != null &&
          'teamCode' in request.auth.token &&
          request.auth.token.teamCode == teamCode) ||
@@ -542,17 +543,17 @@ service cloud.firestore {
       // Subcollection: Substitutions (/teams/{teamCode}/substitutions/{substitutionId})
       // ---------------------------------------------------------------
       match /substitutions/{substitutionId} {
-        // Read: Any authenticated member of the team can view team substitutions.
-        allow read: if isAuthenticated() && isSameTeam(teamCode);
+        // Read: Any authenticated member or leader of the team can view team substitutions.
+        allow read: if isAuthenticated() && (isSameTeam(teamCode) || isLeaderOfTeam(teamCode));
 
-        // Create: Authenticated team members can request a substitution for themselves.
-        allow create: if isAuthenticated() && isSameTeam(teamCode) &&
+        // Create: Authenticated team members (or leaders) can request a substitution for themselves.
+        allow create: if isAuthenticated() && (isSameTeam(teamCode) || isLeaderOfTeam(teamCode)) &&
                          isValidSubstitution(request.resource.data, substitutionId, teamCode) &&
                          request.resource.data.requesterUid == request.auth.uid &&
                          request.resource.data.createdBy == request.auth.uid;
 
         // Update: The proposed substitute can accept/decline, the requester can cancel, or the Leader can manage.
-        allow update: if isAuthenticated() && isSameTeam(teamCode) &&
+        allow update: if isAuthenticated() && (isSameTeam(teamCode) || isLeaderOfTeam(teamCode)) &&
                          isValidSubstitution(request.resource.data, substitutionId, teamCode) &&
                          areImmutableFieldsUnchanged(['id', 'teamCode', 'requesterUid', 'createdBy', 'createdAt']) &&
                          (
@@ -562,7 +563,7 @@ service cloud.firestore {
                          );
 
         // Delete: The Team Leader or original requester can delete the substitution.
-        allow delete: if isAuthenticated() && isSameTeam(teamCode) &&
+        allow delete: if isAuthenticated() && (isSameTeam(teamCode) || isLeaderOfTeam(teamCode)) &&
                          (isLeaderOfTeam(teamCode) || request.auth.uid == resource.data.requesterUid);
       }
     }

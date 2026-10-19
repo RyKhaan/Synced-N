@@ -1362,8 +1362,11 @@ class AdminActivity : AppCompatActivity() {
         if (count > 0) {
             space(3)
             val hasUrgent = announcements.any { it.urgent }
-            val label = if (hasUrgent) "🚨 $count post${if (count == 1) "" else "s"}" else "$count post${if (count == 1) "" else "s"}"
-            add(text(label, 10, if (hasUrgent) Color.rgb(220, 53, 69) else purple, centered = true))
+            if (hasUrgent) {
+                add(text("$count post${if (count == 1) "" else "s"} • Urgent", 10, Color.rgb(220, 38, 38), bold = true, centered = true))
+            } else {
+                add(text("$count post${if (count == 1) "" else "s"}", 10, purple, centered = true))
+            }
         }
         setOnClickListener { navigate("announcements") }
     }
@@ -1372,7 +1375,7 @@ class AdminActivity : AppCompatActivity() {
         val activeCode = preferences.getString("teamCode", "").orEmpty()
         val urgentItem = TeamRepository.getCachedAnnouncements(activeCode, preferences).firstOrNull { it.urgent } ?: return null
         return vertical().apply {
-            background = bg(Color.rgb(255, 240, 240), 16, Color.rgb(220, 53, 69))
+            background = bg(Color.rgb(255, 250, 250), 16, Color.rgb(254, 202, 202))
             setPadding(dp(16), dp(14), dp(16), dp(14))
             elevation = dp(2).toFloat()
             isClickable = true
@@ -1381,19 +1384,25 @@ class AdminActivity : AppCompatActivity() {
             setOnClickListener { navigate("announcements") }
 
             val row = horizontal().apply { gravity = Gravity.CENTER_VERTICAL }
-            row.add(text("🚨 URGENT ALERT", 11, Color.rgb(220, 53, 69), bold = true).apply {
-                background = bg(Color.rgb(255, 220, 224), 8)
-                setPadding(dp(6), dp(2), dp(6), dp(2))
-            })
-            row.add(View(this@AdminActivity), 8, 1)
+            val iconBadge = horizontal().apply {
+                gravity = Gravity.CENTER_VERTICAL
+                background = bg(Color.rgb(254, 226, 226), 8)
+                setPadding(dp(8), dp(4), dp(8), dp(4))
+                add(Symbol(this@AdminActivity, "warning", Color.rgb(220, 38, 38)), 14, 14)
+                addView(View(this@AdminActivity), LinearLayout.LayoutParams(dp(6), 1))
+                add(text("Urgent Notice", 11, Color.rgb(185, 28, 28), bold = true))
+            }
+            row.addView(iconBadge)
+            row.addView(View(this@AdminActivity), LinearLayout.LayoutParams(dp(10), 1))
             val dateStr = formatAnnouncementDate(urgentItem.createdAt)
-            row.add(text(dateStr, 11, Color.rgb(180, 40, 50)), 0, -2, 1f)
+            row.add(text(dateStr, 11, Color.rgb(120, 113, 108)), 0, -2, 1f)
+            row.add(text("›", 18, Color.rgb(156, 163, 175), bold = true), -2, -2)
             add(row)
-            space(6)
-            add(text(urgentItem.title, 14, navy, bold = true))
+            space(8)
+            add(text(urgentItem.title, 14, Color.rgb(15, 23, 42), bold = true))
             space(4)
             val snippet = if (urgentItem.message.length > 90) urgentItem.message.take(87) + "..." else urgentItem.message
-            add(text(snippet, 12, Color.rgb(66, 82, 114)))
+            add(text(snippet, 12, Color.rgb(71, 85, 105)))
         }
     }
     private fun homeView(): View {
@@ -4069,7 +4078,10 @@ class AdminActivity : AppCompatActivity() {
                     val isDeclined = sub.status.equals("Declined", ignoreCase = true)
 
                     val statusBadge = text(
-                        if (isPending) "WAITING FOR SUBSTITUTE" else sub.status.uppercase(),
+                        if (isPending) "WAITING FOR SUBSTITUTE"
+                        else if (isAccepted) "APPROVED"
+                        else if (isDeclined) "DECLINED"
+                        else sub.status.uppercase(),
                         9,
                         if (isAccepted) Color.rgb(46, 125, 50)
                         else if (isDeclined) Color.rgb(198, 40, 40)
@@ -4178,7 +4190,7 @@ class AdminActivity : AppCompatActivity() {
         populateSubstitutions()
 
         if (activeCode.isNotBlank()) {
-            TeamRepository.getSubstitutions(activeCode, false, preferences) { result ->
+            TeamRepository.getSubstitutions(activeCode, true, preferences) { result ->
                 runOnUiThread {
                     if (result.isSuccess && (page == "notifications" || page == "announcements")) {
                         populateSubstitutions()
@@ -4315,6 +4327,7 @@ class AdminActivity : AppCompatActivity() {
             textSize = 14f
             background = null
             setSingleLine(true)
+            minWidth = 0
             imeOptions = android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH
         }
         val searchRow = horizontal().apply {
@@ -4322,23 +4335,27 @@ class AdminActivity : AppCompatActivity() {
                 background = bg(Color.rgb(217, 217, 217), 21)
                 setPadding(dp(14), 0, dp(14), 0)
                 add(Symbol(this@AdminActivity, "search", Color.rgb(75, 85, 99)), 20, 20)
-                space(8)
+                addView(View(this@AdminActivity), LinearLayout.LayoutParams(dp(8), 1))
                 add(search, 0, -1, 1f)
             }
-            add(searchBar, 0, 42, 1f)
+            addView(searchBar, LinearLayout.LayoutParams(0, dp(42), 1f))
             if (isLeader) {
-                space(12)
                 val plusBtn = FrameLayout(this@AdminActivity).apply {
                     val icon = Symbol(this@AdminActivity, "circle_plus", Color.BLACK)
-                    addView(icon, FrameLayout.LayoutParams(dp(36), dp(36), Gravity.CENTER))
+                    addView(icon, FrameLayout.LayoutParams(dp(32), dp(32), Gravity.CENTER))
                     isClickable = true; isFocusable = true
                     contentDescription = "Add new song"
                     setOnClickListener { selectedSong = ""; navigate("songEdit") }
                 }
-                add(plusBtn, 42, 42)
+                val plusLp = LinearLayout.LayoutParams(dp(40), dp(40)).apply {
+                    leftMargin = dp(12)
+                    gravity = Gravity.CENTER_VERTICAL
+                }
+                addView(plusBtn, plusLp)
             }
         }
-        col.add(searchRow, -1, 42); col.space(20)
+        col.addView(searchRow, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
+        col.space(20)
         val results = vertical(); col.add(results)
         val activeCode = preferences.getString("teamCode", "").orEmpty()
         fun populate(query: String) {
