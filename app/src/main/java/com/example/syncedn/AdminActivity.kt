@@ -293,7 +293,7 @@ class AdminActivity : AppCompatActivity() {
                     "home" -> "login"
                     "settings" -> "home"
                     "profile" -> profileReturnPage
-                    "schedule", "calendar", "announcements", "teams" -> "home"
+                    "schedule", "calendar", "announcements", "notifications", "teams" -> "home"
                     "availability" -> "calendar"
                     "service" -> serviceReturnPage
                     "lineup" -> "service"
@@ -682,6 +682,7 @@ class AdminActivity : AppCompatActivity() {
                     val sendBtn = findViewById<Button>(UI.sendCodeButton)
                     sendBtn?.isEnabled = false
                     toast("Sending 6-digit code to $emailStr...")
+                    preferences.edit().putString("resetEmail", emailStr).putString("resetPendingPassword", passStr).apply()
                     EmailOtpService.sendOtp(emailStr, pendingPassword = passStr) { result ->
                         runOnUiThread {
                             sendBtn?.isEnabled = true
@@ -740,7 +741,7 @@ class AdminActivity : AppCompatActivity() {
 
     private fun setupHome() {
         findViewById<TextView>(UI.welcomeText).text = displayName.ifBlank { "Leader" }
-        click(UI.notificationsButton) { navigate("announcements") }
+        click(UI.notificationsButton) { navigate("notifications") }
         applyProfilePhoto(UI.profileButton)
         click(UI.profileButton) { openProfile("home") }
         click(UI.worshipCard) {
@@ -870,6 +871,90 @@ class AdminActivity : AppCompatActivity() {
         container.add(row,-1,48)
         return container
     }
+    private fun otpInputGroup(hiddenId: Int = UI.otpCode): View {
+        val root = vertical().apply { gravity = Gravity.CENTER_HORIZONTAL }
+        val boxesLayout = horizontal().apply {
+            gravity = Gravity.CENTER
+            setPadding(0, dp(8), 0, dp(8))
+        }
+        val hiddenEdit = EditText(this).apply {
+            this.id = hiddenId
+            visibility = View.GONE
+        }
+        root.addView(hiddenEdit)
+
+        val boxes = mutableListOf<EditText>()
+        for (i in 0 until 6) {
+            val cell = EditText(this).apply {
+                gravity = Gravity.CENTER
+                textSize = 20f
+                setTypeface(typeface, Typeface.BOLD)
+                setTextColor(purple)
+                inputType = InputType.TYPE_CLASS_NUMBER
+                filters = arrayOf(InputFilter.LengthFilter(1))
+                background = bg(Color.rgb(240, 240, 244), 10, Color.rgb(215, 215, 222))
+                setPadding(0, 0, 0, 0)
+                isSaveEnabled = false
+                if (android.os.Build.VERSION.SDK_INT >= 26) importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_NO
+                setOnFocusChangeListener { _, hasFocus ->
+                    background = if (hasFocus) bg(Color.WHITE, 10, purple)
+                    else bg(Color.rgb(240, 240, 244), 10, Color.rgb(215, 215, 222))
+                }
+            }
+            val lp = LinearLayout.LayoutParams(dp(44), dp(52)).apply {
+                setMargins(dp(4), 0, dp(4), 0)
+            }
+            boxes.add(cell)
+            boxesLayout.addView(cell, lp)
+        }
+
+        fun syncHidden() {
+            val sb = StringBuilder()
+            boxes.forEach { sb.append(it.text.toString()) }
+            hiddenEdit.setText(sb.toString())
+        }
+
+        for (i in 0 until 6) {
+            val cell = boxes[i]
+            cell.addTextChangedListener(object : android.text.TextWatcher {
+                override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+                override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
+                override fun afterTextChanged(s: android.text.Editable?) {
+                    val str = s?.toString().orEmpty()
+                    if (str.length > 1) {
+                        val digits = str.filter { it.isDigit() }
+                        for (j in 0 until 6) {
+                            if (j < digits.length) boxes[j].setText(digits[j].toString())
+                            else boxes[j].setText("")
+                        }
+                        syncHidden()
+                        val target = digits.length.coerceAtMost(5)
+                        boxes[target].requestFocus()
+                        return
+                    }
+                    syncHidden()
+                    if (str.isNotEmpty() && i < 5) {
+                        boxes[i + 1].requestFocus()
+                    }
+                }
+            })
+
+            cell.setOnKeyListener { _, keyCode, event ->
+                if (event.action == android.view.KeyEvent.ACTION_DOWN && keyCode == android.view.KeyEvent.KEYCODE_DEL) {
+                    if (cell.text.isNullOrEmpty() && i > 0) {
+                        boxes[i - 1].setText("")
+                        boxes[i - 1].requestFocus()
+                        syncHidden()
+                        return@setOnKeyListener true
+                    }
+                }
+                false
+            }
+        }
+
+        root.addView(boxesLayout)
+        return root
+    }
     private fun form(right: Boolean = false): Pair<FrameLayout, LinearLayout> {
         val root = FrameLayout(this).apply { setBackgroundColor(Color.WHITE) }
         val scroll = StableScrollView(this).apply { isFillViewport = true }
@@ -900,6 +985,7 @@ class AdminActivity : AppCompatActivity() {
         "availability" -> availabilityView()
         "service" -> leaderServiceView()
         "announcements" -> announcementsView()
+        "notifications" -> notificationsView()
         "songs" -> songsView()
         "songDetails" -> songDetailsView()
         "lineup" -> adminLineupView()
@@ -926,7 +1012,7 @@ class AdminActivity : AppCompatActivity() {
                 col.section().apply {
                     add(heading("Welcome Back!")); space(8)
                     add(text("Sign in to keep your ministry in sync with your team, schedules, and worship updates.")); space(24)
-                    add(field(UI.loginEmail,hint="Email or Mobile Number",icon="mail")); space(20)
+                    add(field(UI.loginEmail,hint="Email",icon="mail")); space(20)
                     add(field(UI.loginPassword,hint="Password",password=true,icon="lock",toggle=UI.loginPasswordToggle)); space(26)
                     action(UI.loginButton,"Log In"); action(UI.forgotPasswordButton,"Forgot Password?",-2,true)
                     space(10)
@@ -962,11 +1048,33 @@ class AdminActivity : AppCompatActivity() {
                 }
             }
             "otp" -> {
-                col.space(69); col.section().apply {
-                    add(text("OTP Verification Code",centered=true)); space(16)
-                    add(field(UI.otpCode,number=true)); space(30)
-                    action(UI.verifyOtpButton,"Reset Password"); space(10)
-                    add(text("Enter verification code",12,Color.GRAY,centered=true)); space(24)
+                col.space(50); col.section().apply {
+                    add(text("OTP Verification Code", 16, navy, bold = true, centered = true)); space(20)
+                    add(otpInputGroup(UI.otpCode)); space(16)
+                    val resendRow = horizontal().apply {
+                        gravity = Gravity.CENTER
+                        add(text("Didn't receive a code? ", 13, Color.rgb(100, 100, 110)), -2, -2)
+                        add(text("Resend", 13, purple, bold = true).apply {
+                            isClickable = true; isFocusable = true
+                            setOnClickListener {
+                                val emailStr = preferences.getString("resetEmail", "").orEmpty()
+                                val passStr = preferences.getString("resetPendingPassword", "").orEmpty()
+                                if (emailStr.isNotBlank()) {
+                                    toast("Resending verification code to $emailStr...")
+                                    EmailOtpService.sendOtp(emailStr, passStr) { res ->
+                                        runOnUiThread {
+                                            if (res.isSuccess) toast("Verification code sent to $emailStr")
+                                            else toast("Failed to resend code: ${res.exceptionOrNull()?.localizedMessage}")
+                                        }
+                                    }
+                                } else {
+                                    toast("Please request a code from the reset screen.")
+                                }
+                            }
+                        })
+                    }
+                    add(resendRow); space(28)
+                    action(UI.verifyOtpButton, "Reset Password"); space(24)
                 }
             }
             "success" -> {
@@ -2765,24 +2873,43 @@ class AdminActivity : AppCompatActivity() {
     }
     private fun formatAnnouncementDate(timestamp: Long): String {
         return try {
-            val date = java.util.Date(timestamp)
-            java.text.SimpleDateFormat("MMM d, yyyy", java.util.Locale.US).format(date)
+            val now = System.currentTimeMillis()
+            val diff = now - timestamp
+            when {
+                diff < 60_000L -> "Just now"
+                diff < 3600_000L -> "${(diff / 60_000L).coerceAtLeast(1)}m ago"
+                diff < 86400_000L -> {
+                    val calNow = java.util.Calendar.getInstance()
+                    val calThen = java.util.Calendar.getInstance().apply { timeInMillis = timestamp }
+                    val timeStr = java.text.SimpleDateFormat("h:mm a", java.util.Locale.US).format(java.util.Date(timestamp))
+                    if (calNow.get(java.util.Calendar.DAY_OF_YEAR) == calThen.get(java.util.Calendar.DAY_OF_YEAR)) {
+                        "Today at $timeStr"
+                    } else {
+                        "Yesterday at $timeStr"
+                    }
+                }
+                diff < 86400_000L * 7 -> "${diff / 86400_000L} days ago"
+                else -> java.text.SimpleDateFormat("MMM d, yyyy", java.util.Locale.US).format(java.util.Date(timestamp))
+            }
         } catch (_: Exception) {
             "Recent"
         }
     }
 
     private fun announcementEditView(): View = memberPage(if (editingAnnouncement != null) "Edit Announcement" else "Announcement", "announcements") { col ->
-        val title = plainInput("Announcement title", true).apply {
+        col.space(16)
+        val title = plainInput("", false).apply {
             editingAnnouncement?.let { setText(it.title) }
-            filters = arrayOf(android.text.InputFilter.LengthFilter(120))
+            background = bg(Color.rgb(217, 217, 217), 12)
+            filters = arrayOf(InputFilter.LengthFilter(120))
         }
-        val message = plainInput("Message", true).apply {
+        val message = plainInput("", true).apply {
             editingAnnouncement?.let { setText(it.message) }
-            filters = arrayOf(android.text.InputFilter.LengthFilter(2000))
+            background = bg(Color.rgb(217, 217, 217), 14)
+            filters = arrayOf(InputFilter.LengthFilter(2000))
         }
-        col.add(text("Announcement Title*", 12, navy)); col.space(8); col.add(title, -1, 72); col.space(20)
-        col.add(text("Message*", 12, navy)); col.space(8); col.add(message, -1, 220); col.space(24)
+        col.add(text("Announcement Title*", 12, navy, bold = true)); col.space(8); col.add(title, -1, 52); col.space(20)
+        col.add(text("Message*", 12, navy, bold = true)); col.space(8); col.add(message, -1, 240); col.space(24)
         val urgent = android.widget.CheckBox(this).apply {
             text = "Mark as Urgent Alert"
             textSize = 13f
@@ -2791,42 +2918,66 @@ class AdminActivity : AppCompatActivity() {
         }
         col.add(urgent)
         val actionLabel = if (editingAnnouncement != null) "Save Changes" else "Publish"
-        stepActions(col, { editingAnnouncement = null; navigate("announcements") }, actionLabel) {
-            when {
-                title.text.isBlank() -> invalid(title, "Enter a title.")
-                title.text.length > 120 -> invalid(title, "Title cannot exceed 120 characters.")
-                message.text.isBlank() -> invalid(message, "Enter a message.")
-                message.text.length > 2000 -> invalid(message, "Message cannot exceed 2,000 characters.")
-                else -> {
-                    val activeCode = preferences.getString("teamCode", "").orEmpty()
-                    val uid = preferences.getString("userId", "").orEmpty()
-                    val authorName = fullName.ifBlank { displayName.ifBlank { "Leader" } }
-                    val existing = editingAnnouncement
-                    val announcementId = existing?.id ?: "ann_${System.currentTimeMillis()}_${java.util.UUID.randomUUID().toString().take(6)}"
-                    val newAnnouncement = AnnouncementData(
-                        id = announcementId,
-                        teamCode = activeCode,
-                        title = title.text.toString().trim(),
-                        message = message.text.toString().trim(),
-                        urgent = urgent.isChecked,
-                        author = authorName,
-                        createdBy = existing?.createdBy?.ifBlank { uid } ?: uid,
-                        createdAt = existing?.createdAt ?: System.currentTimeMillis(),
-                        updatedAt = System.currentTimeMillis()
-                    )
-                    TeamRepository.saveAnnouncement(activeCode, newAnnouncement, preferences) { result ->
-                        runOnUiThread {
-                            if (!result.isSuccess) {
-                                toast("Saved locally (sync pending)")
-                            }
-                        }
-                    }
+        col.space(32)
+        col.add(horizontal().apply {
+            val backBtn = Button(this@AdminActivity).apply {
+                text = "Back"
+                isAllCaps = false
+                background = bg(Color.WHITE, 12, Color.rgb(217, 70, 239))
+                setTextColor(Color.rgb(217, 70, 239))
+                minimumHeight = dp(48)
+                setOnClickListener {
                     editingAnnouncement = null
-                    toast(if (existing != null) "Announcement updated" else "Announcement published")
                     navigate("announcements")
                 }
             }
-        }
+            val publishBtn = Button(this@AdminActivity).apply {
+                text = actionLabel
+                isAllCaps = false
+                background = bg(purple, 12)
+                setTextColor(Color.WHITE)
+                minimumHeight = dp(48)
+                setOnClickListener {
+                    when {
+                        title.text.isBlank() -> invalid(title, "Enter a title.")
+                        title.text.length > 120 -> invalid(title, "Title cannot exceed 120 characters.")
+                        message.text.isBlank() -> invalid(message, "Enter a message.")
+                        message.text.length > 2000 -> invalid(message, "Message cannot exceed 2,000 characters.")
+                        else -> {
+                            val activeCode = preferences.getString("teamCode", "").orEmpty()
+                            val uid = preferences.getString("userId", "").orEmpty()
+                            val authorName = fullName.ifBlank { displayName.ifBlank { "Leader" } }
+                            val existing = editingAnnouncement
+                            val announcementId = existing?.id ?: "ann_${System.currentTimeMillis()}_${java.util.UUID.randomUUID().toString().take(6)}"
+                            val newAnnouncement = AnnouncementData(
+                                id = announcementId,
+                                teamCode = activeCode,
+                                title = title.text.toString().trim(),
+                                message = message.text.toString().trim(),
+                                urgent = urgent.isChecked,
+                                author = authorName,
+                                createdBy = existing?.createdBy?.ifBlank { uid } ?: uid,
+                                createdAt = existing?.createdAt ?: System.currentTimeMillis(),
+                                updatedAt = System.currentTimeMillis()
+                            )
+                            TeamRepository.saveAnnouncement(activeCode, newAnnouncement, preferences) { result ->
+                                runOnUiThread {
+                                    if (!result.isSuccess) {
+                                        toast("Saved locally (sync pending)")
+                                    }
+                                }
+                            }
+                            editingAnnouncement = null
+                            toast(if (existing != null) "Announcement updated" else "Announcement published")
+                            navigate("announcements")
+                        }
+                    }
+                }
+            }
+            add(backBtn, 0, 48, 1f)
+            add(View(this@AdminActivity), 16, 1)
+            add(publishBtn, 0, 48, 1f)
+        })
     }
 
     private fun leaderPosts(col: LinearLayout) {
@@ -2871,24 +3022,23 @@ class AdminActivity : AppCompatActivity() {
             }
             for (post in list) {
                 postsCol.add(panel().apply {
-                    if (post.urgent) {
-                        val badgeRow = horizontal().apply { gravity = Gravity.CENTER_VERTICAL }
-                        badgeRow.add(text("🚨 URGENT ALERT", 11, Color.rgb(220, 53, 69), bold = true).apply {
-                            background = bg(Color.rgb(255, 235, 238), 12, Color.rgb(220, 53, 69))
-                            setPadding(dp(8), dp(4), dp(8), dp(4))
-                        })
-                        add(badgeRow)
-                        space(6)
-                    }
                     val headerRow = horizontal().apply { gravity = Gravity.CENTER_VERTICAL }
-                    headerRow.add(text(post.title, 14, if (post.urgent) Color.rgb(220, 53, 69) else purple, bold = true), 0, -2, 1f)
+                    headerRow.add(text(post.title, 15, purple, bold = true), 0, -2, 1f)
+                    if (post.urgent) {
+                        val urgentBadge = text("Urgent", 11, Color.rgb(192, 57, 43), bold = true).apply {
+                            background = bg(Color.rgb(250, 219, 216), 10)
+                            setPadding(dp(10), dp(3), dp(10), dp(3))
+                        }
+                        headerRow.add(urgentBadge, -2, -2)
+                        headerRow.add(View(this@AdminActivity), 6, 1)
+                    }
                     if (isLeader) {
                         val moreBtn = TextView(this@AdminActivity).apply {
                             text = "⋮"
                             textSize = 20f
                             setTextColor(navy)
                             gravity = Gravity.CENTER
-                            setPadding(dp(8), dp(4), dp(8), dp(4))
+                            setPadding(dp(6), 0, dp(4), 0)
                             isClickable = true
                             isFocusable = true
                             contentDescription = "Options for ${post.title}"
@@ -2929,9 +3079,14 @@ class AdminActivity : AppCompatActivity() {
                     }
                     add(headerRow)
                     space(8); add(text(post.message, 13, navy))
-                    val authorLabel = if (post.author.isNotBlank()) post.author else "Leader"
+                    val rawAuthor = if (post.author.isNotBlank()) post.author else fullName.ifBlank { displayName.ifBlank { "Ministry Leader" } }
+                    val authorLabel = if (rawAuthor.contains("(")) rawAuthor else "$rawAuthor (Ministry Leader)"
                     val dateLabel = formatAnnouncementDate(post.createdAt)
-                    space(8); add(text("By $authorLabel • $dateLabel", 11, Color.GRAY))
+                    space(12)
+                    val footerRow = horizontal().apply { gravity = Gravity.CENTER_VERTICAL }
+                    footerRow.add(text("By $authorLabel", 11, purple), 0, -2, 1f)
+                    footerRow.add(text(dateLabel, 11, Color.GRAY), -2, -2)
+                    add(footerRow)
                 }); postsCol.space(16)
             }
         }
@@ -3509,77 +3664,106 @@ class AdminActivity : AppCompatActivity() {
             for (sub in list) {
                 subCol.add(panel().apply {
                     val headerRow = horizontal().apply { gravity = Gravity.CENTER_VERTICAL }
-                    headerRow.add(text(sub.serviceTitle.ifBlank { "Sunday Worship Service" }, 14, purple, true), 0, -2, 1f)
+                    headerRow.add(text(sub.serviceTitle.ifBlank { "Sunday Worship Service" }, 14, purple, bold = true), 0, -2, 1f)
 
-                    // Leader delete button
-                    val delBtn = text("✕", 15, Color.GRAY, bold = true, centered = true).apply {
-                        setPadding(dp(6), dp(2), dp(6), dp(2))
-                        isClickable = true; isFocusable = true
-                        contentDescription = "Delete substitution request"
-                        setOnClickListener {
-                            AlertDialog.Builder(this@AdminActivity).setTitle("Delete request?")
-                                .setMessage("Are you sure you want to delete this substitution record?")
-                                .setNegativeButton("Cancel", null)
-                                .setPositiveButton("Delete") { _, _ ->
-                                    TeamRepository.deleteSubstitution(activeCode, sub.id, preferences) { res ->
-                                        runOnUiThread {
-                                            if (res.isSuccess) toast("Request removed")
-                                            populateSubstitutions()
+                    val statusBadge = text(
+                        if (sub.status.equals("Pending", ignoreCase = true)) "WAITING FOR SUBSTITUTE" else sub.status.uppercase(),
+                        10,
+                        if (sub.status.equals("Accepted", ignoreCase = true)) Color.rgb(46, 125, 50)
+                        else if (sub.status.equals("Declined", ignoreCase = true)) Color.rgb(198, 40, 40)
+                        else purple,
+                        bold = true
+                    ).apply {
+                        background = bg(
+                            if (sub.status.equals("Accepted", ignoreCase = true)) Color.rgb(232, 245, 233)
+                            else if (sub.status.equals("Declined", ignoreCase = true)) Color.rgb(255, 235, 238)
+                            else Color.rgb(243, 229, 245),
+                            6
+                        )
+                        setPadding(dp(8), dp(3), dp(8), dp(3))
+                    }
+                    headerRow.add(statusBadge, -2, -2)
+
+                    if (isLeader) {
+                        val delBtn = text("✕", 14, Color.GRAY, bold = true, centered = true).apply {
+                            setPadding(dp(8), dp(2), dp(2), dp(2))
+                            isClickable = true; isFocusable = true
+                            contentDescription = "Delete substitution request"
+                            setOnClickListener {
+                                AlertDialog.Builder(this@AdminActivity).setTitle("Delete request?")
+                                    .setMessage("Are you sure you want to delete this substitution record?")
+                                    .setNegativeButton("Cancel", null)
+                                    .setPositiveButton("Delete") { _, _ ->
+                                        TeamRepository.deleteSubstitution(activeCode, sub.id, preferences) { res ->
+                                            runOnUiThread {
+                                                if (res.isSuccess) toast("Request removed")
+                                                populateSubstitutions()
+                                            }
                                         }
-                                    }
-                                }.show()
+                                    }.show()
+                            }
                         }
+                        headerRow.add(delBtn, -2, -2)
                     }
-                    headerRow.add(delBtn, 36, 36)
-                    add(headerRow); space(6)
-
-                    val statusColor = when (sub.status.lowercase()) {
-                        "accepted" -> Color.rgb(40, 167, 69)
-                        "declined" -> Color.rgb(220, 53, 69)
-                        "cancelled" -> Color.GRAY
-                        else -> purple
-                    }
-                    val statusText = when (sub.status.lowercase()) {
-                        "pending" -> "Waiting for substitute"
-                        else -> sub.status
-                    }
-                    val statusBadge = text(statusText, 11, statusColor, true)
-                    add(statusBadge); space(8)
+                    add(headerRow); space(10)
 
                     add(text("Requesting: ${sub.requesterName} (${sub.role})", 12, navy)); space(4)
-                    add(text("Proposed Substitute: ${sub.substituteName}", 12, navy, true)); space(4)
+                    val propRow = horizontal()
+                    propRow.add(text("Proposed Substitute: ", 12, navy))
+                    propRow.add(text(sub.substituteName, 12, navy, bold = true))
+                    add(propRow); space(4)
                     add(text("Reason: ${sub.reason}", 12, navy))
 
                     if (sub.status.equals("Pending", ignoreCase = true)) {
                         space(16)
                         val actions = horizontal()
-                        listOf("Accept", "Decline").forEach { label ->
-                            actions.add(memberButton(label, if (label == "Accept") purple else navy) {
-                                AlertDialog.Builder(this@AdminActivity).setTitle("$label substitution as Leader?")
-                                    .setMessage("As Team Leader, do you want to $label this request for ${sub.role} (${sub.substituteName} replacing ${sub.requesterName})?")
+                        val acceptBtn = Button(this@AdminActivity).apply {
+                            text = "Accept Substitution"
+                            isAllCaps = false
+                            background = bg(purple, 10)
+                            setTextColor(Color.WHITE)
+                            minimumHeight = dp(40)
+                            textSize = 12f
+                            setOnClickListener {
+                                AlertDialog.Builder(this@AdminActivity).setTitle("Accept substitution as Leader?")
+                                    .setMessage("As Team Leader, do you want to approve this request for ${sub.role} (${sub.substituteName} replacing ${sub.requesterName})?")
                                     .setNegativeButton("Cancel", null)
-                                    .setPositiveButton(label) { _, _ ->
-                                        if (label == "Accept") {
-                                            TeamRepository.acceptSubstitutionAndUpdateService(activeCode, sub, preferences) { res ->
-                                                runOnUiThread {
-                                                    if (res.isSuccess) toast("Substitution accepted and service roster updated!")
-                                                    else toast("Failed to accept substitution: ${res.exceptionOrNull()?.message ?: "Unknown error"}")
-                                                    populateSubstitutions()
-                                                }
-                                            }
-                                        } else {
-                                            TeamRepository.updateSubstitutionStatus(activeCode, sub.id, "Declined", preferences) { res ->
-                                                runOnUiThread {
-                                                    if (res.isSuccess) toast("Substitution declined.")
-                                                    else toast("Failed to decline substitution: ${res.exceptionOrNull()?.message ?: "Unknown error"}")
-                                                    populateSubstitutions()
-                                                }
+                                    .setPositiveButton("Accept") { _, _ ->
+                                        TeamRepository.acceptSubstitutionAndUpdateService(activeCode, sub, preferences) { res ->
+                                            runOnUiThread {
+                                                if (res.isSuccess) toast("Substitution accepted and service roster updated!")
+                                                else toast("Failed to accept substitution: ${res.exceptionOrNull()?.message ?: "Unknown error"}")
+                                                populateSubstitutions()
                                             }
                                         }
                                     }.show()
-                            }, 0, 48, 1f)
-                            if (label == "Accept") actions.add(View(this@AdminActivity), 12, 1)
+                            }
                         }
+                        val declineBtn = Button(this@AdminActivity).apply {
+                            text = "Decline"
+                            isAllCaps = false
+                            background = bg(Color.WHITE, 10, Color.rgb(217, 70, 239))
+                            setTextColor(Color.rgb(217, 70, 239))
+                            minimumHeight = dp(40)
+                            textSize = 12f
+                            setOnClickListener {
+                                AlertDialog.Builder(this@AdminActivity).setTitle("Decline substitution?")
+                                    .setMessage("Do you want to decline this request?")
+                                    .setNegativeButton("Cancel", null)
+                                    .setPositiveButton("Decline") { _, _ ->
+                                        TeamRepository.updateSubstitutionStatus(activeCode, sub.id, "Declined", preferences) { res ->
+                                            runOnUiThread {
+                                                if (res.isSuccess) toast("Substitution declined.")
+                                                else toast("Failed to decline substitution: ${res.exceptionOrNull()?.message ?: "Unknown error"}")
+                                                populateSubstitutions()
+                                            }
+                                        }
+                                    }.show()
+                            }
+                        }
+                        actions.add(acceptBtn, 0, 40, 1.2f)
+                        actions.add(View(this@AdminActivity), 10, 1)
+                        actions.add(declineBtn, 0, 40, 0.8f)
                         add(actions)
                     }
                 }); subCol.space(16)
@@ -3592,7 +3776,7 @@ class AdminActivity : AppCompatActivity() {
         if (activeCode.isNotBlank()) {
             TeamRepository.getSubstitutions(activeCode, false, preferences) { result ->
                 runOnUiThread {
-                    if (result.isSuccess && page == "announcements") {
+                    if (result.isSuccess && (page == "notifications" || page == "announcements")) {
                         populateSubstitutions()
                     }
                 }
@@ -3602,22 +3786,64 @@ class AdminActivity : AppCompatActivity() {
 
     private fun announcementsView(): View = memberPage("Announcement", "home") { col ->
         if (isLeader) {
-            col.add(memberButton("+ Post Announcement") {
-                editingAnnouncement = null
-                navigate("announcementEdit")
-            }, -1, 48); col.space(20)
+            val topBar = horizontal().apply {
+                gravity = Gravity.END
+                setPadding(0, 0, 0, dp(16))
+            }
+            val postBtn = TextView(this@AdminActivity).apply {
+                text = "+ Post"
+                textSize = 14f
+                setTypeface(typeface, Typeface.BOLD)
+                setTextColor(Color.WHITE)
+                background = bg(purple, 20)
+                gravity = Gravity.CENTER
+                setPadding(dp(22), dp(10), dp(22), dp(10))
+                isClickable = true
+                isFocusable = true
+                setOnClickListener {
+                    editingAnnouncement = null
+                    navigate("announcementEdit")
+                }
+            }
+            topBar.addView(postBtn, -2, -2)
+            col.addView(topBar)
         }
         leaderPosts(col)
+    }
+
+    private fun notificationsView(): View = memberPage("Announcement", "home") { col ->
+        col.add(text("Substitution Request", 14, purple, bold = true)); col.space(12)
         substitutionFeed(col)
-        col.add(text("Recent Notifications", 13, purple, true)); col.space(12)
-        listOf("New Service Scheduled" to "Sunday Worship Service scheduled for Oct 18, 2026 at 8:00AM.",
-            "Duty Assigned" to "You are assigned as Keyboardist for Sunday Worship Service on Oct 11, 2026.",
-            "Rehearsal Venue Shift" to "Saturday rehearsal starts at 7:00PM in the main Sanctuary. Please prepare songs and chords in advance.",
-            "October Rotation Published" to "The team assignments for October have been finalized. Check your respective schedules.").forEach { (title, message) ->
+        col.space(16)
+        col.add(text("Recent Notifications", 14, purple, bold = true)); col.space(12)
+        recentNotificationsList(col)
+    }
+
+    private fun recentNotificationsList(col: LinearLayout) {
+        val items = listOf(
+            Triple("New Service Scheduled", "Sunday Worship Service scheduled for Oct 18, 2026 at 6:00 AM.", "Just now" to "calendar"),
+            Triple("Lineup Published", "4 songs attached to Sunday Worship Service.", "2 hours ago" to "music"),
+            Triple("Duty Assigned", "You are assigned as Keyboardist for Sunday Worship Service on Oct 11, 2026", "1 hour ago" to "person")
+        )
+        for ((title, msg, meta) in items) {
+            val (time, iconName) = meta
             col.add(panel().apply {
-                add(text(title, 13, purple, true)); space(8); add(text(message, 12, navy))
-                space(8); add(text("Sample ministry notification", 10, Color.GRAY))
-            }); col.space(16)
+                val row = horizontal().apply { gravity = Gravity.CENTER_VERTICAL }
+                val iconBox = FrameLayout(this@AdminActivity).apply {
+                    addView(Symbol(this@AdminActivity, iconName, purple), dp(24), dp(24))
+                }
+                row.addView(iconBox, dp(36), dp(36))
+                row.add(View(this@AdminActivity), 12, 1)
+                val textCol = vertical()
+                textCol.add(text(title, 13, purple, bold = true))
+                textCol.space(4)
+                textCol.add(text(msg, 12, navy))
+                textCol.space(4)
+                textCol.add(text(time, 10, Color.GRAY))
+                row.addView(textCol, LinearLayout.LayoutParams(0, -2, 1f))
+                add(row)
+            })
+            col.space(12)
         }
     }
     private val youtubeThumbnailCache = java.util.concurrent.ConcurrentHashMap<String, Bitmap>()
