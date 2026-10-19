@@ -2364,11 +2364,21 @@ open class MemberActivity : AppCompatActivity() {
         setSingleLine(!multiline)
         gravity = if (multiline) Gravity.TOP or Gravity.START else Gravity.CENTER_VERTICAL
     }
-    private fun availabilityView(): View = memberPage("Manage Schedule", "calendar") { col ->
+    private fun availabilityView(): View {
+        val root = vertical().apply { setBackgroundColor(Color.WHITE) }
+        val header = settingsHeader("Manage Schedule", true)
+        header.findViewById<View>(UI.pageBack).setOnClickListener { navigate("calendar") }
+        root.add(header)
+
+        val scroll = StableScrollView(this).apply { isFillViewport = true; clipToPadding = false }
+        val content = vertical()
+        scroll.addView(content, FrameLayout.LayoutParams(-1, -2))
+
         val uid = preferences.getString(SessionManager.KEY_USER_ID, "").orEmpty()
             .ifBlank { AuthManager.currentUser?.uid.orEmpty() }
 
         // Top Month Calendar view (matching Manage Schedule.png)
+        val calContainer = vertical().apply { setPadding(dp(20), dp(10), dp(20), dp(10)) }
         val date = java.util.Calendar.getInstance().apply {
             set(calendarYear, calendarMonth, 1, 12, 0, 0); set(java.util.Calendar.MILLISECOND, 0)
         }
@@ -2385,10 +2395,10 @@ open class MemberActivity : AppCompatActivity() {
             setOnClickListener { date.add(java.util.Calendar.MONTH, 1); setCalendarMonth(date) }
             contentDescription = "Next month"; isFocusable = true
         }, 48, 48)
-        col.add(monthRow); col.space(16)
-        col.add(horizontal().apply {
+        calContainer.add(monthRow); calContainer.space(12)
+        calContainer.add(horizontal().apply {
             listOf("Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat").forEachIndexed { i, day ->
-                add(text(day, 11, if (i == 0 || i == 6) Color.rgb(217, 70, 239) else navy, centered = true), 0, 36, 1f)
+                add(text(day, 11, if (i == 0 || i == 6) Color.rgb(217, 70, 239) else navy, centered = true), 0, 26, 1f)
             }
         })
         val first = date.get(java.util.Calendar.DAY_OF_WEEK) - 1
@@ -2397,84 +2407,65 @@ open class MemberActivity : AppCompatActivity() {
         val prevMax = prevCal.getActualMaximum(java.util.Calendar.DAY_OF_MONTH)
         val rows = (first + count + 6) / 7
         val activeRanges = TeamRepository.getMemberUnavailableRanges(uid, preferences)
-        val allServices = storedServices()
 
         repeat(rows) { week ->
-            col.add(horizontal().apply {
+            calContainer.add(horizontal().apply {
                 repeat(7) { weekday ->
                     val day = week * 7 + weekday - first + 1
                     val cell = vertical().apply { gravity = Gravity.CENTER }
                     if (day in 1..count) {
                         val key = calendarKey(day)
-                        val isSel = day == calendarDay
-                        cell.add(text(day.toString(), 12,
-                            if (isSel) Color.WHITE else navy, centered = true).apply {
-                            if (isSel) background = bg(purple, 24)
-                        }, -1, 36)
-
-                        val hasUnavailable = activeRanges.any { it.includes(key) } || (calendarMonth == 9 && day in listOf(8, 9, 10))
-                        val hasService = allServices.any { it.optString("date") == key } || (calendarMonth == 9 && day in listOf(4, 11, 18, 25)) || (weekday == 0 && day in 1..count)
-                        val hasRehearsal = allServices.any { it.optJSONObject("rehearsal")?.optString("date") == key } || (calendarMonth == 9 && day == 3)
-
-                        val dotColor = when {
-                            hasUnavailable -> Color.rgb(239, 68, 68)
-                            hasService -> Color.rgb(34, 197, 94)
-                            hasRehearsal -> Color.rgb(59, 130, 246)
-                            else -> null
-                        }
-                        cell.add(text(if (dotColor != null) "•" else "", 14, dotColor ?: Color.TRANSPARENT, bold = true, centered = true), -1, 14)
+                        cell.add(text(day.toString(), 12, navy, centered = true), -1, 26)
                         cell.isClickable = true; cell.isFocusable = true; cell.contentDescription = key
                         cell.setOnClickListener { calendarDay = day; navigate("availability") }
                     } else if (day <= 0) {
                         val priorDay = prevMax + day
-                        cell.add(text(priorDay.toString(), 12, Color.rgb(180, 185, 195), centered = true), -1, 36)
-                        cell.add(text("", 14, Color.TRANSPARENT, centered = true), -1, 14)
+                        cell.add(text(priorDay.toString(), 12, Color.rgb(180, 185, 195), centered = true), -1, 26)
                     } else {
                         val nextDay = day - count
-                        cell.add(text(nextDay.toString(), 12, Color.rgb(180, 185, 195), centered = true), -1, 36)
-                        cell.add(text("", 14, Color.TRANSPARENT, centered = true), -1, 14)
+                        cell.add(text(nextDay.toString(), 12, Color.rgb(180, 185, 195), centered = true), -1, 26)
                     }
-                    add(cell, 0, 56, 1f)
+                    add(cell, 0, 26, 1f)
                 }
             })
         }
-        col.space(20)
+        content.add(calContainer)
 
-        // Bottom dark navy/slate container matching Manage Schedule.png
+        // Bottom dark navy/midnight container matching uploaded design exactly (media_1792410432342_45846c86.png)
         var startIso = calendarKey(if (calendarDay in 8..10) 8 else calendarDay)
         var endIso = calendarKey(if (calendarDay in 8..10) 10 else calendarDay)
 
         val darkCard = vertical().apply {
-            setPadding(dp(20), dp(24), dp(20), dp(28))
-            val shape = GradientDrawable().apply {
-                setColor(Color.rgb(30, 41, 59)) // #1e293b dark slate
-                cornerRadii = floatArrayOf(dp(28).toFloat(), dp(28).toFloat(), dp(28).toFloat(), dp(28).toFloat(), 0f, 0f, 0f, 0f)
+            setPadding(dp(16), dp(20), dp(16), dp(24))
+            val gradient = GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,
+                intArrayOf(Color.rgb(21, 29, 56), Color.rgb(46, 62, 120))).apply {
+                cornerRadii = floatArrayOf(dp(32).toFloat(), dp(32).toFloat(), dp(32).toFloat(), dp(32).toFloat(), 0f, 0f, 0f, 0f)
             }
-            background = shape
+            background = gradient
         }
 
-        darkCard.add(text("Reason", 14, Color.WHITE, bold = true)); darkCard.space(8)
+        darkCard.add(text("Reason", 14, Color.WHITE, bold = false)); darkCard.space(6)
         val reasonInput = EditText(this).apply {
             hint = "Family bonding"
-            setHintTextColor(Color.rgb(148, 163, 184))
-            setTextColor(Color.rgb(15, 23, 42))
+            setHintTextColor(Color.rgb(115, 115, 115))
+            setTextColor(Color.rgb(20, 27, 52))
             textSize = 14f
-            background = bg(Color.rgb(226, 232, 240), 12)
-            setPadding(dp(16), dp(12), dp(16), dp(12))
+            background = bg(Color.rgb(217, 217, 217), 18)
+            setPadding(dp(16), dp(10), dp(16), dp(10))
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE
             filters = arrayOf(InputFilter.LengthFilter(ValidationUtils.MAX_REASON_LENGTH))
             gravity = Gravity.TOP or Gravity.START
         }
-        darkCard.add(reasonInput, -1, dp(72)); darkCard.space(16)
+        darkCard.add(reasonInput, -1, 72); darkCard.space(12)
 
-        darkCard.add(text("Starts", 14, Color.WHITE, bold = true)); darkCard.space(8)
-        val startDisplay = text(formatDisplayDate(startIso), 14, Color.rgb(15, 23, 42))
+        darkCard.add(text("Starts", 14, Color.WHITE, bold = false)); darkCard.space(6)
+        val startDisplay = text(formatDisplayDate(startIso), 14, Color.rgb(20, 27, 52))
         val startRow = horizontal().apply {
             gravity = Gravity.CENTER_VERTICAL
-            background = bg(Color.rgb(226, 232, 240), 12)
-            setPadding(dp(16), dp(12), dp(16), dp(12))
+            background = bg(Color.rgb(217, 217, 217), 21)
+            setPadding(dp(16), 0, dp(16), 0)
             add(startDisplay, 0, -2, 1f)
-            add(Symbol(this@MemberActivity, "calendar", Color.rgb(15, 23, 42)), 22, 22)
+            add(Symbol(this@MemberActivity, "calendar", Color.rgb(20, 27, 52)), 20, 20)
             isClickable = true; isFocusable = true; contentDescription = "Choose start date"
             setOnClickListener {
                 val parts = startIso.split("-").map { it.toInt() }
@@ -2484,14 +2475,14 @@ open class MemberActivity : AppCompatActivity() {
                 }, parts[0], parts[1] - 1, parts[2]).show()
             }
         }
-        darkCard.add(startRow, -1, dp(48)); darkCard.space(16)
+        darkCard.add(startRow, -1, 42); darkCard.space(12)
 
-        darkCard.add(text("Ends", 14, Color.WHITE, bold = true)); darkCard.space(8)
-        val endDisplay = text(formatDisplayDate(endIso), 14, Color.rgb(15, 23, 42))
+        darkCard.add(text("Ends", 14, Color.WHITE, bold = false)); darkCard.space(6)
+        val endDisplay = text(formatDisplayDate(endIso), 14, Color.rgb(20, 27, 52))
         val endRow = horizontal().apply {
             gravity = Gravity.CENTER_VERTICAL
-            background = bg(Color.rgb(226, 232, 240), 12)
-            setPadding(dp(16), dp(12), dp(16), dp(12))
+            background = bg(Color.rgb(217, 217, 217), 21)
+            setPadding(dp(16), 0, dp(16), 0)
             add(endDisplay, 0, -2, 1f)
             isClickable = true; isFocusable = true; contentDescription = "Choose end date"
             setOnClickListener {
@@ -2502,15 +2493,20 @@ open class MemberActivity : AppCompatActivity() {
                 }, parts[0], parts[1] - 1, parts[2]).show()
             }
         }
-        darkCard.add(endRow, -1, dp(48)); darkCard.space(24)
+        darkCard.add(endRow, -1, 42); darkCard.space(18)
 
         val saveBtn = Button(this).apply {
             text = "Save"
             isAllCaps = false
-            background = bg(Color.rgb(15, 23, 42), 24)
+            textSize = 14f
             setTextColor(Color.WHITE)
-            setTypeface(typeface, Typeface.BOLD)
-            minimumHeight = dp(48)
+            typeface = Typeface.DEFAULT
+            background = bg(Color.rgb(20, 27, 52), 20)
+            stateListAnimator = null
+            minHeight = 0
+            minimumHeight = 0
+            includeFontPadding = false
+            setPadding(0, 0, 0, 0)
             setOnClickListener {
                 val rText = reasonInput.text.toString().trim().ifBlank { "Family bonding" }
                 val currentRanges = TeamRepository.getMemberUnavailableRanges(uid, preferences)
@@ -2531,21 +2527,21 @@ open class MemberActivity : AppCompatActivity() {
                 }
             }
         }
-        darkCard.add(saveBtn, -1, dp(48))
+        darkCard.add(saveBtn, -1, 40)
 
         if (activeRanges.isNotEmpty()) {
             darkCard.space(24)
             darkCard.add(text("Scheduled Unavailabilities", 14, Color.WHITE, bold = true))
             darkCard.space(10)
             activeRanges.forEach { r ->
-                val p = panel(Color.rgb(51, 65, 85)).apply {
+                val p = panel(Color.rgb(30, 41, 59)).apply {
                     val row = horizontal().apply { gravity = Gravity.CENTER_VERTICAL }
                     row.add(vertical().apply {
-                        add(text("📅 ${r.startDate} – ${r.endDate}", 13, navy, true))
+                        add(text("📅 ${r.startDate} – ${r.endDate}", 13, Color.WHITE, true))
                         space(2)
-                        add(text("Reason: ${r.reason}", 12, Color.DKGRAY))
+                        add(text("Reason: ${r.reason}", 12, Color.rgb(203, 213, 225)))
                     }, 0, -2, 1f)
-                    val delBtn = text("✕", 18, Color.RED, bold = true, centered = true).apply {
+                    val delBtn = text("✕", 18, Color.rgb(248, 113, 113), bold = true, centered = true).apply {
                         setPadding(dp(8), dp(4), dp(8), dp(4))
                         isClickable = true; isFocusable = true
                         contentDescription = "Remove unavailability"
@@ -2562,7 +2558,9 @@ open class MemberActivity : AppCompatActivity() {
             }
         }
 
-        col.add(darkCard)
+        content.add(darkCard, -1, -2, 1f)
+        root.add(scroll, -1, 0, 1f)
+        return root
     }
     private fun serviceView(): View = memberPage("Service", serviceReturnPage, "Schedule") { col ->
         col.add(panel(null).apply {
