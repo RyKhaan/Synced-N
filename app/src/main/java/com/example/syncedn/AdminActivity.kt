@@ -1906,7 +1906,11 @@ class AdminActivity : AppCompatActivity() {
             chatMessages.add(localMsg)
             TeamRepository.saveChatMessageLocally(currentCode, localMsg, preferences)
             teamTab = "Team Chat"
-            navigate("teams")
+            if (chatMessagesCol != null && page == "teams" && teamTab == "Team Chat") {
+                appendChatMessageBubble(localMsg, currentUid)
+            } else {
+                navigate("teams")
+            }
 
             toast("Uploading photo to chat...")
             CloudinaryUploader.uploadProfileImage(this, uri, maxDimension = 800) { result ->
@@ -1999,20 +2003,24 @@ class AdminActivity : AppCompatActivity() {
                     }
                 }
                 var updated = if (override.isNotBlank()) m.copy(ministryRole = override) else m
-                if (updated.photoUri.isBlank() && selfPhoto != null) {
-                    if (updated.uid == selfUid ||
-                        updated.fullName.equals(fullName, ignoreCase = true) ||
-                        updated.fullName.equals(displayName, ignoreCase = true) ||
-                        updated.username.equals(displayName, ignoreCase = true)
-                    ) {
-                        updated = updated.copy(photoUri = selfPhoto)
+                if (updated.photoUri.isBlank()) {
+                    val p = preferences.getString("user_photo_${m.uid}", "").orEmpty().ifBlank {
+                        preferences.getString("email_photo_${emailLower}", "").orEmpty().ifBlank {
+                            if (selfPhoto != null && (
+                                updated.uid == selfUid ||
+                                updated.fullName.equals(fullName, ignoreCase = true) ||
+                                updated.fullName.equals(displayName, ignoreCase = true) ||
+                                updated.username.equals(displayName, ignoreCase = true)
+                            )) selfPhoto else ""
+                        }
                     }
+                    if (p.isNotBlank()) updated = updated.copy(photoUri = p)
                 }
                 updated
             }
         }
 
-        val cached = TeamRepository.getCachedRoster(currentCode)
+        val cached = TeamRepository.getCachedRoster(currentCode, preferences)
         if (cached.isNotEmpty()) return applyOverrides(cached)
         if (teamRoster.isNotEmpty()) return applyOverrides(teamRoster)
         val currentUid = preferences.getString("userId", "").orEmpty()
@@ -3694,6 +3702,9 @@ class AdminActivity : AppCompatActivity() {
     private var songsReturnPage = "home"
     private val chatMessages = mutableListOf<ChatMessage>()
     private var chatListener: ListenerRegistration? = null
+    private var chatScrollView: StableScrollView? = null
+    private var chatMessagesCol: LinearLayout? = null
+    private var chatEmptyView: View? = null
     private val lineupSongs = mutableListOf("Amazing Grace", "Way Maker", "Goodness of God", "Build My Life")
     private val ministryMembers = listOf(
         Triple("Joshua Lagare", "Worship Leader", "Admin"),
@@ -3786,6 +3797,14 @@ class AdminActivity : AppCompatActivity() {
         }
     }
     private fun findMemberPhotoUri(uid: String? = null, name: String? = null, email: String? = null): String {
+        if (!uid.isNullOrBlank()) {
+            val p = preferences.getString("user_photo_$uid", "").orEmpty()
+            if (p.isNotBlank()) return p
+        }
+        if (!email.isNullOrBlank()) {
+            val p = preferences.getString("email_photo_${email.trim().lowercase()}", "").orEmpty()
+            if (p.isNotBlank()) return p
+        }
         val roster = getActiveRoster()
         val match = roster.find {
             (it.uid.isNotBlank() && uid != null && it.uid == uid) ||
@@ -4879,6 +4898,152 @@ class AdminActivity : AppCompatActivity() {
             isAntiAlias = true
         }
     }
+    private fun buildChatMessageBubble(msg: ChatMessage, currentUid: String): View {
+        val maxBubbleWidth = (resources.displayMetrics.widthPixels * 0.72f).toInt()
+        val timeFormat = java.text.SimpleDateFormat("h:mm a", java.util.Locale.getDefault())
+        val isSelf = (msg.senderUid.isNotBlank() && msg.senderUid == currentUid) ||
+                (msg.senderName.equals(displayName, ignoreCase = true) || msg.senderName.equals(fullName, ignoreCase = true))
+
+        if (isSelf) {
+            val row = horizontal().apply {
+                gravity = Gravity.END
+                setPadding(0, dp(4), 0, dp(4))
+            }
+            val bubbleContainer = vertical().apply {
+                gravity = Gravity.END
+            }
+            val bubble = vertical().apply {
+                background = GradientDrawable().apply {
+                    setColor(Color.rgb(21, 28, 50))
+                    cornerRadii = floatArrayOf(
+                        dp(18).toFloat(), dp(18).toFloat(),
+                        dp(18).toFloat(), dp(18).toFloat(),
+                        dp(4).toFloat(), dp(4).toFloat(),
+                        dp(18).toFloat(), dp(18).toFloat()
+                    )
+                }
+                setPadding(dp(14), dp(10), dp(14), dp(10))
+                if (msg.mediaUrl.isNotBlank()) {
+                    val iv = ImageView(this@AdminActivity).apply {
+                        scaleType = ImageView.ScaleType.CENTER_CROP
+                        outlineProvider = object : ViewOutlineProvider() {
+                            override fun getOutline(view: View, outline: Outline) {
+                                outline.setRoundRect(0, 0, view.width, view.height, dp(12).toFloat())
+                            }
+                        }
+                        clipToOutline = true
+                    }
+                    add(iv, 220, 180)
+                    ImageLoader.loadProfilePhoto(iv, msg.mediaUrl, circular = false)
+                    if (msg.text.isNotBlank()) space(6)
+                }
+                if (msg.text.isNotBlank()) {
+                    add(text(msg.text, 14, Color.WHITE).apply {
+                        maxWidth = maxBubbleWidth - dp(28)
+                    })
+                }
+            }
+            bubbleContainer.addView(bubble, LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { gravity = Gravity.END })
+
+            val timeStr = timeFormat.format(java.util.Date(msg.timestamp))
+            val caption = text(timeStr, 10, Color.rgb(148, 163, 184)).apply {
+                setPadding(0, dp(2), dp(4), 0)
+            }
+            bubbleContainer.addView(caption, LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { gravity = Gravity.END })
+
+            row.addView(bubbleContainer, LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ))
+            return row
+        } else {
+            val row = horizontal().apply {
+                gravity = Gravity.START
+                setPadding(0, dp(4), 0, dp(4))
+            }
+            val pUri = msg.senderPhotoUri.ifBlank {
+                getActiveRoster().find { it.uid == msg.senderUid || it.fullName.equals(msg.senderName, true) || it.username.equals(msg.senderName, true) }?.photoUri ?: ""
+            }
+            row.add(memberAvatarView(pUri, 32), 32, 32)
+
+            val bubbleContainer = vertical().apply {
+                setPadding(dp(8), 0, 0, 0)
+                gravity = Gravity.START
+            }
+            val senderLabel = msg.senderName.ifBlank { "Teammate" } + (if (msg.senderRole.isNotBlank()) " • ${msg.senderRole}" else "")
+            bubbleContainer.add(text(senderLabel, 11, Color.rgb(100, 116, 139), bold = true).apply {
+                setPadding(dp(4), 0, 0, dp(2))
+            })
+
+            val bubble = vertical().apply {
+                background = GradientDrawable().apply {
+                    setColor(Color.rgb(241, 245, 249))
+                    cornerRadii = floatArrayOf(
+                        dp(18).toFloat(), dp(18).toFloat(),
+                        dp(18).toFloat(), dp(18).toFloat(),
+                        dp(18).toFloat(), dp(18).toFloat(),
+                        dp(4).toFloat(), dp(4).toFloat()
+                    )
+                }
+                setPadding(dp(14), dp(10), dp(14), dp(10))
+                if (msg.mediaUrl.isNotBlank()) {
+                    val iv = ImageView(this@AdminActivity).apply {
+                        scaleType = ImageView.ScaleType.CENTER_CROP
+                        outlineProvider = object : ViewOutlineProvider() {
+                            override fun getOutline(view: View, outline: Outline) {
+                                outline.setRoundRect(0, 0, view.width, view.height, dp(12).toFloat())
+                            }
+                        }
+                        clipToOutline = true
+                    }
+                    add(iv, 220, 180)
+                    ImageLoader.loadProfilePhoto(iv, msg.mediaUrl, circular = false)
+                    if (msg.text.isNotBlank()) space(6)
+                }
+                if (msg.text.isNotBlank()) {
+                    add(text(msg.text, 14, Color.rgb(21, 28, 50)).apply {
+                        maxWidth = maxBubbleWidth - dp(28)
+                    })
+                }
+            }
+            bubbleContainer.addView(bubble, LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { gravity = Gravity.START })
+
+            val timeStr = timeFormat.format(java.util.Date(msg.timestamp))
+            val caption = text(timeStr, 10, Color.rgb(148, 163, 184)).apply {
+                setPadding(dp(4), dp(2), 0, 0)
+            }
+            bubbleContainer.addView(caption, LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { gravity = Gravity.START })
+
+            row.addView(bubbleContainer, LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ))
+            return row
+        }
+    }
+
+    private fun appendChatMessageBubble(msg: ChatMessage, currentUid: String) {
+        val col = chatMessagesCol ?: return
+        chatEmptyView?.let {
+            col.removeView(it)
+            chatEmptyView = null
+        }
+        col.addView(buildChatMessageBubble(msg, currentUid))
+        chatScrollView?.post { chatScrollView?.fullScroll(View.FOCUS_DOWN) }
+    }
+
     private fun teamsView(): View {
         if (preferences.getBoolean("leftTeam", false)) return memberPage("Teams", "home", "Teams") { col ->
             col.add(text("You have no active team.", 16, navy, true)); col.space(20)
@@ -4894,16 +5059,34 @@ class AdminActivity : AppCompatActivity() {
                 chatListener = TeamRepository.listenTeamMessages(currentCode, preferences) { msgs ->
                     runOnUiThread {
                         if (page == "teams" && teamTab == "Team Chat") {
-                            val existingMap = LinkedHashMap<String, ChatMessage>()
-                            chatMessages.forEach { existingMap[it.id] = it }
-                            msgs.forEach { existingMap[it.id] = it }
-                            val combined = existingMap.values.sortedBy { it.timestamp }
-
-                            val curMedia = chatMessages.map { it.id to it.mediaUrl }
-                            val newMedia = combined.map { it.id to it.mediaUrl }
-                            if (curMedia != newMedia) {
+                            val existingIds = chatMessages.map { it.id }.toSet()
+                            val incoming = msgs.filter { it.id !in existingIds }
+                            val mediaUpdated = msgs.filter { m ->
+                                val cur = chatMessages.find { it.id == m.id }
+                                cur != null && cur.mediaUrl != m.mediaUrl && m.mediaUrl.isNotBlank()
+                            }
+                            if (incoming.isNotEmpty()) {
+                                val map = LinkedHashMap<String, ChatMessage>()
+                                chatMessages.forEach { map[it.id] = it }
+                                msgs.forEach { map[it.id] = it }
                                 chatMessages.clear()
-                                chatMessages.addAll(combined)
+                                chatMessages.addAll(map.values.sortedBy { it.timestamp })
+
+                                val myUid = AuthManager.currentUser?.uid?.takeIf { it.isNotBlank() }
+                                    ?: preferences.getString(SessionManager.KEY_USER_ID, "").orEmpty()
+                                if (chatMessagesCol != null) {
+                                    incoming.sortedBy { it.timestamp }.forEach { msg ->
+                                        appendChatMessageBubble(msg, myUid)
+                                    }
+                                } else {
+                                    navigate("teams")
+                                }
+                            } else if (mediaUpdated.isNotEmpty()) {
+                                val map = LinkedHashMap<String, ChatMessage>()
+                                chatMessages.forEach { map[it.id] = it }
+                                msgs.forEach { map[it.id] = it }
+                                chatMessages.clear()
+                                chatMessages.addAll(map.values.sortedBy { it.timestamp })
                                 navigate("teams")
                             }
                         }
@@ -5002,151 +5185,23 @@ class AdminActivity : AppCompatActivity() {
                 }
             }
             else -> {
-                val currentUid = preferences.getString(SessionManager.KEY_USER_ID, "").orEmpty()
+                val currentUid = AuthManager.currentUser?.uid?.takeIf { it.isNotBlank() }
+                    ?: preferences.getString(SessionManager.KEY_USER_ID, "").orEmpty()
+                chatScrollView = scroll
+                chatMessagesCol = col
+                chatEmptyView = null
+
                 val displayList = if (chatMessages.isNotEmpty()) chatMessages else TeamRepository.getCachedChatMessages(currentCode, preferences)
 
                 if (displayList.isEmpty()) {
-                    col.add(text("No messages yet. Say hello to your team!", 13, Color.rgb(100, 116, 139), centered = true).apply {
+                    val empty = text("No messages yet. Say hello to your team!", 13, Color.rgb(100, 116, 139), centered = true).apply {
                         setPadding(0, dp(40), 0, dp(40))
-                    }, -1, -2)
+                    }
+                    chatEmptyView = empty
+                    col.add(empty, -1, -2)
                 } else {
-                    val maxBubbleWidth = (resources.displayMetrics.widthPixels * 0.72f).toInt()
-                    val timeFormat = java.text.SimpleDateFormat("h:mm a", java.util.Locale.getDefault())
-
                     displayList.forEach { msg ->
-                        val isSelf = (msg.senderUid.isNotBlank() && msg.senderUid == currentUid) ||
-                                (msg.senderName.equals(displayName, ignoreCase = true) || msg.senderName.equals(fullName, ignoreCase = true))
-
-                        if (isSelf) {
-                            // Outgoing message (Right-aligned, Navy bubble, White text)
-                            val row = horizontal().apply {
-                                gravity = Gravity.END
-                                setPadding(0, dp(4), 0, dp(4))
-                            }
-                            val bubbleContainer = vertical().apply {
-                                gravity = Gravity.END
-                            }
-                            val bubble = vertical().apply {
-                                background = GradientDrawable().apply {
-                                    setColor(Color.rgb(21, 28, 50)) // Deep navy UI brand color
-                                    cornerRadii = floatArrayOf(
-                                        dp(18).toFloat(), dp(18).toFloat(),
-                                        dp(18).toFloat(), dp(18).toFloat(),
-                                        dp(4).toFloat(), dp(4).toFloat(),
-                                        dp(18).toFloat(), dp(18).toFloat()
-                                    )
-                                }
-                                setPadding(dp(14), dp(10), dp(14), dp(10))
-                                if (msg.mediaUrl.isNotBlank()) {
-                                    val iv = ImageView(this@AdminActivity).apply {
-                                        scaleType = ImageView.ScaleType.CENTER_CROP
-                                        outlineProvider = object : ViewOutlineProvider() {
-                                            override fun getOutline(view: View, outline: Outline) {
-                                                outline.setRoundRect(0, 0, view.width, view.height, dp(12).toFloat())
-                                            }
-                                        }
-                                        clipToOutline = true
-                                    }
-                                    add(iv, 220, 180)
-                                    ImageLoader.loadProfilePhoto(iv, msg.mediaUrl, circular = false)
-                                    if (msg.text.isNotBlank()) space(6)
-                                }
-                                if (msg.text.isNotBlank()) {
-                                    add(text(msg.text, 14, Color.WHITE).apply {
-                                        maxWidth = maxBubbleWidth - dp(28)
-                                    })
-                                }
-                            }
-                            bubbleContainer.addView(bubble, LinearLayout.LayoutParams(
-                                ViewGroup.LayoutParams.WRAP_CONTENT,
-                                ViewGroup.LayoutParams.WRAP_CONTENT
-                            ).apply { gravity = Gravity.END })
-
-                            val timeStr = timeFormat.format(java.util.Date(msg.timestamp))
-                            val caption = text(timeStr, 10, Color.rgb(148, 163, 184)).apply {
-                                setPadding(0, dp(2), dp(4), 0)
-                            }
-                            bubbleContainer.addView(caption, LinearLayout.LayoutParams(
-                                ViewGroup.LayoutParams.WRAP_CONTENT,
-                                ViewGroup.LayoutParams.WRAP_CONTENT
-                            ).apply { gravity = Gravity.END })
-
-                            row.addView(bubbleContainer, LinearLayout.LayoutParams(
-                                ViewGroup.LayoutParams.WRAP_CONTENT,
-                                ViewGroup.LayoutParams.WRAP_CONTENT
-                            ))
-                            col.add(row, -1, -2)
-                        } else {
-                            // Incoming message (Left-aligned, Light Gray bubble, Teammate Avatar, Dark Navy text)
-                            val row = horizontal().apply {
-                                gravity = Gravity.START
-                                setPadding(0, dp(4), 0, dp(4))
-                            }
-                            val pUri = msg.senderPhotoUri.ifBlank {
-                                getActiveRoster().find { it.uid == msg.senderUid || it.fullName.equals(msg.senderName, true) || it.username.equals(msg.senderName, true) }?.photoUri ?: ""
-                            }
-                            row.add(memberAvatarView(pUri, 32), 32, 32)
-
-                            val bubbleContainer = vertical().apply {
-                                setPadding(dp(8), 0, 0, 0)
-                                gravity = Gravity.START
-                            }
-                            val senderLabel = msg.senderName.ifBlank { "Teammate" } + (if (msg.senderRole.isNotBlank()) " • ${msg.senderRole}" else "")
-                            bubbleContainer.add(text(senderLabel, 11, Color.rgb(100, 116, 139), bold = true).apply {
-                                setPadding(dp(4), 0, 0, dp(2))
-                            })
-
-                            val bubble = vertical().apply {
-                                background = GradientDrawable().apply {
-                                    setColor(Color.rgb(241, 245, 249)) // Soft light gray
-                                    cornerRadii = floatArrayOf(
-                                        dp(18).toFloat(), dp(18).toFloat(),
-                                        dp(18).toFloat(), dp(18).toFloat(),
-                                        dp(18).toFloat(), dp(18).toFloat(),
-                                        dp(4).toFloat(), dp(4).toFloat()
-                                    )
-                                }
-                                setPadding(dp(14), dp(10), dp(14), dp(10))
-                                if (msg.mediaUrl.isNotBlank()) {
-                                    val iv = ImageView(this@AdminActivity).apply {
-                                        scaleType = ImageView.ScaleType.CENTER_CROP
-                                        outlineProvider = object : ViewOutlineProvider() {
-                                            override fun getOutline(view: View, outline: Outline) {
-                                                outline.setRoundRect(0, 0, view.width, view.height, dp(12).toFloat())
-                                            }
-                                        }
-                                        clipToOutline = true
-                                    }
-                                    add(iv, 220, 180)
-                                    ImageLoader.loadProfilePhoto(iv, msg.mediaUrl, circular = false)
-                                    if (msg.text.isNotBlank()) space(6)
-                                }
-                                if (msg.text.isNotBlank()) {
-                                    add(text(msg.text, 14, Color.rgb(21, 28, 50)).apply {
-                                        maxWidth = maxBubbleWidth - dp(28)
-                                    })
-                                }
-                            }
-                            bubbleContainer.addView(bubble, LinearLayout.LayoutParams(
-                                ViewGroup.LayoutParams.WRAP_CONTENT,
-                                ViewGroup.LayoutParams.WRAP_CONTENT
-                            ).apply { gravity = Gravity.START })
-
-                            val timeStr = timeFormat.format(java.util.Date(msg.timestamp))
-                            val caption = text(timeStr, 10, Color.rgb(148, 163, 184)).apply {
-                                setPadding(dp(4), dp(2), 0, 0)
-                            }
-                            bubbleContainer.addView(caption, LinearLayout.LayoutParams(
-                                ViewGroup.LayoutParams.WRAP_CONTENT,
-                                ViewGroup.LayoutParams.WRAP_CONTENT
-                            ).apply { gravity = Gravity.START })
-
-                            row.addView(bubbleContainer, LinearLayout.LayoutParams(
-                                ViewGroup.LayoutParams.WRAP_CONTENT,
-                                ViewGroup.LayoutParams.WRAP_CONTENT
-                            ))
-                            col.add(row, -1, -2)
-                        }
+                        col.addView(buildChatMessageBubble(msg, currentUid))
                     }
                 }
             }
@@ -5183,7 +5238,8 @@ class AdminActivity : AppCompatActivity() {
                             val cached = TeamRepository.getCachedChatMessages(currentCode, preferences)
                             if (cached.isNotEmpty()) chatMessages.addAll(cached)
                         }
-                        val currentUid = preferences.getString(SessionManager.KEY_USER_ID, "").orEmpty()
+                        val currentUid = AuthManager.currentUser?.uid?.takeIf { it.isNotBlank() }
+                            ?: preferences.getString(SessionManager.KEY_USER_ID, "").orEmpty()
                         val currentPhoto = preferences.getString("photoUri", "").orEmpty()
                         val newMsg = ChatMessage(
                             id = java.util.UUID.randomUUID().toString(),
@@ -5197,7 +5253,12 @@ class AdminActivity : AppCompatActivity() {
                         )
                         chatMessages.add(newMsg)
                         TeamRepository.sendChatMessage(currentCode, newMsg, preferences)
-                        navigate("teams")
+                        message.setText("")
+                        if (chatMessagesCol != null) {
+                            appendChatMessageBubble(newMsg, currentUid)
+                        } else {
+                            navigate("teams")
+                        }
                     }
                 }
             }

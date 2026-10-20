@@ -2019,4 +2019,54 @@ class ExampleUnitTest {
         assertEquals("msg_img_local", finalCached[2].id)
         assertEquals("https://res.cloudinary.com/ffb3fdkm/image/upload/photo.jpg", finalCached[2].mediaUrl)
     }
+    @Test
+    fun testTeamRosterPersistenceAndInstantCachedRetrieval() {
+        val team = "TEST_ROSTER_SYNC"
+        val fakePrefs = FakePreferences()
+
+        val member1 = com.example.syncedn.data.model.TeamMember(
+            uid = "uid_leader_1",
+            fullName = "Joshua Lagare",
+            username = "joshua",
+            email = "joshua@syncedn.org",
+            role = "Leader",
+            ministryRole = "Worship Leader",
+            teamCode = team,
+            photoUri = "https://res.cloudinary.com/ffb3fdkm/image/upload/v1234/joshua.jpg"
+        )
+        val member2 = com.example.syncedn.data.model.TeamMember(
+            uid = "uid_member_2",
+            fullName = "Ryan Lloyd Genturo",
+            username = "ryan",
+            email = "rlgenturo@gmail.com",
+            role = "Member",
+            ministryRole = "Keyboardist",
+            teamCode = team,
+            photoUri = "https://res.cloudinary.com/ffb3fdkm/image/upload/v1234/ryan.jpg"
+        )
+
+        // 1. Save roster locally with preferences
+        com.example.syncedn.data.database.TeamRepository.saveRosterLocally(team, listOf(member1, member2), fakePrefs)
+
+        // Verify individual photo keys were seeded for 0ms lookup
+        assertEquals("https://res.cloudinary.com/ffb3fdkm/image/upload/v1234/joshua.jpg", fakePrefs.getString("user_photo_uid_leader_1", ""))
+        assertEquals("https://res.cloudinary.com/ffb3fdkm/image/upload/v1234/ryan.jpg", fakePrefs.getString("user_photo_uid_member_2", ""))
+        assertEquals("https://res.cloudinary.com/ffb3fdkm/image/upload/v1234/ryan.jpg", fakePrefs.getString("email_photo_rlgenturo@gmail.com", ""))
+
+        // 2. Simulate complete cold start by clearing all in-memory caches
+        com.example.syncedn.data.database.TeamRepository.clearCache()
+
+        // 3. getCachedRoster with preferences must immediately retrieve the persisted members from SharedPreferences
+        val coldCached = com.example.syncedn.data.database.TeamRepository.getCachedRoster(team, fakePrefs)
+        assertEquals(2, coldCached.size)
+        val leader = coldCached.find { it.role == "Leader" }
+        assertNotNull(leader)
+        assertEquals("Joshua Lagare", leader!!.fullName)
+        assertEquals("https://res.cloudinary.com/ffb3fdkm/image/upload/v1234/joshua.jpg", leader.photoUri)
+
+        val member = coldCached.find { it.role == "Member" }
+        assertNotNull(member)
+        assertEquals("Ryan Lloyd Genturo", member!!.fullName)
+        assertEquals("https://res.cloudinary.com/ffb3fdkm/image/upload/v1234/ryan.jpg", member.photoUri)
+    }
 }
