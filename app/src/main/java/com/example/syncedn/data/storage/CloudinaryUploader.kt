@@ -32,6 +32,7 @@ object CloudinaryUploader {
 
     /**
      * Downscales and compresses the image from the given Uri, then uploads to Cloudinary.
+     * Captures the input bytes immediately on the caller thread while Uri permissions are live.
      * Calls [onComplete] on the main thread with the uploaded HTTPS URL on success.
      */
     fun uploadProfileImage(
@@ -41,10 +42,27 @@ object CloudinaryUploader {
         quality: Int = 85,
         onComplete: (Result<String>) -> Unit
     ) {
-        val appContext = context.applicationContext
+        // Read raw bytes IMMEDIATELY on caller thread while Uri permission is active!
+        val rawBytes = try {
+            context.contentResolver.openInputStream(imageUri)?.use { it.readBytes() }
+                ?: if (imageUri.scheme == "file" || imageUri.path?.startsWith("/") == true) {
+                    java.io.File(imageUri.path ?: "").takeIf { it.exists() }?.readBytes()
+                } else null
+        } catch (e: Exception) {
+            Log.e(TAG, "Cannot read bytes for Uri: $imageUri", e)
+            null
+        }
+
+        if (rawBytes == null || rawBytes.isEmpty()) {
+            mainHandler.post {
+                onComplete(Result.failure(IllegalArgumentException("Failed to decode or compress image.")))
+            }
+            return
+        }
+
         executor.execute {
             try {
-                val compressedBytes = prepareImageBytes(appContext, imageUri, maxDimension, quality)
+                val compressedBytes = prepareImageBytesFromBytes(rawBytes, maxDimension, quality)
                 if (compressedBytes == null || compressedBytes.isEmpty()) {
                     mainHandler.post {
                         onComplete(Result.failure(IllegalArgumentException("Failed to decode or compress image.")))
@@ -74,15 +92,27 @@ object CloudinaryUploader {
         maxDimension: Int = 512,
         quality: Int = 85
     ): ByteArray? {
-        val contentResolver = context.contentResolver
+        val rawBytes = try {
+            context.contentResolver.openInputStream(imageUri)?.use { it.readBytes() }
+        } catch (_: Exception) { null } ?: return null
+        return prepareImageBytesFromBytes(rawBytes, maxDimension, quality)
+    }
 
-        // 1. First decode bounds only
+    /**
+     * Prepares compressed JPEG bytes from a raw in-memory byte array without re-opening content streams.
+     */
+    fun prepareImageBytesFromBytes(
+        rawBytes: ByteArray,
+        maxDimension: Int = 512,
+        quality: Int = 85
+    ): ByteArray? {
+        if (rawBytes.isEmpty()) return null
+
+        // 1. Decode bounds only
         val boundsOptions = BitmapFactory.Options().apply {
             inJustDecodeBounds = true
         }
-        contentResolver.openInputStream(imageUri)?.use { stream ->
-            BitmapFactory.decodeStream(stream, null, boundsOptions)
-        } ?: return null
+        BitmapFactory.decodeByteArray(rawBytes, 0, rawBytes.size, boundsOptions)
 
         val origWidth = boundsOptions.outWidth
         val origHeight = boundsOptions.outHeight
@@ -101,13 +131,11 @@ object CloudinaryUploader {
             inPreferredConfig = Bitmap.Config.ARGB_8888
         }
 
-        var decodedBitmap: Bitmap? = contentResolver.openInputStream(imageUri)?.use { stream ->
-            BitmapFactory.decodeStream(stream, null, decodeOptions)
-        } ?: return null
+        var decodedBitmap: Bitmap? = BitmapFactory.decodeByteArray(rawBytes, 0, rawBytes.size, decodeOptions) ?: return null
 
         // 3. Fix EXIF orientation if needed
         try {
-            contentResolver.openInputStream(imageUri)?.use { stream ->
+            java.io.ByteArrayInputStream(rawBytes).use { stream ->
                 val exif = ExifInterface(stream)
                 val orientation = exif.getAttributeInt(
                     ExifInterface.TAG_ORIENTATION,
@@ -163,11 +191,11 @@ object CloudinaryUploader {
 
         // 5. Compress to JPEG
         val outputStream = ByteArrayOutputStream()
-        scaledBitmap.compress(Bitmap.CompressFormat.JPEG, quality.coerceIn(50, 100), outputStream)
+        val success = scaledBitmap.compress(Bitmap.CompressFormat.JPEG, quality.coerceIn(50, 100), outputStream)
         if (scaledBitmap != currentBitmap) {
             scaledBitmap.recycle()
         }
-        return outputStream.toByteArray()
+        return if (success) outputStream.toByteArray() else null
     }
 
     /**

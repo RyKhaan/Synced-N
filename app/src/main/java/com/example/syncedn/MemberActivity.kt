@@ -1567,6 +1567,52 @@ open class MemberActivity : AppCompatActivity() {
         }
         return nav
     }
+    private fun teamAvatarStack(members: List<com.example.syncedn.data.model.TeamMember>, maxCount: Int = 3): View {
+        val container = FrameLayout(this)
+        val displayList = members.take(maxCount)
+        val sizeDp = 26
+        val overlapDp = 16
+
+        if (displayList.isEmpty()) {
+            val emptyIv = ImageView(this).apply {
+                background = GradientDrawable().apply {
+                    shape = GradientDrawable.OVAL
+                    setColor(Color.rgb(90, 188, 248))
+                }
+            }
+            container.addView(emptyIv, FrameLayout.LayoutParams(dp(sizeDp), dp(sizeDp), Gravity.CENTER_VERTICAL))
+            return container
+        }
+
+        displayList.forEachIndexed { index, member ->
+            val avatarFrame = FrameLayout(this).apply {
+                background = GradientDrawable().apply {
+                    shape = GradientDrawable.OVAL
+                    setColor(Color.WHITE)
+                    setStroke(dp(1), Color.rgb(217, 217, 217))
+                }
+                setPadding(dp(1), dp(1), dp(1), dp(1))
+            }
+            val pUri = member.photoUri.ifBlank {
+                findMemberPhotoUri(member.uid, member.fullName.ifBlank { member.username }, member.email)
+            }
+            val iv = memberAvatarView(pUri, sizeDp - 2)
+            avatarFrame.addView(iv, FrameLayout.LayoutParams(dp(sizeDp - 2), dp(sizeDp - 2), Gravity.CENTER))
+
+            val lp = FrameLayout.LayoutParams(dp(sizeDp), dp(sizeDp), Gravity.CENTER_VERTICAL).apply {
+                leftMargin = dp(index * overlapDp)
+            }
+            container.addView(avatarFrame, lp)
+        }
+
+        val totalWidthDp = sizeDp + (displayList.size - 1) * overlapDp
+        container.layoutParams = LinearLayout.LayoutParams(dp(totalWidthDp), dp(sizeDp)).apply {
+            gravity = Gravity.CENTER_VERTICAL
+            rightMargin = dp(8)
+        }
+        return container
+    }
+
     private fun settingsView(): View {
         val root=vertical().apply {setBackgroundColor(Color.WHITE)}
         root.add(settingsHeader("Settings",false))
@@ -1595,7 +1641,7 @@ open class MemberActivity : AppCompatActivity() {
                 add(text(teamName.ifBlank {"Worship Team"},14,Color.BLACK,true))
                 add(text("$memberCount member${if (memberCount == 1) "" else "s"}",12,Color.GRAY))
             },0,-2,1f)
-            team.add(Symbol(this@MemberActivity,"teams",Color.rgb(90,188,248)),36,28)
+            team.add(teamAvatarStack(getActiveRoster()), -2, -2)
             add(team,-1,52);space(50)
         }
         col.section(26).apply {
@@ -1816,6 +1862,7 @@ open class MemberActivity : AppCompatActivity() {
                 timestamp = System.currentTimeMillis()
             )
             chatMessages.add(localMsg)
+            TeamRepository.sendChatMessage(currentCode, localMsg, preferences)
             teamTab = "Team Chat"
             navigate("teams")
 
