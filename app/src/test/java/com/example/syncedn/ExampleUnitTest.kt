@@ -1902,4 +1902,51 @@ class ExampleUnitTest {
             }
         }
     }
+
+    @Test
+    fun testChatMessageSerializationAndCaching() {
+        val msg = com.example.syncedn.data.model.ChatMessage(
+            id = "msg_001",
+            teamCode = "TEST01",
+            senderUid = "user_123",
+            senderName = "Ryan Kyle",
+            senderRole = "Worship Leader",
+            senderPhotoUri = "https://res.cloudinary.com/ffb3fdkm/image/upload/v1234/test.jpg",
+            text = "Welcome to team rehearsal this Sunday!",
+            mediaUrl = "https://res.cloudinary.com/ffb3fdkm/image/upload/v5678/lineup.jpg",
+            timestamp = 1729418400000L
+        )
+
+        val map = msg.toMap()
+        assertEquals("msg_001", map["id"])
+        assertEquals("TEST01", map["teamCode"])
+        assertEquals("user_123", map["senderUid"])
+        assertEquals("Ryan Kyle", map["senderName"])
+        assertEquals("Worship Leader", map["senderRole"])
+        assertEquals("https://res.cloudinary.com/ffb3fdkm/image/upload/v1234/test.jpg", map["senderPhotoUri"])
+        assertEquals("Welcome to team rehearsal this Sunday!", map["text"])
+        assertEquals("https://res.cloudinary.com/ffb3fdkm/image/upload/v5678/lineup.jpg", map["mediaUrl"])
+        assertEquals(1729418400000L, map["timestamp"])
+
+        val restored = com.example.syncedn.data.model.ChatMessage.fromMap(map)
+        assertEquals(msg.id, restored.id)
+        assertEquals(msg.teamCode, restored.teamCode)
+        assertEquals(msg.senderUid, restored.senderUid)
+        assertEquals(msg.senderName, restored.senderName)
+        assertEquals(msg.senderRole, restored.senderRole)
+        assertEquals(msg.senderPhotoUri, restored.senderPhotoUri)
+        assertEquals(msg.text, restored.text)
+        assertEquals(msg.mediaUrl, restored.mediaUrl)
+        assertEquals(msg.timestamp, restored.timestamp)
+
+        val fakePrefs = FakePreferences()
+        com.example.syncedn.data.database.TeamRepository.saveChatMessageLocally("TEST01", msg, fakePrefs)
+
+        val cached = com.example.syncedn.data.database.TeamRepository.getCachedChatMessages("TEST01", fakePrefs)
+        assertEquals(1, cached.size)
+        assertEquals("msg_001", cached[0].id)
+        assertEquals("Ryan Kyle", cached[0].senderName)
+        assertEquals("Welcome to team rehearsal this Sunday!", cached[0].text)
+        assertEquals("https://res.cloudinary.com/ffb3fdkm/image/upload/v5678/lineup.jpg", cached[0].mediaUrl)
+    }
 }

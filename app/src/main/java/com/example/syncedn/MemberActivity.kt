@@ -5,6 +5,7 @@ import com.example.syncedn.data.auth.EmailOtpService
 import com.example.syncedn.data.auth.SessionManager
 import com.example.syncedn.data.database.FirestoreManager
 import com.example.syncedn.data.database.TeamRepository
+import com.example.syncedn.data.model.ChatMessage
 import com.example.syncedn.data.model.SongData
 import com.example.syncedn.data.model.AnnouncementData
 import com.example.syncedn.data.model.SubstitutionData
@@ -13,6 +14,7 @@ import com.example.syncedn.data.storage.CloudinaryUploader
 import com.example.syncedn.data.storage.ImageLoader
 import com.example.syncedn.data.model.UnavailableRange
 import com.example.syncedn.data.util.ValidationUtils
+import com.google.firebase.firestore.ListenerRegistration
 import android.text.InputFilter
 import androidx.activity.result.contract.ActivityResultContracts
 import com.google.android.gms.auth.api.signin.GoogleSignIn
@@ -250,7 +252,6 @@ open class MemberActivity : AppCompatActivity() {
             calendarDay = state.getInt("calendarDay", 4)
             substitute = state.getString("substitute", "John Doe") ?: "John Doe"
             songsReturnPage = state.getString("songsReturnPage", "home") ?: "home"
-            chatMessages.addAll(state.getStringArrayList("chatMessages") ?: emptyList())
             state.getStringArrayList("lineupSongs")?.let { lineupSongs.clear(); lineupSongs.addAll(it) }
         }
         navigate(savedInstanceState?.getString("page") ?: intent.getStringExtra("startPage") ?: initialPage)
@@ -300,12 +301,13 @@ open class MemberActivity : AppCompatActivity() {
         outState.putInt("calendarYear", calendarYear)
         outState.putInt("calendarMonth", calendarMonth)
         outState.putInt("calendarDay", calendarDay)
-        outState.putStringArrayList("chatMessages", ArrayList(chatMessages))
         outState.putStringArrayList("lineupSongs", ArrayList(lineupSongs))
         super.onSaveInstanceState(outState)
     }
 
     override fun onPause() {
+        chatListener?.remove()
+        chatListener = null
         sheetAutoScroll?.pause()
         super.onPause()
     }
@@ -770,14 +772,29 @@ open class MemberActivity : AppCompatActivity() {
     }
     private fun heading(value: String) = text(value, 21, navy, true)
     private fun image(name: String, description: String? = null) = ImageView(this).apply {
-        val bitmap = bitmaps.getOrPut(name) {
-            val resId = resources.getIdentifier(name, "drawable", packageName)
-            if (resId != 0) {
-                val opts = BitmapFactory.Options().apply { inScaled = false }
-                BitmapFactory.decodeResource(resources, resId, opts)
-            } else {
-                val bytes = Base64.decode(Art.data(name), Base64.DEFAULT)
-                requireNotNull(BitmapFactory.decodeByteArray(bytes, 0, bytes.size))
+        val bitmap = if (name == "profile_photo") {
+            val uri = preferences.getString("photoUri", null)?.takeIf { it.isNotBlank() }
+            val cached = if (uri != null) ImageLoader.getCachedProfileBitmap(this@MemberActivity, uri) else null
+            cached ?: bitmaps.getOrPut(name) {
+                val resId = resources.getIdentifier(name, "drawable", packageName)
+                if (resId != 0) {
+                    val opts = BitmapFactory.Options().apply { inScaled = false }
+                    BitmapFactory.decodeResource(resources, resId, opts)
+                } else {
+                    val bytes = Base64.decode(Art.data(name), Base64.DEFAULT)
+                    requireNotNull(BitmapFactory.decodeByteArray(bytes, 0, bytes.size))
+                }
+            }
+        } else {
+            bitmaps.getOrPut(name) {
+                val resId = resources.getIdentifier(name, "drawable", packageName)
+                if (resId != 0) {
+                    val opts = BitmapFactory.Options().apply { inScaled = false }
+                    BitmapFactory.decodeResource(resources, resId, opts)
+                } else {
+                    val bytes = Base64.decode(Art.data(name), Base64.DEFAULT)
+                    requireNotNull(BitmapFactory.decodeByteArray(bytes, 0, bytes.size))
+                }
             }
         }
         setImageBitmap(bitmap); scaleType = ImageView.ScaleType.FIT_CENTER
@@ -1781,8 +1798,37 @@ open class MemberActivity : AppCompatActivity() {
             val uri = data?.data ?: return
             try {
                 contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                chatMessages.add("photo:$uri"); teamTab = "Team Chat"; navigate("teams")
-            } catch (_: Exception) { toast("Could not use that photo. Try another image.") }
+            } catch (_: Exception) {}
+
+            val currentCode = preferences.getString("teamCode", "").orEmpty()
+            val currentUid = preferences.getString(SessionManager.KEY_USER_ID, "").orEmpty()
+            val currentPhoto = preferences.getString("photoUri", "").orEmpty()
+            val localMsgId = java.util.UUID.randomUUID().toString()
+
+            val localMsg = ChatMessage(
+                id = localMsgId,
+                teamCode = currentCode,
+                senderUid = currentUid,
+                senderName = fullName.ifBlank { displayName.ifBlank { "Member" } },
+                senderRole = preferences.getString("ministryRole", "Member").orEmpty(),
+                senderPhotoUri = currentPhoto,
+                mediaUrl = uri.toString(),
+                timestamp = System.currentTimeMillis()
+            )
+            chatMessages.add(localMsg)
+            teamTab = "Team Chat"
+            navigate("teams")
+
+            toast("Uploading photo to chat...")
+            CloudinaryUploader.uploadProfileImage(this, uri) { result ->
+                result.onSuccess { remoteUrl ->
+                    val remoteMsg = localMsg.copy(mediaUrl = remoteUrl)
+                    TeamRepository.sendChatMessage(currentCode, remoteMsg, preferences)
+                }.onFailure { err ->
+                    TeamRepository.sendChatMessage(currentCode, localMsg, preferences)
+                    toast("Cloud upload failed: ${err.message ?: "Offline"}. Sent locally.")
+                }
+            }
             return
         }
         if(requestCode==300 && resultCode==RESULT_OK) {
@@ -1846,7 +1892,8 @@ open class MemberActivity : AppCompatActivity() {
     private var selectedSubstituteUid: String = ""
     private var selectedSubstituteName: String = ""
     private var songsReturnPage = "home"
-    private val chatMessages = mutableListOf<String>()
+    private val chatMessages = mutableListOf<ChatMessage>()
+    private var chatListener: ListenerRegistration? = null
     private val lineupSongs = mutableListOf("Amazing Grace", "Way Maker", "Goodness of God", "Build My Life")
     private var teamRoster: List<TeamMember> = emptyList()
 
@@ -1858,6 +1905,8 @@ open class MemberActivity : AppCompatActivity() {
         } catch (_: Exception) { org.json.JSONObject() }
 
         fun applyOverrides(list: List<TeamMember>): List<TeamMember> {
+            val selfPhoto = preferences.getString("photoUri", null)?.takeIf { it.isNotBlank() }
+            val selfUid = preferences.getString(SessionManager.KEY_USER_ID, "").orEmpty()
             return list.map { m ->
                 val emailLower = m.email.trim().lowercase()
                 val override = memberRolesMap.optString(m.uid).ifBlank {
@@ -1869,7 +1918,17 @@ open class MemberActivity : AppCompatActivity() {
                         }
                     }
                 }
-                if (override.isNotBlank()) m.copy(ministryRole = override) else m
+                var updated = if (override.isNotBlank()) m.copy(ministryRole = override) else m
+                if (updated.photoUri.isBlank() && selfPhoto != null) {
+                    if (updated.uid == selfUid ||
+                        updated.fullName.equals(fullName, ignoreCase = true) ||
+                        updated.fullName.equals(displayName, ignoreCase = true) ||
+                        updated.username.equals(displayName, ignoreCase = true)
+                    ) {
+                        updated = updated.copy(photoUri = selfPhoto)
+                    }
+                }
+                updated
             }
         }
 
@@ -2088,18 +2147,41 @@ open class MemberActivity : AppCompatActivity() {
                 centerX + size * 0.28f, centerY + size * 0.42f, ink)
         }
     }
+    private fun memberAvatarView(photoUri: String? = null, sizeDp: Int = 44): View {
+        val uri = photoUri?.takeIf { it.isNotBlank() }
+        val cached = if (uri != null) ImageLoader.getCachedProfileBitmap(this, uri) else null
+        if (cached != null) {
+            return ImageView(this).apply {
+                scaleType = ImageView.ScaleType.CENTER_CROP
+                setImageBitmap(cached)
+                outlineProvider = object : ViewOutlineProvider() {
+                    override fun getOutline(view: View, outline: Outline) {
+                        outline.setOval(0, 0, view.width, view.height)
+                    }
+                }
+                clipToOutline = true
+                contentDescription = "Member avatar"
+            }
+        } else if (uri != null) {
+            val iv = ImageView(this).apply {
+                scaleType = ImageView.ScaleType.CENTER_CROP
+                outlineProvider = object : ViewOutlineProvider() {
+                    override fun getOutline(view: View, outline: Outline) {
+                        outline.setOval(0, 0, view.width, view.height)
+                    }
+                }
+                clipToOutline = true
+                contentDescription = "Member avatar"
+            }
+            ImageLoader.loadProfilePhoto(iv, uri)
+            return iv
+        }
+        return memberAvatar()
+    }
     private fun memberRow(name: String, role: String, badge: String? = null,
                           onClick: (() -> Unit)? = null, photoUri: String? = null): View = horizontal().apply {
         setPadding(0, dp(8), 0, dp(8))
-        if (!photoUri.isNullOrBlank()) {
-            val iv = ImageView(this@MemberActivity).apply {
-                scaleType = ImageView.ScaleType.CENTER_CROP
-            }
-            add(iv, 48, 48)
-            ImageLoader.loadProfilePhoto(iv, photoUri)
-        } else {
-            add(memberAvatar(), 48, 48)
-        }
+        add(memberAvatarView(photoUri, 48), 48, 48)
         val info = vertical().apply {
             setPadding(dp(12), 0, dp(8), 0)
             add(text(name, 13, navy, true)); space(3); add(text(role, 12, Color.DKGRAY))
@@ -2748,7 +2830,8 @@ open class MemberActivity : AppCompatActivity() {
                 gravity = Gravity.CENTER_VERTICAL
                 background = if (isSelected) bg(Color.rgb(250, 245, 255), 14, purple) else bg(Color.WHITE, 14, Color.rgb(226, 232, 240))
                 setPadding(dp(12), dp(10), dp(12), dp(10))
-                addView(memberAvatar(), LinearLayout.LayoutParams(dp(40), dp(40)))
+                val pUri = getActiveRoster().find { it.uid == mUid || it.fullName.equals(mName, true) || it.username.equals(mName, true) }?.photoUri
+                addView(memberAvatarView(pUri, 40), LinearLayout.LayoutParams(dp(40), dp(40)))
                 val info = LinearLayout(this@MemberActivity).apply {
                     orientation = LinearLayout.VERTICAL
                     setPadding(dp(12), 0, dp(8), 0)
@@ -3554,6 +3637,31 @@ open class MemberActivity : AppCompatActivity() {
             col.add(text("You have no active team.", 16, navy, true)); col.space(20)
             col.add(memberButton("Create or Join Team") { navigate("teamChoice") }, -1, 48)
         }
+        val currentCode = preferences.getString("teamCode", "").orEmpty()
+        if (teamTab == "Team Chat" && currentCode.isNotBlank()) {
+            if (chatMessages.isEmpty()) {
+                val cached = TeamRepository.getCachedChatMessages(currentCode, preferences)
+                if (cached.isNotEmpty()) chatMessages.addAll(cached)
+            }
+            if (chatListener == null) {
+                chatListener = TeamRepository.listenTeamMessages(currentCode, preferences) { msgs ->
+                    runOnUiThread {
+                        if (page == "teams" && teamTab == "Team Chat") {
+                            val curIds = chatMessages.map { it.id }
+                            val newIds = msgs.map { it.id }
+                            if (curIds != newIds) {
+                                chatMessages.clear()
+                                chatMessages.addAll(msgs)
+                                navigate("teams")
+                            }
+                        }
+                    }
+                }
+            }
+        } else {
+            chatListener?.remove()
+            chatListener = null
+        }
         val root = vertical().apply { setBackgroundColor(Color.WHITE) }
         root.add(teamHeader(showDetails = true), -1, 156)
         root.add(teamTabs())
@@ -3574,6 +3682,7 @@ open class MemberActivity : AppCompatActivity() {
             "Role" -> {
                 col.setPadding(0, dp(24), 0, 0)
                 val roster = getActiveRoster()
+                val currentUid = preferences.getString(SessionManager.KEY_USER_ID, "").orEmpty()
                 val baseRoles = listOf("Worship Leader", "Keyboardist", "Bassist", "Vocalist", "Guitarist")
                 val activeRoles = (baseRoles + roster.map { it.ministryRole }).filter { it.isNotBlank() }.distinct()
                 val roles = activeRoles
@@ -3608,7 +3717,12 @@ open class MemberActivity : AppCompatActivity() {
                                     val memberName = member.fullName.ifBlank { member.username.ifBlank { "Member" } }
                                     add(horizontal().apply {
                                         setPadding(0, dp(8), 0, dp(8))
-                                        add(memberAvatar(), 44, 44)
+                                        val pUri = member.photoUri.ifBlank {
+                                            if (member.uid == currentUid || memberName.equals(displayName, ignoreCase = true) || memberName.equals(fullName, ignoreCase = true)) {
+                                                preferences.getString("photoUri", null) ?: ""
+                                            } else ""
+                                        }
+                                        add(memberAvatarView(pUri, 44), 44, 44)
                                         add(vertical().apply {
                                             setPadding(dp(14), 0, 0, 0)
                                             add(text(memberName, 14, Color.WHITE, true)); space(2)
@@ -3624,18 +3738,152 @@ open class MemberActivity : AppCompatActivity() {
                 }
             }
             else -> {
-                chatMessages.forEach { message ->
-                    col.add(panel().apply {
-                        add(text(displayName, 11, purple, true)); space(5)
-                        if (message.startsWith("photo:")) {
-                            add(ImageView(this@MemberActivity).apply {
-                                contentDescription = "Attached photo"; scaleType = ImageView.ScaleType.FIT_CENTER
-                                try { setImageURI(Uri.parse(message.removePrefix("photo:"))) }
-                                catch (_: Exception) { contentDescription = "Photo unavailable" }
-                            }, -1, 180)
-                        } else add(text(message, 14, navy))
-                    })
-                    col.space(12)
+                val currentUid = preferences.getString(SessionManager.KEY_USER_ID, "").orEmpty()
+                val displayList = if (chatMessages.isNotEmpty()) chatMessages else TeamRepository.getCachedChatMessages(currentCode, preferences)
+
+                if (displayList.isEmpty()) {
+                    col.add(text("No messages yet. Say hello to your team!", 13, Color.rgb(100, 116, 139), centered = true).apply {
+                        setPadding(0, dp(40), 0, dp(40))
+                    }, -1, -2)
+                } else {
+                    val maxBubbleWidth = (resources.displayMetrics.widthPixels * 0.72f).toInt()
+                    val timeFormat = java.text.SimpleDateFormat("h:mm a", java.util.Locale.getDefault())
+
+                    displayList.forEach { msg ->
+                        val isSelf = (msg.senderUid.isNotBlank() && msg.senderUid == currentUid) ||
+                                (msg.senderName.equals(displayName, ignoreCase = true) || msg.senderName.equals(fullName, ignoreCase = true))
+
+                        if (isSelf) {
+                            // Outgoing message (Right-aligned, Navy bubble, White text)
+                            val row = horizontal().apply {
+                                gravity = Gravity.END
+                                setPadding(0, dp(4), 0, dp(4))
+                            }
+                            val bubbleContainer = vertical().apply {
+                                gravity = Gravity.END
+                            }
+                            val bubble = vertical().apply {
+                                background = GradientDrawable().apply {
+                                    setColor(Color.rgb(21, 28, 50)) // Deep navy UI brand color
+                                    cornerRadii = floatArrayOf(
+                                        dp(18).toFloat(), dp(18).toFloat(),
+                                        dp(18).toFloat(), dp(18).toFloat(),
+                                        dp(4).toFloat(), dp(4).toFloat(),
+                                        dp(18).toFloat(), dp(18).toFloat()
+                                    )
+                                }
+                                setPadding(dp(14), dp(10), dp(14), dp(10))
+                                if (msg.mediaUrl.isNotBlank()) {
+                                    val iv = ImageView(this@MemberActivity).apply {
+                                        scaleType = ImageView.ScaleType.CENTER_CROP
+                                        outlineProvider = object : ViewOutlineProvider() {
+                                            override fun getOutline(view: View, outline: Outline) {
+                                                outline.setRoundRect(0, 0, view.width, view.height, dp(12).toFloat())
+                                            }
+                                        }
+                                        clipToOutline = true
+                                    }
+                                    add(iv, maxBubbleWidth - dp(28), dp(180))
+                                    ImageLoader.loadProfilePhoto(iv, msg.mediaUrl)
+                                    if (msg.text.isNotBlank()) space(6)
+                                }
+                                if (msg.text.isNotBlank()) {
+                                    add(text(msg.text, 14, Color.WHITE).apply {
+                                        maxWidth = maxBubbleWidth - dp(28)
+                                    })
+                                }
+                            }
+                            bubbleContainer.addView(bubble, LinearLayout.LayoutParams(
+                                ViewGroup.LayoutParams.WRAP_CONTENT,
+                                ViewGroup.LayoutParams.WRAP_CONTENT
+                            ).apply { gravity = Gravity.END })
+
+                            val timeStr = timeFormat.format(java.util.Date(msg.timestamp))
+                            val caption = text(timeStr, 10, Color.rgb(148, 163, 184)).apply {
+                                setPadding(0, dp(2), dp(4), 0)
+                            }
+                            bubbleContainer.addView(caption, LinearLayout.LayoutParams(
+                                ViewGroup.LayoutParams.WRAP_CONTENT,
+                                ViewGroup.LayoutParams.WRAP_CONTENT
+                            ).apply { gravity = Gravity.END })
+
+                            row.addView(bubbleContainer, LinearLayout.LayoutParams(
+                                ViewGroup.LayoutParams.WRAP_CONTENT,
+                                ViewGroup.LayoutParams.WRAP_CONTENT
+                            ))
+                            col.add(row, -1, -2)
+                        } else {
+                            // Incoming message (Left-aligned, Light Gray bubble, Teammate Avatar, Dark Navy text)
+                            val row = horizontal().apply {
+                                gravity = Gravity.START
+                                setPadding(0, dp(4), 0, dp(4))
+                            }
+                            val pUri = msg.senderPhotoUri.ifBlank {
+                                getActiveRoster().find { it.uid == msg.senderUid || it.fullName.equals(msg.senderName, true) || it.username.equals(msg.senderName, true) }?.photoUri ?: ""
+                            }
+                            row.add(memberAvatarView(pUri, 32), 32, 32)
+
+                            val bubbleContainer = vertical().apply {
+                                setPadding(dp(8), 0, 0, 0)
+                                gravity = Gravity.START
+                            }
+                            val senderLabel = msg.senderName.ifBlank { "Teammate" } + (if (msg.senderRole.isNotBlank()) " • ${msg.senderRole}" else "")
+                            bubbleContainer.add(text(senderLabel, 11, Color.rgb(100, 116, 139), bold = true).apply {
+                                setPadding(dp(4), 0, 0, dp(2))
+                            })
+
+                            val bubble = vertical().apply {
+                                background = GradientDrawable().apply {
+                                    setColor(Color.rgb(241, 245, 249)) // Soft light gray
+                                    cornerRadii = floatArrayOf(
+                                        dp(18).toFloat(), dp(18).toFloat(),
+                                        dp(18).toFloat(), dp(18).toFloat(),
+                                        dp(18).toFloat(), dp(18).toFloat(),
+                                        dp(4).toFloat(), dp(4).toFloat()
+                                    )
+                                }
+                                setPadding(dp(14), dp(10), dp(14), dp(10))
+                                if (msg.mediaUrl.isNotBlank()) {
+                                    val iv = ImageView(this@MemberActivity).apply {
+                                        scaleType = ImageView.ScaleType.CENTER_CROP
+                                        outlineProvider = object : ViewOutlineProvider() {
+                                            override fun getOutline(view: View, outline: Outline) {
+                                                outline.setRoundRect(0, 0, view.width, view.height, dp(12).toFloat())
+                                            }
+                                        }
+                                        clipToOutline = true
+                                    }
+                                    add(iv, maxBubbleWidth - dp(28), dp(180))
+                                    ImageLoader.loadProfilePhoto(iv, msg.mediaUrl)
+                                    if (msg.text.isNotBlank()) space(6)
+                                }
+                                if (msg.text.isNotBlank()) {
+                                    add(text(msg.text, 14, Color.rgb(21, 28, 50)).apply {
+                                        maxWidth = maxBubbleWidth - dp(28)
+                                    })
+                                }
+                            }
+                            bubbleContainer.addView(bubble, LinearLayout.LayoutParams(
+                                ViewGroup.LayoutParams.WRAP_CONTENT,
+                                ViewGroup.LayoutParams.WRAP_CONTENT
+                            ).apply { gravity = Gravity.START })
+
+                            val timeStr = timeFormat.format(java.util.Date(msg.timestamp))
+                            val caption = text(timeStr, 10, Color.rgb(148, 163, 184)).apply {
+                                setPadding(dp(4), dp(2), 0, 0)
+                            }
+                            bubbleContainer.addView(caption, LinearLayout.LayoutParams(
+                                ViewGroup.LayoutParams.WRAP_CONTENT,
+                                ViewGroup.LayoutParams.WRAP_CONTENT
+                            ).apply { gravity = Gravity.START })
+
+                            row.addView(bubbleContainer, LinearLayout.LayoutParams(
+                                ViewGroup.LayoutParams.WRAP_CONTENT,
+                                ViewGroup.LayoutParams.WRAP_CONTENT
+                            ))
+                            col.add(row, -1, -2)
+                        }
+                    }
                 }
             }
         }
@@ -3646,7 +3894,7 @@ open class MemberActivity : AppCompatActivity() {
                 @Suppress("DEPRECATION")
                 startActivityForResult(intent, 301)
             }
-            composer.add(text("⊕", 30, Color.BLACK, centered = true).apply {
+            composer.add(text("+", 28, Color.BLACK, centered = true).apply {
                 contentDescription = "Add attachment"; isFocusable = true
                 setOnClickListener { choosePhoto() }
             }, 36, 44)
@@ -3662,8 +3910,27 @@ open class MemberActivity : AppCompatActivity() {
             val send = text("☺", 24, Color.BLACK, centered = true).apply {
                 contentDescription = "Insert emoji or send message"; isFocusable = true
                 setOnClickListener {
-                    if (message.text.isBlank()) { message.setText("🙂"); message.setSelection(message.text.length) }
-                    else { chatMessages.add(message.text.toString().trim()); navigate("teams") }
+                    if (message.text.isBlank()) {
+                        message.setText("🙂")
+                        message.setSelection(message.text.length)
+                    } else {
+                        val textToSend = message.text.toString().trim()
+                        val currentUid = preferences.getString(SessionManager.KEY_USER_ID, "").orEmpty()
+                        val currentPhoto = preferences.getString("photoUri", "").orEmpty()
+                        val newMsg = ChatMessage(
+                            id = java.util.UUID.randomUUID().toString(),
+                            teamCode = currentCode,
+                            senderUid = currentUid,
+                            senderName = fullName.ifBlank { displayName.ifBlank { "Member" } },
+                            senderRole = preferences.getString("ministryRole", "Member").orEmpty(),
+                            senderPhotoUri = currentPhoto,
+                            text = textToSend,
+                            timestamp = System.currentTimeMillis()
+                        )
+                        chatMessages.add(newMsg)
+                        TeamRepository.sendChatMessage(currentCode, newMsg, preferences)
+                        navigate("teams")
+                    }
                 }
             }
             entry.add(send, 40, 44)
@@ -3671,7 +3938,7 @@ open class MemberActivity : AppCompatActivity() {
                 override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
                 override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
                     send.text = if (s.isNullOrBlank()) "☺" else "➤"
-                    send.contentDescription = if (s.isNullOrBlank()) "Insert emoji" else "Send demo message"
+                    send.contentDescription = if (s.isNullOrBlank()) "Insert emoji" else "Send message"
                 }
                 override fun afterTextChanged(s: android.text.Editable?) {}
             })

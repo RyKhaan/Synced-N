@@ -8,7 +8,6 @@ import android.graphics.Paint
 import android.graphics.PorterDuff
 import android.graphics.PorterDuffXfermode
 import android.graphics.Rect
-import android.graphics.RectF
 import android.net.Uri
 import android.os.Handler
 import android.os.Looper
@@ -16,19 +15,21 @@ import android.util.Log
 import android.util.LruCache
 import android.widget.ImageView
 import androidx.core.net.toUri
-import java.io.InputStream
+import java.io.File
+import java.io.FileOutputStream
 import java.net.HttpURLConnection
 import java.net.URL
 import java.util.concurrent.Executors
 
 /**
- * High-performance image loading and caching utility for Synced N.
- * Handles both remote Cloudinary HTTPS URLs and local content:// URIs with circular cropping and memory caching.
+ * High-performance image loading and multi-tier caching utility for Synced N.
+ * Features an in-memory LruCache, synchronous local disk cache to eliminate UI flicker ("pitik"),
+ * and background download pipeline.
  */
 object ImageLoader {
     private const val TAG = "ImageLoader"
 
-    // Allocate 1/8th of available runtime memory for image cache
+    // Allocate 1/8th of available runtime memory for memory cache
     private val maxMemory = (Runtime.getRuntime().maxMemory() / 1024).toInt()
     private val cacheSize = (maxMemory / 8).coerceAtLeast(4096)
 
@@ -41,9 +42,70 @@ object ImageLoader {
     private val executor = Executors.newFixedThreadPool(4)
     private val mainHandler = Handler(Looper.getMainLooper())
 
+    private fun getCacheFile(context: Context, key: String): File {
+        val dir = File(context.cacheDir, "avatar_cache").apply { if (!exists()) mkdirs() }
+        val safeName = key.hashCode().toString() + "_" + key.takeLast(16).replace(Regex("[^a-zA-Z0-9]"), "") + ".png"
+        return File(dir, safeName)
+    }
+
+    private fun saveToDisk(file: File, bitmap: Bitmap) {
+        try {
+            FileOutputStream(file).use { out ->
+                bitmap.compress(Bitmap.CompressFormat.PNG, 100, out)
+            }
+        } catch (_: Exception) {}
+    }
+
+    private fun loadFromDisk(file: File): Bitmap? {
+        return try {
+            if (file.exists() && file.length() > 0) {
+                BitmapFactory.decodeFile(file.absolutePath)
+            } else null
+        } catch (_: Exception) { null }
+    }
+
+    /**
+     * Synchronously retrieves a cached profile bitmap from memory or fast local disk cache.
+     * Returns null if not cached yet. Allows views to render immediately without flickering.
+     */
+    fun getCachedProfileBitmap(context: Context, uriString: String?, circular: Boolean = true): Bitmap? {
+        if (uriString.isNullOrBlank()) return null
+        val trimmedUri = uriString.trim()
+        val cacheKey = if (circular) "circle_$trimmedUri" else trimmedUri
+
+        // 1. Memory cache check
+        val memBitmap = memoryCache.get(cacheKey)
+        if (memBitmap != null && !memBitmap.isRecycled) {
+            return memBitmap
+        }
+
+        // 2. Disk cache check
+        val diskFile = getCacheFile(context, cacheKey)
+        val diskBitmap = loadFromDisk(diskFile)
+        if (diskBitmap != null && !diskBitmap.isRecycled) {
+            memoryCache.put(cacheKey, diskBitmap)
+            return diskBitmap
+        }
+
+        return null
+    }
+
+    /**
+     * Pre-seeds both memory and disk caches with a known bitmap.
+     */
+    fun preseedCache(context: Context, uriString: String, bitmap: Bitmap, circular: Boolean = true) {
+        val trimmedUri = uriString.trim()
+        val cacheKey = if (circular) "circle_$trimmedUri" else trimmedUri
+        val finalBitmap = if (circular) getCircularBitmap(bitmap) else bitmap
+        memoryCache.put(cacheKey, finalBitmap)
+        executor.execute {
+            saveToDisk(getCacheFile(context, cacheKey), finalBitmap)
+        }
+    }
+
     /**
      * Loads a profile photo into an [ImageView].
-     * Supports HTTPS URLs, local content URIs, and handles circular cropping.
+     * Renders synchronously if in memory or on disk; otherwise loads in background.
      */
     fun loadProfilePhoto(
         imageView: ImageView,
@@ -59,17 +121,27 @@ object ImageLoader {
         val trimmedUri = uriString.trim()
         val cacheKey = if (circular) "circle_$trimmedUri" else trimmedUri
 
-        // 1. Check memory cache
+        // 1. Check memory cache (0ms)
         val cachedBitmap = memoryCache.get(cacheKey)
         if (cachedBitmap != null && !cachedBitmap.isRecycled) {
             imageView.setImageBitmap(cachedBitmap)
             return
         }
 
+        // 2. Check disk cache (<1ms synchronous read)
+        val diskFile = getCacheFile(imageView.context, cacheKey)
+        val diskBitmap = loadFromDisk(diskFile)
+        if (diskBitmap != null && !diskBitmap.isRecycled) {
+            memoryCache.put(cacheKey, diskBitmap)
+            imageView.setImageBitmap(diskBitmap)
+            return
+        }
+
+        // 3. Fallback placeholder while fetching
         placeholderResId?.let { imageView.setImageResource(it) }
         imageView.tag = trimmedUri
 
-        // 2. Fetch asynchronously
+        // 4. Fetch asynchronously
         executor.execute {
             val bitmap = try {
                 when {
@@ -89,6 +161,7 @@ object ImageLoader {
             if (bitmap != null) {
                 val finalBitmap = if (circular) getCircularBitmap(bitmap) else bitmap
                 memoryCache.put(cacheKey, finalBitmap)
+                saveToDisk(diskFile, finalBitmap)
 
                 mainHandler.post {
                     if (imageView.tag == trimmedUri) {
@@ -167,9 +240,14 @@ object ImageLoader {
     }
 
     /**
-     * Clears in-memory image cache.
+     * Clears in-memory and disk image cache.
      */
-    fun clearCache() {
+    fun clearCache(context: Context? = null) {
         memoryCache.evictAll()
+        if (context != null) {
+            try {
+                File(context.cacheDir, "avatar_cache").deleteRecursively()
+            } catch (_: Exception) {}
+        }
     }
 }
