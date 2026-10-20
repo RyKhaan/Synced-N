@@ -1,0 +1,154 @@
+<?xml version="1.0" ?>
+<mxfile host="app.diagrams.net" agent="Synced N UML" version="24.0.0" type="device">
+  <diagram id="Synced_N_Activity_7_Team_Member_Role_Management" name="ACTIVITY DIAGRAM 7: TEAM MEMBER &amp; MINISTRY ROLE MANAGEMENT">
+    <mxGraphModel dx="1900" dy="1377" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1900" pageHeight="1377" background="#FFFFFF" math="0" shadow="0">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+        <mxCell id="title" value="&lt;b style='font-size:22px'&gt;ACTIVITY DIAGRAM 7: TEAM MEMBER &amp;amp; MINISTRY ROLE MANAGEMENT&lt;/b&gt;&lt;br&gt;&lt;span style='font-size:13px;color:#475569'&gt;Assigning Member Ministry Roles, Customizing Team Roles, Removing Members &amp;amp; Leaving Team (TeamRepository)&lt;/span&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#374151;strokeWidth=1.5;fontFamily=Arial;fontColor=#1F2937;align=center;verticalAlign=middle;" parent="1" vertex="1">
+          <mxGeometry x="40.0" y="40.0" width="1820.0" height="92.0" as="geometry"/>
+        </mxCell>
+        <mxCell id="lane_actor" value="Ministry Leader / Member" style="swimlane;startSize=46;html=1;whiteSpace=wrap;fillColor=#DBEAFE;swimlaneFillColor=#FFFFFF;strokeColor=#374151;strokeWidth=1.5;fontStyle=1;fontSize=15;fontFamily=Arial;fontColor=#1D4ED8;collapsible=0;container=0;" parent="1" vertex="1">
+          <mxGeometry x="40.0" y="150.0" width="580.0" height="1187.0" as="geometry"/>
+        </mxCell>
+        <mxCell id="lane_app" value="Synced N Android Application (Teams &amp;amp; Role Editor UI)" style="swimlane;startSize=46;html=1;whiteSpace=wrap;fillColor=#EDE9FE;swimlaneFillColor=#FFFFFF;strokeColor=#374151;strokeWidth=1.5;fontStyle=1;fontSize=15;fontFamily=Arial;fontColor=#6D28D9;collapsible=0;container=0;" parent="1" vertex="1">
+          <mxGeometry x="620.0" y="150.0" width="660.0" height="1187.0" as="geometry"/>
+        </mxCell>
+        <mxCell id="lane_cloud" value="Cloud Firestore (/users/{uid} &amp;amp; /teams/{teamCode})" style="swimlane;startSize=46;html=1;whiteSpace=wrap;fillColor=#DCFCE7;swimlaneFillColor=#FFFFFF;strokeColor=#374151;strokeWidth=1.5;fontStyle=1;fontSize=15;fontFamily=Arial;fontColor=#15803D;collapsible=0;container=0;" parent="1" vertex="1">
+          <mxGeometry x="1280.0" y="150.0" width="580.0" height="1187.0" as="geometry"/>
+        </mxCell>
+        <mxCell id="start" value="" style="ellipse;html=1;fillColor=#111827;strokeColor=#111827;" parent="1" vertex="1">
+          <mxGeometry x="315.0" y="237.0" width="30.0" height="30.0" as="geometry"/>
+        </mxCell>
+        <mxCell id="open" value="Open Teams / Team Details Screen" style="rounded=1;arcSize=30;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#374151;strokeWidth=1.6;fontFamily=Arial;fontSize=13;fontColor=#1F2937;" parent="1" vertex="1">
+          <mxGeometry x="175.0" y="334.0" width="310.0" height="60.0" as="geometry"/>
+        </mxCell>
+        <mxCell id="fetch" value="Fetch &amp;amp; Cache Team Roster&lt;br&gt;(TeamRepository.getTeamRoster)" style="rounded=1;arcSize=30;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#374151;strokeWidth=1.6;fontFamily=Arial;fontSize=13;fontColor=#1F2937;" parent="1" vertex="1">
+          <mxGeometry x="780.0" y="334.0" width="340.0" height="60.0" as="geometry"/>
+        </mxCell>
+        <mxCell id="act" value="Management&lt;br&gt;Action?" style="rhombus;whiteSpace=wrap;html=1;fillColor=#FFFBEB;strokeColor=#374151;strokeWidth=1.6;fontFamily=Arial;fontSize=12;fontColor=#1F2937;" parent="1" vertex="1">
+          <mxGeometry x="861.0" y="434.0" width="178.0" height="84.0" as="geometry"/>
+        </mxCell>
+        <mxCell id="r_sel" value="Select Team Member &amp;amp; Choose&lt;br&gt;Ministry Role on Role Edit Screen" style="rounded=1;arcSize=30;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#374151;strokeWidth=1.6;fontFamily=Arial;fontSize=13;fontColor=#1F2937;" parent="1" vertex="1">
+          <mxGeometry x="165.0" y="558.0" width="330.0" height="60.0" as="geometry"/>
+        </mxCell>
+        <mxCell id="r_loc" value="Update Roster Cache &amp;amp; Preferences&lt;br&gt;(updateMemberMinistryRole)" style="rounded=1;arcSize=30;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#374151;strokeWidth=1.6;fontFamily=Arial;fontSize=13;fontColor=#1F2937;" parent="1" vertex="1">
+          <mxGeometry x="780.0" y="558.0" width="340.0" height="60.0" as="geometry"/>
+        </mxCell>
+        <mxCell id="r_db" value="Update ministryRole Field in&lt;br&gt;/users/{memberUid} Document" style="rounded=1;arcSize=30;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#374151;strokeWidth=1.6;fontFamily=Arial;fontSize=13;fontColor=#1F2937;" parent="1" vertex="1">
+          <mxGeometry x="1405.0" y="558.0" width="330.0" height="60.0" as="geometry"/>
+        </mxCell>
+        <mxCell id="r_ok" value="Show &amp;#x27;Member role updated&amp;#x27; &amp;amp;&lt;br&gt;Refresh Team Roster" style="rounded=1;arcSize=30;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#374151;strokeWidth=1.6;fontFamily=Arial;fontSize=13;fontColor=#1F2937;" parent="1" vertex="1">
+          <mxGeometry x="1405.0" y="670.0" width="330.0" height="60.0" as="geometry"/>
+        </mxCell>
+        <mxCell id="c_ed" value="Edit Team Role List on&lt;br&gt;Team Roles Screen &amp;amp; Tap Save" style="rounded=1;arcSize=30;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#374151;strokeWidth=1.6;fontFamily=Arial;fontSize=13;fontColor=#1F2937;" parent="1" vertex="1">
+          <mxGeometry x="170.0" y="782.0" width="320.0" height="60.0" as="geometry"/>
+        </mxCell>
+        <mxCell id="c_loc" value="Validate Non-Empty List &amp;amp; Cache&lt;br&gt;Roles (saveTeamCustomRoles)" style="rounded=1;arcSize=30;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#374151;strokeWidth=1.6;fontFamily=Arial;fontSize=13;fontColor=#1F2937;" parent="1" vertex="1">
+          <mxGeometry x="780.0" y="782.0" width="340.0" height="60.0" as="geometry"/>
+        </mxCell>
+        <mxCell id="c_db" value="Merge Custom roles Array into&lt;br&gt;/teams/{teamCode} Document" style="rounded=1;arcSize=30;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#374151;strokeWidth=1.6;fontFamily=Arial;fontSize=13;fontColor=#1F2937;" parent="1" vertex="1">
+          <mxGeometry x="1405.0" y="782.0" width="330.0" height="60.0" as="geometry"/>
+        </mxCell>
+        <mxCell id="m_rem" value="Select &amp;#x27;Remove Member&amp;#x27; (Leader)&lt;br&gt;or &amp;#x27;Leave Team&amp;#x27; &amp;amp; Confirm Dialog" style="rounded=1;arcSize=30;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#374151;strokeWidth=1.6;fontFamily=Arial;fontSize=13;fontColor=#1F2937;" parent="1" vertex="1">
+          <mxGeometry x="165.0" y="1006.0" width="330.0" height="60.0" as="geometry"/>
+        </mxCell>
+        <mxCell id="m_loc" value="Evict User from Local Roster&lt;br&gt;Cache (removeMemberFromTeam)" style="rounded=1;arcSize=30;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#374151;strokeWidth=1.6;fontFamily=Arial;fontSize=13;fontColor=#1F2937;" parent="1" vertex="1">
+          <mxGeometry x="780.0" y="1006.0" width="340.0" height="60.0" as="geometry"/>
+        </mxCell>
+        <mxCell id="m_db" value="Reset /users/{uid} Fields&lt;br&gt;(teamCode=&amp;#x27;&amp;#x27;, teamName=&amp;#x27;&amp;#x27;, role=&amp;#x27;Member&amp;#x27;)" style="rounded=1;arcSize=30;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#374151;strokeWidth=1.6;fontFamily=Arial;fontSize=13;fontColor=#1F2937;" parent="1" vertex="1">
+          <mxGeometry x="1395.0" y="1006.0" width="350.0" height="60.0" as="geometry"/>
+        </mxCell>
+        <mxCell id="m_ui" value="Refresh Roster (or Redirect&lt;br&gt;Leaving User to Team Choice)" style="rounded=1;arcSize=30;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#374151;strokeWidth=1.6;fontFamily=Arial;fontSize=13;fontColor=#1F2937;" parent="1" vertex="1">
+          <mxGeometry x="780.0" y="1118.0" width="340.0" height="60.0" as="geometry"/>
+        </mxCell>
+        <mxCell id="end" value="" style="ellipse;html=1;shape=endState;fillColor=#111827;strokeColor=#111827;strokeWidth=1.6;" parent="1" vertex="1">
+          <mxGeometry x="933.0" y="1243.0" width="34.0" height="34.0" as="geometry"/>
+        </mxCell>
+        <mxCell id="e0" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#374151;strokeWidth=1.6;endArrow=open;endSize=10;fontFamily=Arial;fontSize=12;fontColor=#1F2937;labelBackgroundColor=#FFFFFF;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="start" target="open">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e1" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#374151;strokeWidth=1.6;endArrow=open;endSize=10;fontFamily=Arial;fontSize=12;fontColor=#1F2937;labelBackgroundColor=#FFFFFF;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="open" target="fetch">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e2" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#374151;strokeWidth=1.6;endArrow=open;endSize=10;fontFamily=Arial;fontSize=12;fontColor=#1F2937;labelBackgroundColor=#FFFFFF;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="fetch" target="act">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e3" value="[Assign Role]" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#374151;strokeWidth=1.6;endArrow=open;endSize=10;fontFamily=Arial;fontSize=12;fontColor=#1F2937;labelBackgroundColor=#FFFFFF;exitX=0;exitY=0.5;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="act" target="r_sel">
+          <mxGeometry relative="1" as="geometry" x="-0.6">
+            <Array as="points">
+              <mxPoint x="330.0" y="476.0"/>
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e4" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#374151;strokeWidth=1.6;endArrow=open;endSize=10;fontFamily=Arial;fontSize=12;fontColor=#1F2937;labelBackgroundColor=#FFFFFF;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="r_sel" target="r_loc">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e5" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#374151;strokeWidth=1.6;endArrow=open;endSize=10;fontFamily=Arial;fontSize=12;fontColor=#1F2937;labelBackgroundColor=#FFFFFF;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="r_loc" target="r_db">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e6" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#374151;strokeWidth=1.6;endArrow=open;endSize=10;fontFamily=Arial;fontSize=12;fontColor=#1F2937;labelBackgroundColor=#FFFFFF;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="r_db" target="r_ok">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e7" value="[Custom Roles]" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#374151;strokeWidth=1.6;endArrow=open;endSize=10;fontFamily=Arial;fontSize=12;fontColor=#1F2937;labelBackgroundColor=#FFFFFF;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="act" target="c_ed">
+          <mxGeometry relative="1" as="geometry" x="-0.6">
+            <Array as="points">
+              <mxPoint x="950.0" y="542.0"/>
+              <mxPoint x="560.0" y="542.0"/>
+              <mxPoint x="560.0" y="756.0"/>
+              <mxPoint x="330.0" y="756.0"/>
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e8" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#374151;strokeWidth=1.6;endArrow=open;endSize=10;fontFamily=Arial;fontSize=12;fontColor=#1F2937;labelBackgroundColor=#FFFFFF;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="c_ed" target="c_loc">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e9" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#374151;strokeWidth=1.6;endArrow=open;endSize=10;fontFamily=Arial;fontSize=12;fontColor=#1F2937;labelBackgroundColor=#FFFFFF;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="c_loc" target="c_db">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e10" value="[Remove / Leave]" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#374151;strokeWidth=1.6;endArrow=open;endSize=10;fontFamily=Arial;fontSize=12;fontColor=#1F2937;labelBackgroundColor=#FFFFFF;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="act" target="m_rem">
+          <mxGeometry relative="1" as="geometry" x="-0.6">
+            <Array as="points">
+              <mxPoint x="1160.0" y="476.0"/>
+              <mxPoint x="1160.0" y="420.0"/>
+              <mxPoint x="80.0" y="420.0"/>
+              <mxPoint x="80.0" y="1036.0"/>
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e11" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#374151;strokeWidth=1.6;endArrow=open;endSize=10;fontFamily=Arial;fontSize=12;fontColor=#1F2937;labelBackgroundColor=#FFFFFF;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="m_rem" target="m_loc">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e12" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#374151;strokeWidth=1.6;endArrow=open;endSize=10;fontFamily=Arial;fontSize=12;fontColor=#1F2937;labelBackgroundColor=#FFFFFF;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="m_loc" target="m_db">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e13" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#374151;strokeWidth=1.6;endArrow=open;endSize=10;fontFamily=Arial;fontSize=12;fontColor=#1F2937;labelBackgroundColor=#FFFFFF;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=1;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="m_db" target="m_ui">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1570.0" y="1148.0"/>
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e14" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#374151;strokeWidth=1.6;endArrow=open;endSize=10;fontFamily=Arial;fontSize=12;fontColor=#1F2937;labelBackgroundColor=#FFFFFF;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=1;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="r_ok" target="end">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1795.0" y="700.0"/>
+              <mxPoint x="1795.0" y="1260.0"/>
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e15" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#374151;strokeWidth=1.6;endArrow=open;endSize=10;fontFamily=Arial;fontSize=12;fontColor=#1F2937;labelBackgroundColor=#FFFFFF;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=1;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="c_db" target="end">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1795.0" y="812.0"/>
+              <mxPoint x="1795.0" y="1260.0"/>
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e16" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#374151;strokeWidth=1.6;endArrow=open;endSize=10;fontFamily=Arial;fontSize=12;fontColor=#1F2937;labelBackgroundColor=#FFFFFF;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="m_ui" target="end">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
