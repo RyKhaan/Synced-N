@@ -1805,6 +1805,67 @@ class ExampleUnitTest {
         assertEquals("DECLINED", badgeLabel(declined!!.status))
     }
 
+    @Test
+    fun testPhotoUriSerializationAndSessionManagement() {
+        val testUrl = "https://res.cloudinary.com/ffb3fdkm/image/upload/v1234567890/synced_avatar.jpg"
+
+        // 1. UserProfile serialization with photoUri
+        val profile = com.example.syncedn.data.model.UserProfile(
+            uid = "user_photo_test_123",
+            username = "TestLeader",
+            email = "leader@test.com",
+            role = "Leader",
+            teamName = "Praise Team",
+            teamCode = "TEST01",
+            photoUri = testUrl
+        )
+        val profileMap = profile.toMap()
+        assertEquals(testUrl, profileMap["photoUri"])
+
+        val restoredProfile = com.example.syncedn.data.model.UserProfile.fromMap(profileMap)
+        assertEquals(testUrl, restoredProfile.photoUri)
+
+        // 2. TeamMember serialization with photoUri
+        val member = com.example.syncedn.data.model.TeamMember(
+            uid = "member_photo_test_456",
+            fullName = "John Worship",
+            username = "johnw",
+            email = "john@test.com",
+            role = "Member",
+            ministryRole = "Vocalist",
+            teamCode = "TEST01",
+            photoUri = testUrl
+        )
+        val memberMap = member.toMap()
+        assertEquals(testUrl, memberMap["photoUri"])
+
+        val restoredMember = com.example.syncedn.data.model.TeamMember.fromMap(memberMap)
+        assertEquals(testUrl, restoredMember.photoUri)
+
+        // 3. SessionManager photoUri persistence and user-scoped caching
+        val prefs = FakePreferences()
+        com.example.syncedn.data.auth.SessionManager.saveSessionProfile(
+            prefs,
+            profile,
+            fallbackUsername = "TestLeader",
+            fallbackEmail = "leader@test.com"
+        )
+        assertEquals(testUrl, prefs.getString(com.example.syncedn.data.auth.SessionManager.KEY_PHOTO_URI, ""))
+        assertEquals(testUrl, prefs.getString("email_photo_leader@test.com", ""))
+        assertEquals(testUrl, prefs.getString("user_photo_user_photo_test_123", ""))
+
+        // 4. SessionManager.updatePhotoUri
+        val updatedUrl = "https://res.cloudinary.com/ffb3fdkm/image/upload/v9876543210/new_avatar.jpg"
+        com.example.syncedn.data.auth.SessionManager.updatePhotoUri(prefs, updatedUrl, "leader@test.com", "user_photo_test_123")
+        assertEquals(updatedUrl, prefs.getString(com.example.syncedn.data.auth.SessionManager.KEY_PHOTO_URI, ""))
+        assertEquals(updatedUrl, prefs.getString("email_photo_leader@test.com", ""))
+        assertEquals(updatedUrl, prefs.getString("user_photo_user_photo_test_123", ""))
+
+        // 5. Cloudinary config sanity
+        assertEquals("ffb3fdkm", com.example.syncedn.data.storage.CloudinaryUploader.CLOUD_NAME)
+        assertEquals("synced_preset", com.example.syncedn.data.storage.CloudinaryUploader.UPLOAD_PRESET)
+    }
+
     private class FakePreferences : android.content.SharedPreferences {
         private val map = mutableMapOf<String, Any?>()
 
