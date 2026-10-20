@@ -1820,9 +1820,13 @@ open class MemberActivity : AppCompatActivity() {
             navigate("teams")
 
             toast("Uploading photo to chat...")
-            CloudinaryUploader.uploadProfileImage(this, uri) { result ->
+            CloudinaryUploader.uploadProfileImage(this, uri, maxDimension = 800) { result ->
                 result.onSuccess { remoteUrl ->
                     val remoteMsg = localMsg.copy(mediaUrl = remoteUrl)
+                    val idx = chatMessages.indexOfFirst { it.id == localMsgId }
+                    if (idx >= 0) {
+                        chatMessages[idx] = remoteMsg
+                    }
                     TeamRepository.sendChatMessage(currentCode, remoteMsg, preferences)
                 }.onFailure { err ->
                     TeamRepository.sendChatMessage(currentCode, localMsg, preferences)
@@ -1834,7 +1838,7 @@ open class MemberActivity : AppCompatActivity() {
         if(requestCode==300 && resultCode==RESULT_OK) {
             val uri=data?.data ?: return
             try {
-                contentResolver.takePersistableUriPermission(uri,Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                try { contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) } catch(_: Exception) {}
                 val localUriStr = uri.toString()
                 val currentEmail = preferences.getString(SessionManager.KEY_EMAIL, "").orEmpty()
                 val uid = preferences.getString(SessionManager.KEY_USER_ID, "").orEmpty()
@@ -1844,7 +1848,7 @@ open class MemberActivity : AppCompatActivity() {
                 toast("Uploading photo...")
                 CloudinaryUploader.uploadProfileImage(this, uri) { result ->
                     result.onSuccess { remoteUrl ->
-                        toast("Profile photo uploaded!")
+                        toast("Profile photo uploaded to Cloudinary!")
                         SessionManager.updatePhotoUri(preferences, remoteUrl, currentEmail, uid)
                         val activeCode = preferences.getString(SessionManager.KEY_TEAM_CODE, "").orEmpty()
                         val activeRole = preferences.getString(SessionManager.KEY_ROLE, "Member").orEmpty()
@@ -2147,6 +2151,27 @@ open class MemberActivity : AppCompatActivity() {
                 centerX + size * 0.28f, centerY + size * 0.42f, ink)
         }
     }
+    private fun findMemberPhotoUri(uid: String? = null, name: String? = null, email: String? = null): String {
+        val roster = getActiveRoster()
+        val match = roster.find {
+            (it.uid.isNotBlank() && uid != null && it.uid == uid) ||
+            (it.email.isNotBlank() && email != null && it.email.equals(email, true)) ||
+            (it.fullName.isNotBlank() && name != null && it.fullName.equals(name, true)) ||
+            (it.username.isNotBlank() && name != null && it.username.equals(name, true))
+        }
+        if (!match?.photoUri.isNullOrBlank()) return match!!.photoUri
+        val currentUid = preferences.getString(SessionManager.KEY_USER_ID, "").orEmpty()
+        val currentEmail = preferences.getString(SessionManager.KEY_EMAIL, "").orEmpty()
+        val currentName = fullName.ifBlank { displayName }
+        if ((uid != null && uid == currentUid) ||
+            (email != null && email.equals(currentEmail, true)) ||
+            (name != null && (name.equals(currentName, true) || name.equals(displayName, true)))) {
+            return preferences.getString(SessionManager.KEY_PHOTO_URI, "").orEmpty().ifBlank {
+                preferences.getString("photoUri", "").orEmpty()
+            }
+        }
+        return ""
+    }
     private fun memberAvatarView(photoUri: String? = null, sizeDp: Int = 44): View {
         val uri = photoUri?.takeIf { it.isNotBlank() }
         val cached = if (uri != null) ImageLoader.getCachedProfileBitmap(this, uri) else null
@@ -2179,9 +2204,10 @@ open class MemberActivity : AppCompatActivity() {
         return memberAvatar()
     }
     private fun memberRow(name: String, role: String, badge: String? = null,
-                          onClick: (() -> Unit)? = null, photoUri: String? = null): View = horizontal().apply {
+                          onClick: (() -> Unit)? = null, photoUri: String? = null, uid: String? = null): View = horizontal().apply {
         setPadding(0, dp(8), 0, dp(8))
-        add(memberAvatarView(photoUri, 48), 48, 48)
+        val resolvedPhoto = photoUri?.takeIf { it.isNotBlank() } ?: findMemberPhotoUri(uid, name)
+        add(memberAvatarView(resolvedPhoto, 48), 48, 48)
         val info = vertical().apply {
             setPadding(dp(12), 0, dp(8), 0)
             add(text(name, 13, navy, true)); space(3); add(text(role, 12, Color.DKGRAY))
@@ -2718,13 +2744,18 @@ open class MemberActivity : AppCompatActivity() {
                 val item = assignments.getJSONObject(index)
                 val name = item.optString("name", "Member")
                 val role = item.optString("role", "Musician")
+                val uid = item.optString("uid")
+                val photoUri = item.optString("photoUri").ifBlank { findMemberPhotoUri(uid, name) }
                 val isLeaderUser = item.optString("role").equals("Worship Leader", true)
                 val badge = if (isLeaderUser) "Leader" else null
-                col.add(memberRow(name, role, badge))
+                col.add(memberRow(name, role, badge, photoUri = photoUri, uid = uid))
                 col.space(8)
             }
         } else {
-            ministryMembers.take(4).forEach { (name, role, badge) -> col.add(memberRow(name, role, badge)) }
+            ministryMembers.take(4).forEach { (name, role, badge) ->
+                val photoUri = findMemberPhotoUri(name = name)
+                col.add(memberRow(name, role, badge, photoUri = photoUri))
+            }
         }
         col.space(28)
         col.add(memberButton("Request Substitution") { navigate("substitution") }, -1, 48)
@@ -3783,8 +3814,8 @@ open class MemberActivity : AppCompatActivity() {
                                         }
                                         clipToOutline = true
                                     }
-                                    add(iv, maxBubbleWidth - dp(28), dp(180))
-                                    ImageLoader.loadProfilePhoto(iv, msg.mediaUrl)
+                                    add(iv, 220, 180)
+                                    ImageLoader.loadProfilePhoto(iv, msg.mediaUrl, circular = false)
                                     if (msg.text.isNotBlank()) space(6)
                                 }
                                 if (msg.text.isNotBlank()) {
@@ -3853,8 +3884,8 @@ open class MemberActivity : AppCompatActivity() {
                                         }
                                         clipToOutline = true
                                     }
-                                    add(iv, maxBubbleWidth - dp(28), dp(180))
-                                    ImageLoader.loadProfilePhoto(iv, msg.mediaUrl)
+                                    add(iv, 220, 180)
+                                    ImageLoader.loadProfilePhoto(iv, msg.mediaUrl, circular = false)
                                     if (msg.text.isNotBlank()) space(6)
                                 }
                                 if (msg.text.isNotBlank()) {

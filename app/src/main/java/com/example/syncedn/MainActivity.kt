@@ -6,6 +6,16 @@ import android.content.Intent
 class MainActivity : MemberActivity() {
     override val initialPage: String = "start"
 
+    override fun onCreate(savedInstanceState: android.os.Bundle?) {
+        super.onCreate(savedInstanceState)
+        val uid = preferences.getString("userId", "").orEmpty()
+        val team = preferences.getString("teamName", "").orEmpty()
+        if (savedInstanceState == null && uid.isNotBlank() && team.isNotBlank()) {
+            navigate("home")
+            return
+        }
+    }
+
     override fun navigate(next: String) {
         if (next == "home") {
             val userTeam = preferences.getString("teamName", "").orEmpty()
