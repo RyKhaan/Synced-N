@@ -1949,4 +1949,19 @@ class ExampleUnitTest {
         assertEquals("Welcome to team rehearsal this Sunday!", cached[0].text)
         assertEquals("https://res.cloudinary.com/ffb3fdkm/image/upload/v5678/lineup.jpg", cached[0].mediaUrl)
     }
+
+    @Test
+    fun testImageLoaderDownsamplingCalculations() {
+        val sampleSizeChat = com.example.syncedn.data.storage.ImageLoader.calculateInSampleSize(4000, 3000, 800)
+        assertEquals(4, sampleSizeChat)
+
+        val sampleSizeMedium = com.example.syncedn.data.storage.ImageLoader.calculateInSampleSize(1200, 900, 800)
+        assertEquals(1, sampleSizeMedium)
+
+        val sampleSizeAvatar = com.example.syncedn.data.storage.ImageLoader.calculateInSampleSize(2000, 2000, 320)
+        assertEquals(4, sampleSizeAvatar)
+
+        val sampleSizeSmall = com.example.syncedn.data.storage.ImageLoader.calculateInSampleSize(300, 200, 800)
+        assertEquals(1, sampleSizeSmall)
+    }
 }
