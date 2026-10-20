@@ -1,6 +1,7 @@
 package com.example.syncedn.data.database
 
 import com.example.syncedn.data.model.AnnouncementData
+import com.example.syncedn.data.model.ChatMessage
 import com.example.syncedn.data.model.ServiceData
 import com.example.syncedn.data.model.SongData
 import com.example.syncedn.data.model.SubstitutionData
@@ -9,6 +10,8 @@ import com.example.syncedn.data.model.TeamMember
 import com.example.syncedn.data.model.UnavailableRange
 import com.example.syncedn.data.model.UserProfile
 import com.google.firebase.firestore.FirebaseFirestore
+import com.google.firebase.firestore.ListenerRegistration
+import com.google.firebase.firestore.Query
 import androidx.core.content.edit
 
 /**
@@ -23,6 +26,8 @@ object TeamRepository {
     private const val SONGS_SUBCOLLECTION = "songs"
     private const val ANNOUNCEMENTS_SUBCOLLECTION = "announcements"
     private const val SUBSTITUTIONS_SUBCOLLECTION = "substitutions"
+    private const val MESSAGES_SUBCOLLECTION = "messages"
+    private const val PREFS_KEY_MESSAGES_PREFIX = "cached_messages_"
 
     // In-memory cache for fast UI updates, offline fallback, and unit tests
     private val cachedRosters = java.util.concurrent.ConcurrentHashMap<String, MutableList<TeamMember>>()
@@ -46,6 +51,8 @@ object TeamRepository {
     private val cachedSubstitutions = java.util.concurrent.ConcurrentHashMap<String, MutableList<SubstitutionData>>()
     private val lastSubstitutionsFetchTimes = java.util.concurrent.ConcurrentHashMap<String, Long>()
     private val substitutionsInFlight = java.util.concurrent.ConcurrentHashMap<String, Boolean>()
+
+    private val cachedChatMessages = java.util.concurrent.ConcurrentHashMap<String, MutableList<ChatMessage>>()
 
     /**
      * Clears all in-memory roster, role, service, song, announcement, and substitution caches (primarily for unit tests).
@@ -2139,6 +2146,219 @@ object TeamRepository {
         } catch (e: Throwable) {
             android.util.Log.e("TeamRepository", "Exception in acceptSubstitutionAndUpdateService", e)
             onComplete?.invoke(Result.failure(e))
+        }
+    }
+
+    // =========================================================================
+    // Team Chat Messages Cache & Sync (Messenger Style)
+    // =========================================================================
+
+    /**
+     * Retrieves cached team chat messages (in-memory first, falling back to SharedPreferences).
+     * Returns messages sorted chronologically (oldest to newest) for natural chat flow.
+     */
+    fun getCachedChatMessages(
+        teamCode: String,
+        preferences: android.content.SharedPreferences? = null
+    ): List<ChatMessage> {
+        val code = teamCode.trim().uppercase()
+        if (code.isBlank()) return emptyList()
+
+        cachedChatMessages[code]?.let { inMem ->
+            if (inMem.isNotEmpty()) return inMem.toList().sortedBy { it.timestamp }
+        }
+
+        preferences?.let { prefs ->
+            val json = prefs.getString("$PREFS_KEY_MESSAGES_PREFIX$code", null)
+            if (!json.isNullOrBlank()) {
+                try {
+                    val array = org.json.JSONArray(json)
+                    val list = mutableListOf<ChatMessage>()
+                    for (i in 0 until array.length()) {
+                        val obj = array.getJSONObject(i)
+                        val map = mutableMapOf<String, Any?>()
+                        val keys = obj.keys()
+                        while (keys.hasNext()) {
+                            val key = keys.next()
+                            map[key] = obj.opt(key)
+                        }
+                        list.add(ChatMessage.fromMap(map))
+                    }
+                    val sorted = list.sortedBy { it.timestamp }
+                    cachedChatMessages[code] = sorted.toMutableList()
+                    return sorted
+                } catch (e: Throwable) {
+                    android.util.Log.e("TeamRepository", "Error parsing cached chat messages: ${e.message}")
+                }
+            }
+        }
+
+        return emptyList()
+    }
+
+    /**
+     * Saves a single chat message to in-memory and SharedPreferences cache.
+     */
+    fun saveChatMessageLocally(
+        teamCode: String,
+        message: ChatMessage,
+        preferences: android.content.SharedPreferences? = null
+    ) {
+        val code = teamCode.trim().uppercase()
+        if (code.isBlank() || message.id.isBlank()) return
+
+        val currentList = cachedChatMessages.getOrPut(code) {
+            preferences?.let { prefs ->
+                val json = prefs.getString("$PREFS_KEY_MESSAGES_PREFIX$code", null)
+                if (!json.isNullOrBlank()) {
+                    try {
+                        val array = org.json.JSONArray(json)
+                        val list = mutableListOf<ChatMessage>()
+                        for (i in 0 until array.length()) {
+                            val obj = array.getJSONObject(i)
+                            val map = mutableMapOf<String, Any?>()
+                            val keys = obj.keys()
+                            while (keys.hasNext()) {
+                                val key = keys.next()
+                                map[key] = obj.opt(key)
+                            }
+                            list.add(ChatMessage.fromMap(map))
+                        }
+                        list
+                    } catch (e: Throwable) {
+                        mutableListOf()
+                    }
+                } else mutableListOf()
+            } ?: mutableListOf()
+        }
+
+        synchronized(currentList) {
+            val existingIndex = currentList.indexOfFirst { it.id == message.id }
+            if (existingIndex >= 0) {
+                currentList[existingIndex] = message
+            } else {
+                currentList.add(message)
+            }
+            currentList.sortBy { it.timestamp }
+        }
+
+        saveAllChatMessagesLocally(code, currentList.toList(), preferences)
+    }
+
+    /**
+     * Persists all chat messages for a team into SharedPreferences.
+     */
+    fun saveAllChatMessagesLocally(
+        teamCode: String,
+        messages: List<ChatMessage>,
+        preferences: android.content.SharedPreferences? = null
+    ) {
+        val code = teamCode.trim().uppercase()
+        if (code.isBlank()) return
+
+        val sorted = messages.sortedBy { it.timestamp }
+        cachedChatMessages[code] = sorted.toMutableList()
+
+        preferences?.let { prefs ->
+            try {
+                val array = org.json.JSONArray()
+                for (msg in sorted) {
+                    val obj = org.json.JSONObject(msg.toMap())
+                    array.put(obj)
+                }
+                prefs.edit {
+                    putString("$PREFS_KEY_MESSAGES_PREFIX$code", array.toString())
+                }
+            } catch (e: Throwable) {
+                android.util.Log.e("TeamRepository", "Error saving chat messages to SharedPreferences: ${e.message}")
+            }
+        }
+    }
+
+    /**
+     * Sends a chat message to Firestore /teams/{teamCode}/messages/{messageId} and saves it locally.
+     */
+    fun sendChatMessage(
+        teamCode: String,
+        message: ChatMessage,
+        preferences: android.content.SharedPreferences? = null,
+        onComplete: ((Result<ChatMessage>) -> Unit)? = null
+    ) {
+        val code = teamCode.trim().uppercase()
+        if (code.isBlank() || message.id.isBlank()) {
+            onComplete?.invoke(Result.failure(IllegalArgumentException("teamCode and id cannot be blank")))
+            return
+        }
+
+        saveChatMessageLocally(code, message, preferences)
+
+        try {
+            db.collection(TEAMS_COLLECTION)
+                .document(code)
+                .collection(MESSAGES_SUBCOLLECTION)
+                .document(message.id)
+                .set(message.toMap())
+                .addOnSuccessListener {
+                    onComplete?.invoke(Result.success(message))
+                }
+                .addOnFailureListener { err ->
+                    android.util.Log.e("TeamRepository", "Firestore sendChatMessage failed: ${err.message}", err)
+                    // Safely saved locally, deliver success so UI isn't blocked
+                    onComplete?.invoke(Result.success(message))
+                }
+        } catch (e: Throwable) {
+            android.util.Log.e("TeamRepository", "Firestore sendChatMessage exception: ${e.message}", e)
+            onComplete?.invoke(Result.success(message))
+        }
+    }
+
+    /**
+     * Attaches a real-time snapshot listener to the team messages subcollection.
+     * Keeps local cache updated and triggers onUpdate callback on every new message.
+     */
+    fun listenTeamMessages(
+        teamCode: String,
+        preferences: android.content.SharedPreferences? = null,
+        onUpdate: (List<ChatMessage>) -> Unit
+    ): ListenerRegistration? {
+        val code = teamCode.trim().uppercase()
+        if (code.isBlank()) return null
+
+        // Immediately emit cached messages so UI is never empty
+        val initialCached = getCachedChatMessages(code, preferences)
+        if (initialCached.isNotEmpty()) {
+            onUpdate(initialCached)
+        }
+
+        return try {
+            db.collection(TEAMS_COLLECTION)
+                .document(code)
+                .collection(MESSAGES_SUBCOLLECTION)
+                .orderBy("timestamp", Query.Direction.ASCENDING)
+                .limit(200)
+                .addSnapshotListener { snapshot, err ->
+                    if (err != null) {
+                        android.util.Log.e("TeamRepository", "listenTeamMessages error: ${err.message}")
+                        return@addSnapshotListener
+                    }
+                    if (snapshot != null) {
+                        val messages = snapshot.documents.mapNotNull { doc ->
+                            doc.data?.let { ChatMessage.fromMap(it) }
+                        }.sortedBy { it.timestamp }
+
+                        if (messages.isNotEmpty()) {
+                            saveAllChatMessagesLocally(code, messages, preferences)
+                            onUpdate(messages)
+                        } else {
+                            // If remote is empty, check if we had local messages
+                            val local = getCachedChatMessages(code, preferences)
+                            onUpdate(local)
+                        }
+                    }
+                }
+        } catch (e: Throwable) {
+            android.util.Log.e("TeamRepository", "listenTeamMessages exception: ${e.message}")
+            null
         }
     }
 }

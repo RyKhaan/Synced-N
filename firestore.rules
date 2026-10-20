@@ -64,6 +64,19 @@ rules_version = '2';
 //   - createdAt: number | timestamp (optional, >= 0, immutable) - Creation timestamp
 //   - updatedAt: number | timestamp (optional, >= 0) - Last update timestamp
 //
+// Subcollection: teams/{teamCode}/messages
+// Document ID: {messageId} (matches id field)
+// Fields:
+//   - id: string (required, matches doc ID, immutable) - Unique message ID
+//   - teamCode: string (required, matches parent teamCode, immutable) - Team invite code
+//   - senderUid: string (required, matches request.auth.uid, immutable) - Sender's user ID
+//   - senderName: string (required, 1-100 chars) - Display name of sender
+//   - senderRole: string (optional, 0-50 chars) - Role of sender
+//   - senderPhotoUri: string (optional, 0-500 chars) - Avatar URL
+//   - text: string (optional, 0-2000 chars) - Message text content
+//   - mediaUrl: string (optional, 0-500 chars) - Attached image URL
+//   - timestamp: number | timestamp (required, immutable) - Sending timestamp
+//
 // Collection: password_resets
 // Document ID: {email} (User's normalized email address)
 // Fields:
@@ -379,6 +392,25 @@ service cloud.firestore {
       (!('updatedAt' in data) || (data.updatedAt is number && data.updatedAt >= 0) || (data.updatedAt is timestamp));
     }
 
+    // Strict validator for /teams/{teamCode}/messages/{messageId} documents
+    function isValidChatMessage(data, messageId, teamCode) {
+      return hasOnlyAllowedFields(data, [
+        'id', 'teamCode', 'senderUid', 'senderName', 'senderRole',
+        'senderPhotoUri', 'text', 'mediaUrl', 'timestamp'
+      ]) &&
+      hasRequiredFields(data, ['id', 'teamCode', 'senderUid', 'senderName', 'timestamp']) &&
+      data.id is string && data.id == messageId &&
+      data.teamCode is string && data.teamCode == teamCode &&
+      data.senderUid is string && data.senderUid == request.auth.uid &&
+      data.senderName is string && data.senderName.size() > 0 && data.senderName.size() <= 100 &&
+      (!('senderRole' in data) || (data.senderRole is string && data.senderRole.size() <= 50)) &&
+      (!('senderPhotoUri' in data) || (data.senderPhotoUri is string && data.senderPhotoUri.size() <= 500 && (data.senderPhotoUri == '' || isValidUrl(data.senderPhotoUri)))) &&
+      (!('text' in data) || (data.text is string && data.text.size() <= 2000)) &&
+      (!('mediaUrl' in data) || (data.mediaUrl is string && data.mediaUrl.size() <= 500 && (data.mediaUrl == '' || isValidUrl(data.mediaUrl)))) &&
+      (('text' in data && data.text.size() > 0) || ('mediaUrl' in data && data.mediaUrl.size() > 0)) &&
+      ((data.timestamp is number && data.timestamp >= 0) || (data.timestamp is timestamp));
+    }
+
     // ===============================================================
     // Collection Match Rules
     // ===============================================================
@@ -566,6 +598,26 @@ service cloud.firestore {
         // Delete: The Team Leader or original requester can delete the substitution.
         allow delete: if isAuthenticated() && (isSameTeam(teamCode) || isLeaderOfTeam(teamCode)) &&
                          (isLeaderOfTeam(teamCode) || request.auth.uid == resource.data.requesterUid);
+      }
+
+      // ---------------------------------------------------------------
+      // Subcollection: Messages (/teams/{teamCode}/messages/{messageId})
+      // ---------------------------------------------------------------
+      match /messages/{messageId} {
+        // Read: Any authenticated member or leader of the team can view team messages.
+        allow read: if isAuthenticated() && (isSameTeam(teamCode) || isLeaderOfTeam(teamCode));
+
+        // Create: Authenticated team members or leaders can send messages to their team.
+        allow create: if isAuthenticated() && (isSameTeam(teamCode) || isLeaderOfTeam(teamCode)) &&
+                         isValidChatMessage(request.resource.data, messageId, teamCode) &&
+                         request.resource.data.senderUid == request.auth.uid;
+
+        // Update: Disallowed (messages are immutable append-only)
+        allow update: if false;
+
+        // Delete: The Team Leader or original sender can delete a message.
+        allow delete: if isAuthenticated() && (isSameTeam(teamCode) || isLeaderOfTeam(teamCode)) &&
+                         (isLeaderOfTeam(teamCode) || request.auth.uid == resource.data.senderUid);
       }
     }
 
