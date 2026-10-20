@@ -228,7 +228,7 @@ service cloud.firestore {
       return hasOnlyAllowedFields(data, [
         'uid', 'username', 'email', 'role', 'teamName', 'teamCode',
         'resetPassword', 'fullName', 'phone', 'country', 'language',
-        'ministryRole', 'unavailableRanges', 'createdAt'
+        'ministryRole', 'unavailableRanges', 'photoUri', 'createdAt'
       ]) &&
       hasRequiredFields(data, ['uid']) &&
       data.uid is string &&
@@ -247,6 +247,7 @@ service cloud.firestore {
       (!('language' in data) || (data.language is string && data.language.size() <= 50)) &&
       (!('ministryRole' in data) || (data.ministryRole is string && data.ministryRole.size() <= 50)) &&
       (!('unavailableRanges' in data) || (data.unavailableRanges is list && data.unavailableRanges.size() <= 100)) &&
+      (!('photoUri' in data) || (data.photoUri is string && data.photoUri.size() <= 500 && (data.photoUri == '' || isValidUrl(data.photoUri)))) &&
       (!('createdAt' in data) || (data.createdAt is number && data.createdAt >= 0) || (data.createdAt is timestamp));
     }
 

@@ -8,6 +8,8 @@ import com.example.syncedn.data.auth.SessionManager
 import com.example.syncedn.data.database.FirestoreManager
 import com.example.syncedn.data.database.TeamRepository
 import com.example.syncedn.data.model.TeamMember
+import com.example.syncedn.data.storage.CloudinaryUploader
+import com.example.syncedn.data.storage.ImageLoader
 import com.example.syncedn.data.model.UnavailableRange
 import com.example.syncedn.data.model.SongData
 import com.example.syncedn.data.model.AnnouncementData
@@ -1770,6 +1772,7 @@ class AdminActivity : AppCompatActivity() {
                     val uid = preferences.getString(SessionManager.KEY_USER_ID, "").orEmpty()
                     val activeCode = preferences.getString(SessionManager.KEY_TEAM_CODE, "").orEmpty()
                     val activeMinistry = preferences.getString(SessionManager.KEY_MINISTRY_ROLE, "Worship Leader").orEmpty().ifBlank { "Worship Leader" }
+                    val activePhoto = preferences.getString(SessionManager.KEY_PHOTO_URI, "").orEmpty()
                     val profileObj = com.example.syncedn.data.model.UserProfile(
                         uid = uid,
                         username = displayName,
@@ -1781,7 +1784,8 @@ class AdminActivity : AppCompatActivity() {
                         phone = phoneStr,
                         country = countryStr,
                         language = langStr,
-                        ministryRole = activeMinistry
+                        ministryRole = activeMinistry,
+                        photoUri = activePhoto
                     )
                     SessionManager.saveSessionProfile(preferences, profileObj, displayName, emailStr)
                     TeamRepository.updateUserProfile(profileObj)
@@ -1791,8 +1795,9 @@ class AdminActivity : AppCompatActivity() {
         }
     }
     private fun applyProfilePhoto(id: Int) {
-        val uri=preferences.getString("photoUri",null) ?: return
-        try {findViewById<ImageView>(id).setImageURI(uri.toUri())} catch(_: Exception) {preferences.edit { remove("photoUri") }}
+        val uri = preferences.getString("photoUri", null)?.takeIf { it.isNotBlank() } ?: return
+        val iv = findViewById<ImageView>(id) ?: return
+        ImageLoader.loadProfilePhoto(iv, uri)
     }
     @Deprecated("Deprecated in Java")
     override fun onActivityResult(requestCode: Int,resultCode: Int,data: Intent?) {
@@ -1809,8 +1814,41 @@ class AdminActivity : AppCompatActivity() {
             val uri=data?.data ?: return
             try {
                 contentResolver.takePersistableUriPermission(uri,Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                preferences.edit { putString("photoUri", uri.toString()) }
+                val localUriStr = uri.toString()
+                val currentEmail = preferences.getString(SessionManager.KEY_EMAIL, "").orEmpty()
+                val uid = preferences.getString(SessionManager.KEY_USER_ID, "").orEmpty()
+                SessionManager.updatePhotoUri(preferences, localUriStr, currentEmail, uid)
                 if(page=="profile") applyProfilePhoto(UI.profileAvatar)
+
+                toast("Uploading photo...")
+                CloudinaryUploader.uploadProfileImage(this, uri) { result ->
+                    result.onSuccess { remoteUrl ->
+                        toast("Profile photo uploaded!")
+                        SessionManager.updatePhotoUri(preferences, remoteUrl, currentEmail, uid)
+                        val activeCode = preferences.getString(SessionManager.KEY_TEAM_CODE, "").orEmpty()
+                        val activeMinistry = preferences.getString(SessionManager.KEY_MINISTRY_ROLE, "Worship Leader").orEmpty().ifBlank { "Worship Leader" }
+                        val currentProfile = com.example.syncedn.data.model.UserProfile(
+                            uid = uid,
+                            username = displayName,
+                            email = currentEmail,
+                            role = "Leader",
+                            teamName = teamName,
+                            teamCode = activeCode,
+                            fullName = fullName,
+                            phone = preferences.getString(SessionManager.KEY_PHONE, "").orEmpty(),
+                            country = preferences.getString(SessionManager.KEY_COUNTRY, "Philippines").orEmpty(),
+                            language = preferences.getString(SessionManager.KEY_LANGUAGE, "English").orEmpty(),
+                            ministryRole = activeMinistry,
+                            photoUri = remoteUrl
+                        )
+                        TeamRepository.updateUserProfile(currentProfile)
+                        if (page == "profile") applyProfilePhoto(UI.profileAvatar)
+                        if (page == "home") applyProfilePhoto(UI.profileButton)
+                        if (page == "settings") applyProfilePhoto(UI.settingsAvatar)
+                    }.onFailure { err ->
+                        toast("Cloud upload failed: ${err.message ?: "Network error"}. Saved locally.")
+                    }
+                }
             } catch(_: Exception) {toast("Could not use that photo. Try another image.")}
         }
     }
@@ -1861,7 +1899,8 @@ class AdminActivity : AppCompatActivity() {
                 email = preferences.getString("email", "").orEmpty(),
                 role = userRole,
                 ministryRole = ministry,
-                teamCode = currentCode
+                teamCode = currentCode,
+                photoUri = preferences.getString("photoUri", "").orEmpty()
             )
             return applyOverrides(listOf(self))
         }
@@ -3536,9 +3575,17 @@ class AdminActivity : AppCompatActivity() {
         }
     }
     private fun memberRow(name: String, role: String, badge: String? = null,
-                          onClick: (() -> Unit)? = null): View = horizontal().apply {
+                          onClick: (() -> Unit)? = null, photoUri: String? = null): View = horizontal().apply {
         setPadding(0, dp(8), 0, dp(8))
-        add(memberAvatar(), 48, 48)
+        if (!photoUri.isNullOrBlank()) {
+            val iv = ImageView(this@AdminActivity).apply {
+                scaleType = ImageView.ScaleType.CENTER_CROP
+            }
+            add(iv, 48, 48)
+            ImageLoader.loadProfilePhoto(iv, photoUri)
+        } else {
+            add(memberAvatar(), 48, 48)
+        }
         val info = vertical().apply {
             setPadding(dp(12), 0, dp(8), 0)
             add(text(name, 13, navy, true)); space(3); add(text(role, 12, Color.DKGRAY))
@@ -4600,7 +4647,7 @@ class AdminActivity : AppCompatActivity() {
                         roleMemberUid = member.uid
                         roleMemberEmail = member.email
                         navigate("roleEdit")
-                    }) else null))
+                    }) else null, member.photoUri))
                     col.space(4)
                 }
             }

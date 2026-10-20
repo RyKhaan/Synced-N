@@ -17,6 +17,7 @@ data class UserProfile(
     val country: String = "Philippines",
     val language: String = "English",
     val ministryRole: String = "",
+    val photoUri: String = "",
     val unavailableRanges: List<UnavailableRange> = emptyList(),
     val createdAt: Long = System.currentTimeMillis()
 ) {
@@ -33,6 +34,7 @@ data class UserProfile(
         "country" to country,
         "language" to language,
         "ministryRole" to ministryRole,
+        "photoUri" to photoUri,
         "unavailableRanges" to unavailableRanges.map { it.toMap() },
         "createdAt" to createdAt
     )
@@ -58,6 +60,7 @@ data class UserProfile(
                 country = map["country"] as? String ?: "Philippines",
                 language = map["language"] as? String ?: "English",
                 ministryRole = map["ministryRole"] as? String ?: "",
+                photoUri = map["photoUri"] as? String ?: "",
                 unavailableRanges = ranges,
                 createdAt = (map["createdAt"] as? Number)?.toLong() ?: System.currentTimeMillis()
             )

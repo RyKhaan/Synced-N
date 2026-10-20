@@ -12,6 +12,7 @@ data class TeamMember(
     val role: String = "Member",
     val ministryRole: String = "",
     val teamCode: String = "",
+    val photoUri: String = "",
     val unavailableRanges: List<UnavailableRange> = emptyList(),
     val joinedAt: Long = System.currentTimeMillis()
 ) {
@@ -23,6 +24,7 @@ data class TeamMember(
         "role" to role,
         "ministryRole" to ministryRole,
         "teamCode" to teamCode,
+        "photoUri" to photoUri,
         "unavailableRanges" to unavailableRanges.map { it.toMap() },
         "joinedAt" to joinedAt
     )
@@ -43,6 +45,7 @@ data class TeamMember(
                 role = map["role"] as? String ?: "Member",
                 ministryRole = map["ministryRole"] as? String ?: "",
                 teamCode = map["teamCode"] as? String ?: "",
+                photoUri = map["photoUri"] as? String ?: "",
                 unavailableRanges = ranges,
                 joinedAt = (map["joinedAt"] as? Number)?.toLong() ?: System.currentTimeMillis()
             )
