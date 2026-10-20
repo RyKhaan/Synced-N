@@ -28,6 +28,7 @@ object TeamRepository {
     private const val SUBSTITUTIONS_SUBCOLLECTION = "substitutions"
     private const val MESSAGES_SUBCOLLECTION = "messages"
     private const val PREFS_KEY_MESSAGES_PREFIX = "cached_messages_"
+    private const val PREFS_KEY_ROSTER_PREFIX = "cached_roster_"
 
     // In-memory cache for fast UI updates, offline fallback, and unit tests
     private val cachedRosters = java.util.concurrent.ConcurrentHashMap<String, MutableList<TeamMember>>()
@@ -188,9 +189,82 @@ object TeamRepository {
      */
     @Synchronized
     fun getCachedRoster(teamCode: String): List<TeamMember> {
+        return getCachedRoster(teamCode, null)
+    }
+
+    @Synchronized
+    fun getCachedRoster(teamCode: String, preferences: android.content.SharedPreferences?): List<TeamMember> {
         val code = teamCode.trim().uppercase()
-        val list = cachedRosters[code] ?: return emptyList()
-        return synchronized(list) { list.toList() }
+        if (code.isBlank()) return emptyList()
+        val list = cachedRosters[code]
+        if (!list.isNullOrEmpty()) {
+            return synchronized(list) { list.toList() }
+        }
+        if (preferences != null) {
+            val json = preferences.getString("$PREFS_KEY_ROSTER_PREFIX$code", null)
+            if (!json.isNullOrBlank()) {
+                try {
+                    val arr = org.json.JSONArray(json)
+                    val result = mutableListOf<TeamMember>()
+                    for (i in 0 until arr.length()) {
+                        val obj = arr.getJSONObject(i)
+                        val map = mutableMapOf<String, Any?>()
+                        val keys = obj.keys()
+                        while (keys.hasNext()) {
+                            val k = keys.next()
+                            map[k] = obj.opt(k)
+                        }
+                        result.add(TeamMember.fromMap(map))
+                    }
+                    if (result.isNotEmpty()) {
+                        sortRoster(result)
+                        cachedRosters[code] = java.util.Collections.synchronizedList(result)
+                        return result.toList()
+                    }
+                } catch (_: Exception) {}
+            }
+        }
+        return emptyList()
+    }
+
+    fun saveRosterLocally(
+        teamCode: String,
+        members: List<TeamMember>,
+        preferences: android.content.SharedPreferences? = null
+    ) {
+        val code = teamCode.trim().uppercase()
+        if (code.isBlank()) return
+        val sorted = members.toMutableList()
+        sortRoster(sorted)
+        cachedRosters[code] = java.util.Collections.synchronizedList(sorted)
+
+        if (preferences != null) {
+            try {
+                val arr = org.json.JSONArray()
+                for (m in sorted) {
+                    val obj = org.json.JSONObject()
+                    m.toMap().forEach { (k, v) ->
+                        if (k == "unavailableRanges" && v is List<*>) {
+                            val rArr = org.json.JSONArray()
+                            v.forEach { r -> (r as? Map<*, *>)?.let { rArr.put(org.json.JSONObject(it)) } }
+                            obj.put(k, rArr)
+                        } else {
+                            obj.put(k, v)
+                        }
+                    }
+                    arr.put(obj)
+                }
+                preferences.edit().apply {
+                    putString("$PREFS_KEY_ROSTER_PREFIX$code", arr.toString())
+                    for (m in sorted) {
+                        if (m.photoUri.isNotBlank()) {
+                            if (m.uid.isNotBlank()) putString("user_photo_${m.uid}", m.photoUri)
+                            if (m.email.isNotBlank()) putString("email_photo_${m.email.trim().lowercase()}", m.photoUri)
+                        }
+                    }
+                }.apply()
+            } catch (_: Exception) {}
+        }
     }
 
     private fun sortRoster(list: MutableList<TeamMember>) {
@@ -255,6 +329,7 @@ object TeamRepository {
     fun getTeamRoster(
         teamCode: String,
         force: Boolean = false,
+        preferences: android.content.SharedPreferences? = null,
         onComplete: (Result<List<TeamMember>>) -> Unit
     ) {
         val code = teamCode.trim().uppercase()
@@ -263,7 +338,7 @@ object TeamRepository {
             return
         }
 
-        val cached = getCachedRoster(code)
+        val cached = getCachedRoster(code, preferences)
         val now = System.currentTimeMillis()
         val lastFetch = lastRosterFetchTimes[code] ?: 0L
 
@@ -291,7 +366,7 @@ object TeamRepository {
         // Safety timeout guard (3 seconds)
         try {
             android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
-                finishOnce(Result.success(getCachedRoster(code)))
+                finishOnce(Result.success(getCachedRoster(code, preferences)))
             }, 3000L)
         } catch (_: Exception) {}
 
@@ -311,23 +386,24 @@ object TeamRepository {
                         }
                     }
                     if (members.isNotEmpty()) {
-                        synchronized(cachedRosters) {
-                            cachedRosters[code] = java.util.Collections.synchronizedList(members)
-                        }
-                        sortRoster(members)
+                        saveRosterLocally(code, members, preferences)
                     }
-                    finishOnce(Result.success(members.ifEmpty { getCachedRoster(code) }))
+                    finishOnce(Result.success(members.ifEmpty { getCachedRoster(code, preferences) }))
                 }
                 .addOnFailureListener {
-                    finishOnce(Result.success(getCachedRoster(code)))
+                    finishOnce(Result.success(getCachedRoster(code, preferences)))
                 }
         } catch (_: Exception) {
-            finishOnce(Result.success(getCachedRoster(code)))
+            finishOnce(Result.success(getCachedRoster(code, preferences)))
         }
     }
 
     fun getTeamRoster(teamCode: String, onComplete: (Result<List<TeamMember>>) -> Unit) {
-        getTeamRoster(teamCode, false, onComplete)
+        getTeamRoster(teamCode, false, null, onComplete)
+    }
+
+    fun getTeamRoster(teamCode: String, force: Boolean, onComplete: (Result<List<TeamMember>>) -> Unit) {
+        getTeamRoster(teamCode, force, null, onComplete)
     }
 
     /**
@@ -2290,25 +2366,33 @@ object TeamRepository {
             return
         }
 
-        saveChatMessageLocally(code, message, preferences)
+        val authUid = com.example.syncedn.data.auth.AuthManager.currentUser?.uid?.takeIf { it.isNotBlank() }
+        val effectiveUid = if (authUid != null && (message.senderUid.isBlank() || message.senderUid.startsWith("user_"))) {
+            authUid
+        } else {
+            message.senderUid.ifBlank { authUid ?: "anonymous" }
+        }
+        val sanitizedMsg = if (message.senderUid != effectiveUid) message.copy(senderUid = effectiveUid) else message
+
+        saveChatMessageLocally(code, sanitizedMsg, preferences)
 
         try {
             db.collection(TEAMS_COLLECTION)
                 .document(code)
                 .collection(MESSAGES_SUBCOLLECTION)
-                .document(message.id)
-                .set(message.toMap())
+                .document(sanitizedMsg.id)
+                .set(sanitizedMsg.toMap())
                 .addOnSuccessListener {
-                    onComplete?.invoke(Result.success(message))
+                    onComplete?.invoke(Result.success(sanitizedMsg))
                 }
                 .addOnFailureListener { err ->
                     android.util.Log.e("TeamRepository", "Firestore sendChatMessage failed: ${err.message}", err)
                     // Safely saved locally, deliver success so UI isn't blocked
-                    onComplete?.invoke(Result.success(message))
+                    onComplete?.invoke(Result.success(sanitizedMsg))
                 }
         } catch (e: Throwable) {
             android.util.Log.e("TeamRepository", "Firestore sendChatMessage exception: ${e.message}", e)
-            onComplete?.invoke(Result.success(message))
+            onComplete?.invoke(Result.success(sanitizedMsg))
         }
     }
 
@@ -2328,6 +2412,18 @@ object TeamRepository {
         val initialCached = getCachedChatMessages(code, preferences)
         if (initialCached.isNotEmpty()) {
             onUpdate(initialCached)
+
+            // Auto-sync any local unpushed messages to Firestore in background
+            try {
+                val dbRef = db.collection(TEAMS_COLLECTION).document(code).collection(MESSAGES_SUBCOLLECTION)
+                for (localMsg in initialCached) {
+                    if (localMsg.mediaUrl.isBlank() || localMsg.mediaUrl.startsWith("http://") || localMsg.mediaUrl.startsWith("https://")) {
+                        dbRef.document(localMsg.id).set(localMsg.toMap()).addOnFailureListener {
+                            // ignore background sync errors
+                        }
+                    }
+                }
+            } catch (_: Throwable) {}
         }
 
         return try {
