@@ -1,0 +1,148 @@
+<?xml version="1.0" ?>
+<mxfile host="app.diagrams.net" agent="Synced N UML" version="24.0.0" type="device">
+  <diagram id="Synced_N_Activity_3_Availability_Management" name="ACTIVITY DIAGRAM 3: MEMBER AVAILABILITY MANAGEMENT">
+    <mxGraphModel dx="1900" dy="1377" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1900" pageHeight="1377" background="#FFFFFF" math="0" shadow="0">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+        <mxCell id="title" value="&lt;b style='font-size:22px'&gt;ACTIVITY DIAGRAM 3: MEMBER AVAILABILITY MANAGEMENT&lt;/b&gt;&lt;br&gt;&lt;span style='font-size:13px;color:#475569'&gt;Adding &amp;amp; Removing Unavailable Date Ranges with Validation (UnavailableRange &amp;amp; TeamRepository)&lt;/span&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#374151;strokeWidth=1.5;fontFamily=Arial;fontColor=#1F2937;align=center;verticalAlign=middle;" parent="1" vertex="1">
+          <mxGeometry x="40.0" y="40.0" width="1820.0" height="92.0" as="geometry"/>
+        </mxCell>
+        <mxCell id="lane_user" value="User (Ministry Member / Leader)" style="swimlane;startSize=46;html=1;whiteSpace=wrap;fillColor=#DBEAFE;swimlaneFillColor=#FFFFFF;strokeColor=#374151;strokeWidth=1.5;fontStyle=1;fontSize=15;fontFamily=Arial;fontColor=#1D4ED8;collapsible=0;container=0;" parent="1" vertex="1">
+          <mxGeometry x="40.0" y="150.0" width="580.0" height="1187.0" as="geometry"/>
+        </mxCell>
+        <mxCell id="lane_app" value="Synced N Android Application (Availability UI &amp;amp; Cache)" style="swimlane;startSize=46;html=1;whiteSpace=wrap;fillColor=#EDE9FE;swimlaneFillColor=#FFFFFF;strokeColor=#374151;strokeWidth=1.5;fontStyle=1;fontSize=15;fontFamily=Arial;fontColor=#6D28D9;collapsible=0;container=0;" parent="1" vertex="1">
+          <mxGeometry x="620.0" y="150.0" width="660.0" height="1187.0" as="geometry"/>
+        </mxCell>
+        <mxCell id="lane_cloud" value="Cloud Firestore (/users/{uid}.unavailableRanges)" style="swimlane;startSize=46;html=1;whiteSpace=wrap;fillColor=#DCFCE7;swimlaneFillColor=#FFFFFF;strokeColor=#374151;strokeWidth=1.5;fontStyle=1;fontSize=15;fontFamily=Arial;fontColor=#15803D;collapsible=0;container=0;" parent="1" vertex="1">
+          <mxGeometry x="1280.0" y="150.0" width="580.0" height="1187.0" as="geometry"/>
+        </mxCell>
+        <mxCell id="start" value="" style="ellipse;html=1;fillColor=#111827;strokeColor=#111827;" parent="1" vertex="1">
+          <mxGeometry x="315.0" y="237.0" width="30.0" height="30.0" as="geometry"/>
+        </mxCell>
+        <mxCell id="open" value="Open Availability Screen&lt;br&gt;from Calendar or Menu" style="rounded=1;arcSize=30;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#374151;strokeWidth=1.6;fontFamily=Arial;fontSize=13;fontColor=#1F2937;" parent="1" vertex="1">
+          <mxGeometry x="175.0" y="334.0" width="310.0" height="60.0" as="geometry"/>
+        </mxCell>
+        <mxCell id="load" value="Load Scheduled Unavailabilities&lt;br&gt;(getMemberUnavailableRanges)" style="rounded=1;arcSize=30;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#374151;strokeWidth=1.6;fontFamily=Arial;fontSize=13;fontColor=#1F2937;" parent="1" vertex="1">
+          <mxGeometry x="780.0" y="334.0" width="340.0" height="60.0" as="geometry"/>
+        </mxCell>
+        <mxCell id="act" value="Selected&lt;br&gt;Action?" style="rhombus;whiteSpace=wrap;html=1;fillColor=#FFFBEB;strokeColor=#374151;strokeWidth=1.6;fontFamily=Arial;fontSize=12;fontColor=#1F2937;" parent="1" vertex="1">
+          <mxGeometry x="241.0" y="434.0" width="178.0" height="84.0" as="geometry"/>
+        </mxCell>
+        <mxCell id="sel_dt" value="Select Start Date, End Date&lt;br&gt;&amp;amp; Enter Reason" style="rounded=1;arcSize=30;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#374151;strokeWidth=1.6;fontFamily=Arial;fontSize=13;fontColor=#1F2937;" parent="1" vertex="1">
+          <mxGeometry x="175.0" y="558.0" width="310.0" height="60.0" as="geometry"/>
+        </mxCell>
+        <mxCell id="val_dt" value="endDate &amp;gt;= startDate&lt;br&gt;&amp;amp; Count &amp;lt; 100?" style="rhombus;whiteSpace=wrap;html=1;fillColor=#FFFBEB;strokeColor=#374151;strokeWidth=1.6;fontFamily=Arial;fontSize=12;fontColor=#1F2937;" parent="1" vertex="1">
+          <mxGeometry x="853.0" y="545.0" width="194.0" height="86.0" as="geometry"/>
+        </mxCell>
+        <mxCell id="err_dt" value="Display Validation Toast&lt;br&gt;(Invalid Date Order or Limit)" style="rounded=1;arcSize=30;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#374151;strokeWidth=1.6;fontFamily=Arial;fontSize=13;fontColor=#1F2937;" parent="1" vertex="1">
+          <mxGeometry x="790.0" y="670.0" width="320.0" height="60.0" as="geometry"/>
+        </mxCell>
+        <mxCell id="mk_rng" value="Create UnavailableRange &amp;amp;&lt;br&gt;Update In-Memory Roster Cache" style="rounded=1;arcSize=30;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#374151;strokeWidth=1.6;fontFamily=Arial;fontSize=13;fontColor=#1F2937;" parent="1" vertex="1">
+          <mxGeometry x="780.0" y="782.0" width="340.0" height="60.0" as="geometry"/>
+        </mxCell>
+        <mxCell id="sync_add" value="Merge unavailableRanges Array&lt;br&gt;to /users/{uid} Document" style="rounded=1;arcSize=30;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#374151;strokeWidth=1.6;fontFamily=Arial;fontSize=13;fontColor=#1F2937;" parent="1" vertex="1">
+          <mxGeometry x="1400.0" y="782.0" width="340.0" height="60.0" as="geometry"/>
+        </mxCell>
+        <mxCell id="to_cal" value="Show &amp;#x27;Unavailable range added&amp;#x27;&lt;br&gt;&amp;amp; Navigate to Calendar" style="rounded=1;arcSize=30;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#374151;strokeWidth=1.6;fontFamily=Arial;fontSize=13;fontColor=#1F2937;" parent="1" vertex="1">
+          <mxGeometry x="170.0" y="894.0" width="320.0" height="60.0" as="geometry"/>
+        </mxCell>
+        <mxCell id="tap_del" value="Tap Delete (X) on Existing&lt;br&gt;Unavailable Date Range" style="rounded=1;arcSize=30;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#374151;strokeWidth=1.6;fontFamily=Arial;fontSize=13;fontColor=#1F2937;" parent="1" vertex="1">
+          <mxGeometry x="175.0" y="1006.0" width="310.0" height="60.0" as="geometry"/>
+        </mxCell>
+        <mxCell id="rem_loc" value="Remove Range from Cache &amp;amp;&lt;br&gt;SharedPreferences (removeUnavailableRange)" style="rounded=1;arcSize=30;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#374151;strokeWidth=1.6;fontFamily=Arial;fontSize=13;fontColor=#1F2937;" parent="1" vertex="1">
+          <mxGeometry x="770.0" y="1006.0" width="360.0" height="60.0" as="geometry"/>
+        </mxCell>
+        <mxCell id="sync_rem" value="Update unavailableRanges Array&lt;br&gt;in /users/{uid} Document" style="rounded=1;arcSize=30;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#374151;strokeWidth=1.6;fontFamily=Arial;fontSize=13;fontColor=#1F2937;" parent="1" vertex="1">
+          <mxGeometry x="1400.0" y="1006.0" width="340.0" height="60.0" as="geometry"/>
+        </mxCell>
+        <mxCell id="ref_ui" value="Show &amp;#x27;Removed unavailability&amp;#x27;&lt;br&gt;&amp;amp; Refresh Availability List" style="rounded=1;arcSize=30;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#374151;strokeWidth=1.6;fontFamily=Arial;fontSize=13;fontColor=#1F2937;" parent="1" vertex="1">
+          <mxGeometry x="780.0" y="1118.0" width="340.0" height="60.0" as="geometry"/>
+        </mxCell>
+        <mxCell id="end" value="" style="ellipse;html=1;shape=endState;fillColor=#111827;strokeColor=#111827;strokeWidth=1.6;" parent="1" vertex="1">
+          <mxGeometry x="933.0" y="1243.0" width="34.0" height="34.0" as="geometry"/>
+        </mxCell>
+        <mxCell id="e0" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#374151;strokeWidth=1.6;endArrow=open;endSize=10;fontFamily=Arial;fontSize=12;fontColor=#1F2937;labelBackgroundColor=#FFFFFF;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="start" target="open">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e1" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#374151;strokeWidth=1.6;endArrow=open;endSize=10;fontFamily=Arial;fontSize=12;fontColor=#1F2937;labelBackgroundColor=#FFFFFF;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="open" target="load">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e2" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#374151;strokeWidth=1.6;endArrow=open;endSize=10;fontFamily=Arial;fontSize=12;fontColor=#1F2937;labelBackgroundColor=#FFFFFF;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=1;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="load" target="act">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="950.0" y="476.0"/>
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e3" value="[Add Range]" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#374151;strokeWidth=1.6;endArrow=open;endSize=10;fontFamily=Arial;fontSize=12;fontColor=#1F2937;labelBackgroundColor=#FFFFFF;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="act" target="sel_dt">
+          <mxGeometry relative="1" as="geometry" x="-0.6"/>
+        </mxCell>
+        <mxCell id="e4" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#374151;strokeWidth=1.6;endArrow=open;endSize=10;fontFamily=Arial;fontSize=12;fontColor=#1F2937;labelBackgroundColor=#FFFFFF;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="sel_dt" target="val_dt">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e5" value="[invalid]" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#374151;strokeWidth=1.6;endArrow=open;endSize=10;fontFamily=Arial;fontSize=12;fontColor=#1F2937;labelBackgroundColor=#FFFFFF;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="val_dt" target="err_dt">
+          <mxGeometry relative="1" as="geometry" x="-0.6"/>
+        </mxCell>
+        <mxCell id="e6" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#374151;strokeWidth=1.6;endArrow=open;endSize=10;fontFamily=Arial;fontSize=12;fontColor=#1F2937;labelBackgroundColor=#FFFFFF;exitX=0;exitY=0.5;exitDx=0;exitDy=0;entryX=0.5;entryY=1;entryDx=0;entryDy=0;" edge="1" parent="1" source="err_dt" target="sel_dt">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="330.0" y="700.0"/>
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e7" value="[valid]" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#374151;strokeWidth=1.6;endArrow=open;endSize=10;fontFamily=Arial;fontSize=12;fontColor=#1F2937;labelBackgroundColor=#FFFFFF;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="val_dt" target="mk_rng">
+          <mxGeometry relative="1" as="geometry" x="-0.6">
+            <Array as="points">
+              <mxPoint x="1160.0" y="588.0"/>
+              <mxPoint x="1160.0" y="758.0"/>
+              <mxPoint x="950.0" y="758.0"/>
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e8" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#374151;strokeWidth=1.6;endArrow=open;endSize=10;fontFamily=Arial;fontSize=12;fontColor=#1F2937;labelBackgroundColor=#FFFFFF;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="mk_rng" target="sync_add">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e9" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#374151;strokeWidth=1.6;endArrow=open;endSize=10;fontFamily=Arial;fontSize=12;fontColor=#1F2937;labelBackgroundColor=#FFFFFF;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=1;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="sync_add" target="to_cal">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1570.0" y="924.0"/>
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e10" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#374151;strokeWidth=1.6;endArrow=open;endSize=10;fontFamily=Arial;fontSize=12;fontColor=#1F2937;labelBackgroundColor=#FFFFFF;exitX=0;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="to_cal" target="end">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="65.0" y="924.0"/>
+              <mxPoint x="65.0" y="1260.0"/>
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e11" value="[Remove Range]" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#374151;strokeWidth=1.6;endArrow=open;endSize=10;fontFamily=Arial;fontSize=12;fontColor=#1F2937;labelBackgroundColor=#FFFFFF;exitX=0;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="act" target="tap_del">
+          <mxGeometry relative="1" as="geometry" x="-0.6">
+            <Array as="points">
+              <mxPoint x="98.0" y="476.0"/>
+              <mxPoint x="98.0" y="1036.0"/>
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e12" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#374151;strokeWidth=1.6;endArrow=open;endSize=10;fontFamily=Arial;fontSize=12;fontColor=#1F2937;labelBackgroundColor=#FFFFFF;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="tap_del" target="rem_loc">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e13" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#374151;strokeWidth=1.6;endArrow=open;endSize=10;fontFamily=Arial;fontSize=12;fontColor=#1F2937;labelBackgroundColor=#FFFFFF;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="rem_loc" target="sync_rem">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e14" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#374151;strokeWidth=1.6;endArrow=open;endSize=10;fontFamily=Arial;fontSize=12;fontColor=#1F2937;labelBackgroundColor=#FFFFFF;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=1;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="sync_rem" target="ref_ui">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1570.0" y="1148.0"/>
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e15" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#374151;strokeWidth=1.6;endArrow=open;endSize=10;fontFamily=Arial;fontSize=12;fontColor=#1F2937;labelBackgroundColor=#FFFFFF;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="ref_ui" target="end">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

@@ -1,0 +1,148 @@
+<?xml version="1.0" ?>
+<mxfile host="app.diagrams.net" agent="Synced N UML" version="24.0.0" type="device">
+  <diagram id="Synced_N_Activity_6_Song_Library_Management" name="ACTIVITY DIAGRAM 6: SONG LIBRARY &amp; CHORD SHEET MANAGEMENT">
+    <mxGraphModel dx="1900" dy="1377" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1900" pageHeight="1377" background="#FFFFFF" math="0" shadow="0">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+        <mxCell id="title" value="&lt;b style='font-size:22px'&gt;ACTIVITY DIAGRAM 6: SONG LIBRARY &amp;amp; CHORD SHEET MANAGEMENT&lt;/b&gt;&lt;br&gt;&lt;span style='font-size:13px;color:#475569'&gt;Adding, Editing, Validating &amp;amp; Deleting Worship Songs and Chord Sheets (SongData, ChordSheetInput &amp;amp; TeamRepository)&lt;/span&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#374151;strokeWidth=1.5;fontFamily=Arial;fontColor=#1F2937;align=center;verticalAlign=middle;" parent="1" vertex="1">
+          <mxGeometry x="40.0" y="40.0" width="1820.0" height="92.0" as="geometry"/>
+        </mxCell>
+        <mxCell id="lane_leader" value="Ministry Leader (AdminActivity)" style="swimlane;startSize=46;html=1;whiteSpace=wrap;fillColor=#DBEAFE;swimlaneFillColor=#FFFFFF;strokeColor=#374151;strokeWidth=1.5;fontStyle=1;fontSize=15;fontFamily=Arial;fontColor=#1D4ED8;collapsible=0;container=0;" parent="1" vertex="1">
+          <mxGeometry x="40.0" y="150.0" width="580.0" height="1187.0" as="geometry"/>
+        </mxCell>
+        <mxCell id="lane_app" value="Synced N Android Application (Song Editor &amp;amp; ChordSheet Engine)" style="swimlane;startSize=46;html=1;whiteSpace=wrap;fillColor=#EDE9FE;swimlaneFillColor=#FFFFFF;strokeColor=#374151;strokeWidth=1.5;fontStyle=1;fontSize=15;fontFamily=Arial;fontColor=#6D28D9;collapsible=0;container=0;" parent="1" vertex="1">
+          <mxGeometry x="620.0" y="150.0" width="660.0" height="1187.0" as="geometry"/>
+        </mxCell>
+        <mxCell id="lane_cloud" value="Cloud Firestore (/teams/{teamCode}/songs/{songId})" style="swimlane;startSize=46;html=1;whiteSpace=wrap;fillColor=#DCFCE7;swimlaneFillColor=#FFFFFF;strokeColor=#374151;strokeWidth=1.5;fontStyle=1;fontSize=15;fontFamily=Arial;fontColor=#15803D;collapsible=0;container=0;" parent="1" vertex="1">
+          <mxGeometry x="1280.0" y="150.0" width="580.0" height="1187.0" as="geometry"/>
+        </mxCell>
+        <mxCell id="start" value="" style="ellipse;html=1;fillColor=#111827;strokeColor=#111827;" parent="1" vertex="1">
+          <mxGeometry x="315.0" y="237.0" width="30.0" height="30.0" as="geometry"/>
+        </mxCell>
+        <mxCell id="open" value="Open Songs Library Screen" style="rounded=1;arcSize=30;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#374151;strokeWidth=1.6;fontFamily=Arial;fontSize=13;fontColor=#1F2937;" parent="1" vertex="1">
+          <mxGeometry x="180.0" y="334.0" width="300.0" height="60.0" as="geometry"/>
+        </mxCell>
+        <mxCell id="load" value="Load Team Songs &amp;amp; Default Seed&lt;br&gt;Catalog (TeamRepository.getSongs)" style="rounded=1;arcSize=30;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#374151;strokeWidth=1.6;fontFamily=Arial;fontSize=13;fontColor=#1F2937;" parent="1" vertex="1">
+          <mxGeometry x="780.0" y="334.0" width="340.0" height="60.0" as="geometry"/>
+        </mxCell>
+        <mxCell id="op" value="Selected Song&lt;br&gt;Operation?" style="rhombus;whiteSpace=wrap;html=1;fillColor=#FFFBEB;strokeColor=#374151;strokeWidth=1.6;fontFamily=Arial;fontSize=12;fontColor=#1F2937;" parent="1" vertex="1">
+          <mxGeometry x="241.0" y="434.0" width="178.0" height="84.0" as="geometry"/>
+        </mxCell>
+        <mxCell id="ed_in" value="Enter Title, Artist, Key, BPM,&lt;br&gt;Reference Link &amp;amp; Chord Sections" style="rounded=1;arcSize=30;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#374151;strokeWidth=1.6;fontFamily=Arial;fontSize=13;fontColor=#1F2937;" parent="1" vertex="1">
+          <mxGeometry x="165.0" y="558.0" width="330.0" height="60.0" as="geometry"/>
+        </mxCell>
+        <mxCell id="ed_val" value="Title/Artist Set, Key Valid&lt;br&gt;&amp;amp; BPM in 1..400?" style="rhombus;whiteSpace=wrap;html=1;fillColor=#FFFBEB;strokeColor=#374151;strokeWidth=1.6;fontFamily=Arial;fontSize=12;fontColor=#1F2937;" parent="1" vertex="1">
+          <mxGeometry x="850.0" y="544.0" width="200.0" height="88.0" as="geometry"/>
+        </mxCell>
+        <mxCell id="ed_err" value="Highlight Invalid Field&lt;br&gt;(Key Pitch or BPM Range Error)" style="rounded=1;arcSize=30;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#374151;strokeWidth=1.6;fontFamily=Arial;fontSize=13;fontColor=#1F2937;" parent="1" vertex="1">
+          <mxGeometry x="785.0" y="670.0" width="330.0" height="60.0" as="geometry"/>
+        </mxCell>
+        <mxCell id="ed_asm" value="Assemble Full Chord Sheet &amp;amp;&lt;br&gt;Normalize Reference URL" style="rounded=1;arcSize=30;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#374151;strokeWidth=1.6;fontFamily=Arial;fontSize=13;fontColor=#1F2937;" parent="1" vertex="1">
+          <mxGeometry x="780.0" y="782.0" width="340.0" height="60.0" as="geometry"/>
+        </mxCell>
+        <mxCell id="ed_save" value="Save SongData Document to&lt;br&gt;/teams/{teamCode}/songs/{songId}" style="rounded=1;arcSize=30;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#374151;strokeWidth=1.6;fontFamily=Arial;fontSize=13;fontColor=#1F2937;" parent="1" vertex="1">
+          <mxGeometry x="1400.0" y="782.0" width="340.0" height="60.0" as="geometry"/>
+        </mxCell>
+        <mxCell id="ed_view" value="Show &amp;#x27;Song saved&amp;#x27; Toast &amp;amp;&lt;br&gt;Open Song Details / Transposer" style="rounded=1;arcSize=30;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#374151;strokeWidth=1.6;fontFamily=Arial;fontSize=13;fontColor=#1F2937;" parent="1" vertex="1">
+          <mxGeometry x="165.0" y="894.0" width="330.0" height="60.0" as="geometry"/>
+        </mxCell>
+        <mxCell id="del_tap" value="Tap &amp;#x27;Delete Song&amp;#x27; &amp;amp;&lt;br&gt;Confirm Deletion Dialog" style="rounded=1;arcSize=30;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#374151;strokeWidth=1.6;fontFamily=Arial;fontSize=13;fontColor=#1F2937;" parent="1" vertex="1">
+          <mxGeometry x="175.0" y="1006.0" width="310.0" height="60.0" as="geometry"/>
+        </mxCell>
+        <mxCell id="del_loc" value="Mark Song Key Deleted &amp;amp; Remove&lt;br&gt;from Local Cache (removeSongLocally)" style="rounded=1;arcSize=30;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#374151;strokeWidth=1.6;fontFamily=Arial;fontSize=13;fontColor=#1F2937;" parent="1" vertex="1">
+          <mxGeometry x="775.0" y="1006.0" width="350.0" height="60.0" as="geometry"/>
+        </mxCell>
+        <mxCell id="del_db" value="Delete Song Document from&lt;br&gt;/teams/{teamCode}/songs/{songId}" style="rounded=1;arcSize=30;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#374151;strokeWidth=1.6;fontFamily=Arial;fontSize=13;fontColor=#1F2937;" parent="1" vertex="1">
+          <mxGeometry x="1400.0" y="1006.0" width="340.0" height="60.0" as="geometry"/>
+        </mxCell>
+        <mxCell id="del_done" value="Show &amp;#x27;Song deleted&amp;#x27; Toast &amp;amp;&lt;br&gt;Return to Songs List" style="rounded=1;arcSize=30;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#374151;strokeWidth=1.6;fontFamily=Arial;fontSize=13;fontColor=#1F2937;" parent="1" vertex="1">
+          <mxGeometry x="785.0" y="1118.0" width="330.0" height="60.0" as="geometry"/>
+        </mxCell>
+        <mxCell id="end" value="" style="ellipse;html=1;shape=endState;fillColor=#111827;strokeColor=#111827;strokeWidth=1.6;" parent="1" vertex="1">
+          <mxGeometry x="933.0" y="1243.0" width="34.0" height="34.0" as="geometry"/>
+        </mxCell>
+        <mxCell id="e0" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#374151;strokeWidth=1.6;endArrow=open;endSize=10;fontFamily=Arial;fontSize=12;fontColor=#1F2937;labelBackgroundColor=#FFFFFF;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="start" target="open">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e1" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#374151;strokeWidth=1.6;endArrow=open;endSize=10;fontFamily=Arial;fontSize=12;fontColor=#1F2937;labelBackgroundColor=#FFFFFF;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="open" target="load">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e2" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#374151;strokeWidth=1.6;endArrow=open;endSize=10;fontFamily=Arial;fontSize=12;fontColor=#1F2937;labelBackgroundColor=#FFFFFF;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=1;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="load" target="op">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="950.0" y="476.0"/>
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e3" value="[Add / Edit Song]" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#374151;strokeWidth=1.6;endArrow=open;endSize=10;fontFamily=Arial;fontSize=12;fontColor=#1F2937;labelBackgroundColor=#FFFFFF;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="op" target="ed_in">
+          <mxGeometry relative="1" as="geometry" x="-0.6"/>
+        </mxCell>
+        <mxCell id="e4" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#374151;strokeWidth=1.6;endArrow=open;endSize=10;fontFamily=Arial;fontSize=12;fontColor=#1F2937;labelBackgroundColor=#FFFFFF;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="ed_in" target="ed_val">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e5" value="[invalid]" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#374151;strokeWidth=1.6;endArrow=open;endSize=10;fontFamily=Arial;fontSize=12;fontColor=#1F2937;labelBackgroundColor=#FFFFFF;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="ed_val" target="ed_err">
+          <mxGeometry relative="1" as="geometry" x="-0.6"/>
+        </mxCell>
+        <mxCell id="e6" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#374151;strokeWidth=1.6;endArrow=open;endSize=10;fontFamily=Arial;fontSize=12;fontColor=#1F2937;labelBackgroundColor=#FFFFFF;exitX=0;exitY=0.5;exitDx=0;exitDy=0;entryX=0.5;entryY=1;entryDx=0;entryDy=0;" edge="1" parent="1" source="ed_err" target="ed_in">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="330.0" y="700.0"/>
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e7" value="[valid]" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#374151;strokeWidth=1.6;endArrow=open;endSize=10;fontFamily=Arial;fontSize=12;fontColor=#1F2937;labelBackgroundColor=#FFFFFF;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="ed_val" target="ed_asm">
+          <mxGeometry relative="1" as="geometry" x="-0.6">
+            <Array as="points">
+              <mxPoint x="1160.0" y="588.0"/>
+              <mxPoint x="1160.0" y="758.0"/>
+              <mxPoint x="950.0" y="758.0"/>
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e8" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#374151;strokeWidth=1.6;endArrow=open;endSize=10;fontFamily=Arial;fontSize=12;fontColor=#1F2937;labelBackgroundColor=#FFFFFF;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="ed_asm" target="ed_save">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e9" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#374151;strokeWidth=1.6;endArrow=open;endSize=10;fontFamily=Arial;fontSize=12;fontColor=#1F2937;labelBackgroundColor=#FFFFFF;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=1;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="ed_save" target="ed_view">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1570.0" y="924.0"/>
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e10" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#374151;strokeWidth=1.6;endArrow=open;endSize=10;fontFamily=Arial;fontSize=12;fontColor=#1F2937;labelBackgroundColor=#FFFFFF;exitX=0;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="ed_view" target="end">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="65.0" y="924.0"/>
+              <mxPoint x="65.0" y="1260.0"/>
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e11" value="[Delete Song]" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#374151;strokeWidth=1.6;endArrow=open;endSize=10;fontFamily=Arial;fontSize=12;fontColor=#1F2937;labelBackgroundColor=#FFFFFF;exitX=0;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="op" target="del_tap">
+          <mxGeometry relative="1" as="geometry" x="-0.6">
+            <Array as="points">
+              <mxPoint x="98.0" y="476.0"/>
+              <mxPoint x="98.0" y="1036.0"/>
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e12" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#374151;strokeWidth=1.6;endArrow=open;endSize=10;fontFamily=Arial;fontSize=12;fontColor=#1F2937;labelBackgroundColor=#FFFFFF;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="del_tap" target="del_loc">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e13" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#374151;strokeWidth=1.6;endArrow=open;endSize=10;fontFamily=Arial;fontSize=12;fontColor=#1F2937;labelBackgroundColor=#FFFFFF;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="del_loc" target="del_db">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e14" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#374151;strokeWidth=1.6;endArrow=open;endSize=10;fontFamily=Arial;fontSize=12;fontColor=#1F2937;labelBackgroundColor=#FFFFFF;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=1;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="del_db" target="del_done">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1570.0" y="1148.0"/>
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e15" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#374151;strokeWidth=1.6;endArrow=open;endSize=10;fontFamily=Arial;fontSize=12;fontColor=#1F2937;labelBackgroundColor=#FFFFFF;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="del_done" target="end">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
