@@ -1964,4 +1964,59 @@ class ExampleUnitTest {
         val sampleSizeSmall = com.example.syncedn.data.storage.ImageLoader.calculateInSampleSize(300, 200, 800)
         assertEquals(1, sampleSizeSmall)
     }
+
+    @Test
+    fun testChatMessagesDoNotDisappearOnNewImageOrRemoteMerge() {
+        val fakePrefs = FakePreferences()
+        val team = "TEST_MERGE"
+
+        val msg1 = com.example.syncedn.data.model.ChatMessage(
+            id = "msg_1",
+            teamCode = team,
+            senderUid = "u1",
+            senderName = "Ryan",
+            text = "Hello team!",
+            timestamp = 1000L
+        )
+        val msg2 = com.example.syncedn.data.model.ChatMessage(
+            id = "msg_2",
+            teamCode = team,
+            senderUid = "u2",
+            senderName = "Yan",
+            text = "Rehearsal is on!",
+            timestamp = 2000L
+        )
+        com.example.syncedn.data.database.TeamRepository.saveChatMessageLocally(team, msg1, fakePrefs)
+        com.example.syncedn.data.database.TeamRepository.saveChatMessageLocally(team, msg2, fakePrefs)
+
+        val cached = com.example.syncedn.data.database.TeamRepository.getCachedChatMessages(team, fakePrefs)
+        assertEquals(2, cached.size)
+
+        // Now user sends a new local image
+        val newImgMsg = com.example.syncedn.data.model.ChatMessage(
+            id = "msg_img_local",
+            teamCode = team,
+            senderUid = "u1",
+            senderName = "Ryan",
+            mediaUrl = "content://media/external/123",
+            timestamp = 3000L
+        )
+        com.example.syncedn.data.database.TeamRepository.saveChatMessageLocally(team, newImgMsg, fakePrefs)
+        val cachedWithImg = com.example.syncedn.data.database.TeamRepository.getCachedChatMessages(team, fakePrefs)
+        assertEquals(3, cachedWithImg.size)
+        assertEquals("msg_1", cachedWithImg[0].id)
+        assertEquals("msg_2", cachedWithImg[1].id)
+        assertEquals("msg_img_local", cachedWithImg[2].id)
+
+        // Cloudinary upload succeeds -> updates the image message to https://
+        val remoteImgMsg = newImgMsg.copy(mediaUrl = "https://res.cloudinary.com/ffb3fdkm/image/upload/photo.jpg")
+        com.example.syncedn.data.database.TeamRepository.saveChatMessageLocally(team, remoteImgMsg, fakePrefs)
+
+        val finalCached = com.example.syncedn.data.database.TeamRepository.getCachedChatMessages(team, fakePrefs)
+        assertEquals(3, finalCached.size)
+        assertEquals("msg_1", finalCached[0].id)
+        assertEquals("msg_2", finalCached[1].id)
+        assertEquals("msg_img_local", finalCached[2].id)
+        assertEquals("https://res.cloudinary.com/ffb3fdkm/image/upload/photo.jpg", finalCached[2].mediaUrl)
+    }
 }

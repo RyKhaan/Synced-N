@@ -1888,6 +1888,11 @@ class AdminActivity : AppCompatActivity() {
                 ImageLoader.preseedCache(this, uri.toString(), localBitmap, circular = false)
             }
 
+            if (chatMessages.isEmpty()) {
+                val cached = TeamRepository.getCachedChatMessages(currentCode, preferences)
+                if (cached.isNotEmpty()) chatMessages.addAll(cached)
+            }
+
             val localMsg = ChatMessage(
                 id = localMsgId,
                 teamCode = currentCode,
@@ -1899,7 +1904,7 @@ class AdminActivity : AppCompatActivity() {
                 timestamp = System.currentTimeMillis()
             )
             chatMessages.add(localMsg)
-            TeamRepository.sendChatMessage(currentCode, localMsg, preferences)
+            TeamRepository.saveChatMessageLocally(currentCode, localMsg, preferences)
             teamTab = "Team Chat"
             navigate("teams")
 
@@ -1916,8 +1921,7 @@ class AdminActivity : AppCompatActivity() {
                     }
                     TeamRepository.sendChatMessage(currentCode, remoteMsg, preferences)
                 }.onFailure { err ->
-                    TeamRepository.sendChatMessage(currentCode, localMsg, preferences)
-                    toast("Cloud upload failed: ${err.message ?: "Offline"}. Sent locally.")
+                    toast("Cloud upload failed: ${err.message ?: "Offline"}. Kept locally.")
                 }
             }
             return
@@ -4890,11 +4894,16 @@ class AdminActivity : AppCompatActivity() {
                 chatListener = TeamRepository.listenTeamMessages(currentCode, preferences) { msgs ->
                     runOnUiThread {
                         if (page == "teams" && teamTab == "Team Chat") {
-                            val curIds = chatMessages.map { it.id }
-                            val newIds = msgs.map { it.id }
-                            if (curIds != newIds) {
+                            val existingMap = LinkedHashMap<String, ChatMessage>()
+                            chatMessages.forEach { existingMap[it.id] = it }
+                            msgs.forEach { existingMap[it.id] = it }
+                            val combined = existingMap.values.sortedBy { it.timestamp }
+
+                            val curMedia = chatMessages.map { it.id to it.mediaUrl }
+                            val newMedia = combined.map { it.id to it.mediaUrl }
+                            if (curMedia != newMedia) {
                                 chatMessages.clear()
-                                chatMessages.addAll(msgs)
+                                chatMessages.addAll(combined)
                                 navigate("teams")
                             }
                         }
@@ -5170,6 +5179,10 @@ class AdminActivity : AppCompatActivity() {
                         message.setSelection(message.text.length)
                     } else {
                         val textToSend = message.text.toString().trim()
+                        if (chatMessages.isEmpty()) {
+                            val cached = TeamRepository.getCachedChatMessages(currentCode, preferences)
+                            if (cached.isNotEmpty()) chatMessages.addAll(cached)
+                        }
                         val currentUid = preferences.getString(SessionManager.KEY_USER_ID, "").orEmpty()
                         val currentPhoto = preferences.getString("photoUri", "").orEmpty()
                         val newMsg = ChatMessage(

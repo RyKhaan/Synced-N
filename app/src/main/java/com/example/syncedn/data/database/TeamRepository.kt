@@ -2342,17 +2342,22 @@ object TeamRepository {
                         return@addSnapshotListener
                     }
                     if (snapshot != null) {
-                        val messages = snapshot.documents.mapNotNull { doc ->
+                        val remoteMessages = snapshot.documents.mapNotNull { doc ->
                             doc.data?.let { ChatMessage.fromMap(it) }
-                        }.sortedBy { it.timestamp }
+                        }
 
-                        if (messages.isNotEmpty()) {
-                            saveAllChatMessagesLocally(code, messages, preferences)
-                            onUpdate(messages)
-                        } else {
-                            // If remote is empty, check if we had local messages
-                            val local = getCachedChatMessages(code, preferences)
-                            onUpdate(local)
+                        // Merge remote messages with local cached messages so un-synced messages are never wiped out
+                        val localCached = getCachedChatMessages(code, preferences)
+                        val mergedMap = LinkedHashMap<String, ChatMessage>()
+                        localCached.forEach { mergedMap[it.id] = it }
+                        remoteMessages.forEach { mergedMap[it.id] = it }
+
+                        val mergedList = mergedMap.values.sortedBy { it.timestamp }
+                        if (mergedList.isNotEmpty()) {
+                            saveAllChatMessagesLocally(code, mergedList, preferences)
+                            onUpdate(mergedList)
+                        } else if (localCached.isNotEmpty()) {
+                            onUpdate(localCached)
                         }
                     }
                 }
