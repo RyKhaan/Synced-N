@@ -1876,6 +1876,18 @@ class AdminActivity : AppCompatActivity() {
             val currentPhoto = preferences.getString("photoUri", "").orEmpty()
             val localMsgId = java.util.UUID.randomUUID().toString()
 
+            val rawBytes = try {
+                contentResolver.openInputStream(uri)?.use { it.readBytes() }
+            } catch (_: Exception) { null }
+
+            val localBitmap = if (rawBytes != null && rawBytes.isNotEmpty()) {
+                ImageLoader.decodeSampledBitmap(rawBytes, 800)
+            } else null
+
+            if (localBitmap != null) {
+                ImageLoader.preseedCache(this, uri.toString(), localBitmap, circular = false)
+            }
+
             val localMsg = ChatMessage(
                 id = localMsgId,
                 teamCode = currentCode,
@@ -1894,6 +1906,9 @@ class AdminActivity : AppCompatActivity() {
             toast("Uploading photo to chat...")
             CloudinaryUploader.uploadProfileImage(this, uri, maxDimension = 800) { result ->
                 result.onSuccess { remoteUrl ->
+                    if (localBitmap != null) {
+                        ImageLoader.preseedCache(this, remoteUrl, localBitmap, circular = false)
+                    }
                     val remoteMsg = localMsg.copy(mediaUrl = remoteUrl)
                     val idx = chatMessages.indexOfFirst { it.id == localMsgId }
                     if (idx >= 0) {
