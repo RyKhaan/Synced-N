@@ -154,6 +154,8 @@ object TeamRepository {
                     ?: (all["email_ministry_$emailLower"] as? String).orEmpty().takeIf { it.isNotBlank() }
                     ?: (all["user_ministry_$uid"] as? String).orEmpty()
 
+                val photo = (all["email_photo_$emailLower"] as? String).orEmpty().takeIf { it.isNotBlank() }
+                    ?: (all["user_photo_$uid"] as? String).orEmpty()
                 val memberName = fullName.ifBlank { username }
                 if (memberName.isNotBlank()) {
                     val ranges = getMemberUnavailableRanges(uid, preferences)
@@ -165,6 +167,7 @@ object TeamRepository {
                         role = role,
                         ministryRole = ministry,
                         teamCode = code,
+                        photoUri = photo,
                         unavailableRanges = ranges
                     )
                     cacheMember(member)
@@ -206,7 +209,8 @@ object TeamRepository {
                 email = profile.email,
                 role = profile.role,
                 ministryRole = profile.ministryRole,
-                teamCode = profile.teamCode
+                teamCode = profile.teamCode,
+                photoUri = profile.photoUri
             )
             cacheMember(member)
         }
@@ -220,6 +224,7 @@ object TeamRepository {
             "language" to profile.language,
             "ministryRole" to profile.ministryRole
         )
+        if (profile.photoUri.isNotBlank()) updates["photoUri"] = profile.photoUri
         if (profile.email.isNotBlank()) updates["email"] = profile.email
         if (profile.teamCode.isNotBlank()) updates["teamCode"] = profile.teamCode
         if (profile.teamName.isNotBlank()) updates["teamName"] = profile.teamName

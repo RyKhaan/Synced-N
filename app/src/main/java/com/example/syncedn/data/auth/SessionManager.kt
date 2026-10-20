@@ -116,6 +116,11 @@ object SessionManager {
             ?: profile?.ministryRole?.takeIf { it.isNotBlank() }
             ?: ""
 
+        val photoUri = profile?.photoUri?.takeIf { it.isNotBlank() }
+            ?: preferences.getString("email_photo_$emailLower", "").orEmpty().takeIf { it.isNotBlank() }
+            ?: (if (effectiveUid.isNotBlank()) preferences.getString("user_photo_$effectiveUid", "").orEmpty().takeIf { it.isNotBlank() } else null)
+            ?: preferences.getString(KEY_PHOTO_URI, "").orEmpty()
+
         preferences.edit {
             putString(KEY_USER_ID, effectiveUid)
             putString(KEY_EMAIL, email)
@@ -125,7 +130,11 @@ object SessionManager {
             putString(KEY_COUNTRY, country)
             putString(KEY_LANGUAGE, language)
             putString(KEY_MINISTRY_ROLE, ministryRole)
-            remove(KEY_PHOTO_URI)
+            if (photoUri.isNotBlank()) {
+                putString(KEY_PHOTO_URI, photoUri)
+            } else {
+                remove(KEY_PHOTO_URI)
+            }
             remove(KEY_LEFT_TEAM)
 
             // Cache user-scoped copies to preserve data offline per email
@@ -137,9 +146,32 @@ object SessionManager {
                 putString("email_country_$emailLower", country)
                 putString("email_language_$emailLower", language)
                 if (ministryRole.isNotBlank()) putString("email_ministry_$emailLower", ministryRole)
+                if (photoUri.isNotBlank()) putString("email_photo_$emailLower", photoUri)
             }
-            if (effectiveUid.isNotBlank() && ministryRole.isNotBlank()) {
-                putString("user_ministry_$effectiveUid", ministryRole)
+            if (effectiveUid.isNotBlank()) {
+                if (ministryRole.isNotBlank()) putString("user_ministry_$effectiveUid", ministryRole)
+                if (photoUri.isNotBlank()) putString("user_photo_$effectiveUid", photoUri)
+            }
+        }
+    }
+
+    /**
+     * Updates the user's profile photo across active session and user-scoped caches.
+     */
+    fun updatePhotoUri(preferences: SharedPreferences, photoUri: String, email: String = "", uid: String = "") {
+        val emailLower = email.trim().lowercase().ifBlank { preferences.getString(KEY_EMAIL, "").orEmpty().trim().lowercase() }
+        val effectiveUid = uid.ifBlank { preferences.getString(KEY_USER_ID, "").orEmpty() }
+        preferences.edit {
+            if (photoUri.isNotBlank()) {
+                putString(KEY_PHOTO_URI, photoUri)
+            } else {
+                remove(KEY_PHOTO_URI)
+            }
+            if (emailLower.isNotBlank()) {
+                if (photoUri.isNotBlank()) putString("email_photo_$emailLower", photoUri) else remove("email_photo_$emailLower")
+            }
+            if (effectiveUid.isNotBlank()) {
+                if (photoUri.isNotBlank()) putString("user_photo_$effectiveUid", photoUri) else remove("user_photo_$effectiveUid")
             }
         }
     }
