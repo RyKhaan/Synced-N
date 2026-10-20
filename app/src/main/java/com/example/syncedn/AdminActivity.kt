@@ -1845,9 +1845,13 @@ class AdminActivity : AppCompatActivity() {
             navigate("teams")
 
             toast("Uploading photo to chat...")
-            CloudinaryUploader.uploadProfileImage(this, uri) { result ->
+            CloudinaryUploader.uploadProfileImage(this, uri, maxDimension = 800) { result ->
                 result.onSuccess { remoteUrl ->
                     val remoteMsg = localMsg.copy(mediaUrl = remoteUrl)
+                    val idx = chatMessages.indexOfFirst { it.id == localMsgId }
+                    if (idx >= 0) {
+                        chatMessages[idx] = remoteMsg
+                    }
                     TeamRepository.sendChatMessage(currentCode, remoteMsg, preferences)
                 }.onFailure { err ->
                     TeamRepository.sendChatMessage(currentCode, localMsg, preferences)
@@ -1859,7 +1863,7 @@ class AdminActivity : AppCompatActivity() {
         if(requestCode==300 && resultCode==RESULT_OK) {
             val uri=data?.data ?: return
             try {
-                contentResolver.takePersistableUriPermission(uri,Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                try { contentResolver.takePersistableUriPermission(uri,Intent.FLAG_GRANT_READ_URI_PERMISSION) } catch(_: Exception) {}
                 val localUriStr = uri.toString()
                 val currentEmail = preferences.getString(SessionManager.KEY_EMAIL, "").orEmpty()
                 val uid = preferences.getString(SessionManager.KEY_USER_ID, "").orEmpty()
@@ -1869,7 +1873,7 @@ class AdminActivity : AppCompatActivity() {
                 toast("Uploading photo...")
                 CloudinaryUploader.uploadProfileImage(this, uri) { result ->
                     result.onSuccess { remoteUrl ->
-                        toast("Profile photo uploaded!")
+                        toast("Profile photo uploaded to Cloudinary!")
                         SessionManager.updatePhotoUri(preferences, remoteUrl, currentEmail, uid)
                         val activeCode = preferences.getString(SessionManager.KEY_TEAM_CODE, "").orEmpty()
                         val activeMinistry = preferences.getString(SessionManager.KEY_MINISTRY_ROLE, "Worship Leader").orEmpty().ifBlank { "Worship Leader" }
@@ -2343,7 +2347,12 @@ class AdminActivity : AppCompatActivity() {
             .setItems(choices.map { it.first }.toTypedArray()) { _, position ->
                 val member = choices[position]
                 chooseRole(member.first, member.second) { role ->
-                    assigned.put(org.json.JSONObject().put("name", member.first).put("role", role))
+                    val found = getActiveRoster().find { it.fullName.equals(member.first, true) || it.username.equals(member.first, true) }
+                    assigned.put(org.json.JSONObject()
+                        .put("name", member.first)
+                        .put("role", role)
+                        .put("uid", found?.uid.orEmpty())
+                        .put("photoUri", found?.photoUri.orEmpty()))
                     saveLeaderDraft(); navigate("serviceAssignments")
                 }
             }.setNegativeButton("Cancel", null).show()
@@ -2356,26 +2365,95 @@ class AdminActivity : AppCompatActivity() {
     }
     private fun serviceAssignmentsView(): View = memberPage("Service Assignments",
         if (serviceWizard) "memberAvailability" else "service") { col ->
-        col.add(memberButton("+ Assign Member", navy) { chooseAssignment() }, -1, 48); col.space(20)
+        
+        // Top right plus icon header action bar matching Figma Image 3
+        col.add(horizontal().apply {
+            setPadding(0, 0, 0, dp(4))
+            add(View(this@AdminActivity), 0, 1, 1f)
+            val plusAction = FrameLayout(this@AdminActivity).apply {
+                val icon = text("+", 32, Color.rgb(15, 23, 42), bold = false, centered = true)
+                addView(icon, FrameLayout.LayoutParams(-2, -2, Gravity.CENTER))
+                setOnClickListener { chooseAssignment() }
+                contentDescription = "Assign Member"
+                isClickable = true
+                isFocusable = true
+            }
+            add(plusAction, 44, 44)
+        })
+        col.space(8)
+
         val assigned = draftAssignments()
-        if (assigned.length() == 0) col.add(text("Choose available members and assign their roles.", 14, Color.GRAY))
+        if (assigned.length() == 0) {
+            val emptyCard = vertical().apply {
+                background = GradientDrawable().apply {
+                    setColor(Color.WHITE)
+                    cornerRadius = dp(14).toFloat()
+                    setStroke(dp(1), Color.rgb(226, 232, 240))
+                }
+                setPadding(dp(20), dp(24), dp(20), dp(24))
+                gravity = Gravity.CENTER
+                add(text("No members assigned yet.", 14, Color.rgb(100, 116, 139), centered = true))
+                space(14)
+                add(memberButton("+ Assign Member", navy) { chooseAssignment() }, -1, 44)
+            }
+            col.add(emptyCard, -1, -2)
+            col.space(16)
+        }
+
         val availabilityMap = leaderMemberAvailability().associateBy { it.name }
         repeat(assigned.length()) { index ->
             val member = assigned.getJSONObject(index)
-            val name = member.optString("name"); val role = member.optString("role")
+            val name = member.optString("name")
+            val role = member.optString("role")
+            val uid = member.optString("uid")
+            val photoUri = member.optString("photoUri").ifBlank { findMemberPhotoUri(uid, name) }
             val status = availabilityMap[name]?.status ?: "Available"
             val isUnavailable = status == "Unavailable"
-            val badge = if (isUnavailable) "Conflict" else null
-            col.add(panel(if (isUnavailable) Color.RED else Color.rgb(215, 215, 220)).apply {
-                add(memberRow(name, "$role${if (isUnavailable) " • Unavailable on service date" else ""}", badge, onClick = {
-                    AlertDialog.Builder(this@AdminActivity).setTitle(name).setItems(arrayOf("Change Role", "Remove Assignment")) { _, choice ->
-                        if (choice == 0) chooseRole(name, role) {
-                            member.put("role", it); saveLeaderDraft(); navigate("serviceAssignments")
-                        } else { assigned.remove(index); saveLeaderDraft(); navigate("serviceAssignments") }
-                    }.show()
-                }))
-            }); col.space(12)
+
+            val card = FrameLayout(this@AdminActivity).apply {
+                background = GradientDrawable().apply {
+                    setColor(Color.WHITE)
+                    cornerRadius = dp(14).toFloat()
+                    setStroke(dp(1), if (isUnavailable) Color.RED else Color.rgb(226, 232, 240))
+                }
+                elevation = dp(3).toFloat()
+                outlineProvider = ViewOutlineProvider.BACKGROUND
+            }
+            val content = horizontal().apply {
+                setPadding(dp(16), dp(12), dp(14), dp(12))
+                add(memberAvatarView(photoUri, 48), 48, 48)
+                space(14)
+                val info = vertical().apply {
+                    add(text(name, 15, Color.rgb(15, 23, 42), bold = true))
+                    space(3)
+                    val roleLabel = if (isUnavailable) "$role • Conflict on service date" else role
+                    add(text(roleLabel, 13, if (isUnavailable) Color.RED else Color.rgb(100, 116, 139)))
+                }
+                add(info, 0, -2, 1f)
+
+                val dotsBtn = FrameLayout(this@AdminActivity).apply {
+                    val dots = text("⋮", 22, Color.rgb(15, 23, 42), bold = true, centered = true)
+                    addView(dots, FrameLayout.LayoutParams(-2, -2, Gravity.CENTER))
+                    isClickable = true
+                    isFocusable = true
+                    setOnClickListener {
+                        AlertDialog.Builder(this@AdminActivity).setTitle(name).setItems(arrayOf("Change Role", "Remove Assignment")) { _, choice ->
+                            if (choice == 0) chooseRole(name, role) { newRole ->
+                                member.put("role", newRole); saveLeaderDraft(); navigate("serviceAssignments")
+                            } else {
+                                assigned.remove(index); saveLeaderDraft(); navigate("serviceAssignments")
+                            }
+                        }.show()
+                    }
+                }
+                add(dotsBtn, 40, 40)
+            }
+            card.addView(content)
+            col.add(card, -1, -2)
+            col.space(12)
         }
+
+        col.space(8)
         stepActions(col, { navigate(if (serviceWizard) "memberAvailability" else "service") },
             if (serviceWizard) "Next" else "Save") {
             if (assigned.length() == 0) toast("Assign at least one member.")
@@ -2395,7 +2473,11 @@ class AdminActivity : AppCompatActivity() {
         val assigned = draftAssignments()
         repeat(assigned.length()) {
             val member = assigned.getJSONObject(it)
-            col.add(memberRow(member.optString("name"), member.optString("role"), if (member.optString("name") == "Joshua Lagare") "Admin" else "Member"))
+            val name = member.optString("name")
+            val role = member.optString("role")
+            val uid = member.optString("uid")
+            val photoUri = member.optString("photoUri").ifBlank { findMemberPhotoUri(uid, name) }
+            col.add(memberRow(name, role, if (name == "Joshua Lagare") "Admin" else "Member", photoUri = photoUri, uid = uid))
         }
         col.space(20)
         col.add(memberButton("Schedule Rehearsal", navy) { navigate("scheduleRehearsal") }, -1, 48); col.space(12)
@@ -3637,6 +3719,27 @@ class AdminActivity : AppCompatActivity() {
                 centerX + size * 0.28f, centerY + size * 0.42f, ink)
         }
     }
+    private fun findMemberPhotoUri(uid: String? = null, name: String? = null, email: String? = null): String {
+        val roster = getActiveRoster()
+        val match = roster.find {
+            (it.uid.isNotBlank() && uid != null && it.uid == uid) ||
+            (it.email.isNotBlank() && email != null && it.email.equals(email, true)) ||
+            (it.fullName.isNotBlank() && name != null && it.fullName.equals(name, true)) ||
+            (it.username.isNotBlank() && name != null && it.username.equals(name, true))
+        }
+        if (!match?.photoUri.isNullOrBlank()) return match!!.photoUri
+        val currentUid = preferences.getString(SessionManager.KEY_USER_ID, "").orEmpty()
+        val currentEmail = preferences.getString(SessionManager.KEY_EMAIL, "").orEmpty()
+        val currentName = fullName.ifBlank { displayName }
+        if ((uid != null && uid == currentUid) ||
+            (email != null && email.equals(currentEmail, true)) ||
+            (name != null && (name.equals(currentName, true) || name.equals(displayName, true)))) {
+            return preferences.getString(SessionManager.KEY_PHOTO_URI, "").orEmpty().ifBlank {
+                preferences.getString("photoUri", "").orEmpty()
+            }
+        }
+        return ""
+    }
     private fun memberAvatarView(photoUri: String? = null, sizeDp: Int = 44): View {
         val uri = photoUri?.takeIf { it.isNotBlank() }
         val cached = if (uri != null) ImageLoader.getCachedProfileBitmap(this, uri) else null
@@ -3669,9 +3772,10 @@ class AdminActivity : AppCompatActivity() {
         return memberAvatar()
     }
     private fun memberRow(name: String, role: String, badge: String? = null,
-                          onClick: (() -> Unit)? = null, photoUri: String? = null): View = horizontal().apply {
+                          onClick: (() -> Unit)? = null, photoUri: String? = null, uid: String? = null): View = horizontal().apply {
         setPadding(0, dp(8), 0, dp(8))
-        add(memberAvatarView(photoUri, 48), 48, 48)
+        val resolvedPhoto = photoUri?.takeIf { it.isNotBlank() } ?: findMemberPhotoUri(uid, name)
+        add(memberAvatarView(resolvedPhoto, 48), 48, 48)
         val info = vertical().apply {
             setPadding(dp(12), 0, dp(8), 0)
             add(text(name, 13, navy, true)); space(3); add(text(role, 12, Color.DKGRAY))
@@ -4872,8 +4976,8 @@ class AdminActivity : AppCompatActivity() {
                                         }
                                         clipToOutline = true
                                     }
-                                    add(iv, maxBubbleWidth - dp(28), dp(180))
-                                    ImageLoader.loadProfilePhoto(iv, msg.mediaUrl)
+                                    add(iv, 220, 180)
+                                    ImageLoader.loadProfilePhoto(iv, msg.mediaUrl, circular = false)
                                     if (msg.text.isNotBlank()) space(6)
                                 }
                                 if (msg.text.isNotBlank()) {
@@ -4942,8 +5046,8 @@ class AdminActivity : AppCompatActivity() {
                                         }
                                         clipToOutline = true
                                     }
-                                    add(iv, maxBubbleWidth - dp(28), dp(180))
-                                    ImageLoader.loadProfilePhoto(iv, msg.mediaUrl)
+                                    add(iv, 220, 180)
+                                    ImageLoader.loadProfilePhoto(iv, msg.mediaUrl, circular = false)
                                     if (msg.text.isNotBlank()) space(6)
                                 }
                                 if (msg.text.isNotBlank()) {
