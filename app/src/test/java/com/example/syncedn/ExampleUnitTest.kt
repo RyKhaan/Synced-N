@@ -2069,4 +2069,154 @@ class ExampleUnitTest {
         assertEquals("Ryan Lloyd Genturo", member!!.fullName)
         assertEquals("https://res.cloudinary.com/ffb3fdkm/image/upload/v1234/ryan.jpg", member.photoUri)
     }
+
+    @Test
+    fun testRosterPersistencePreservesUnavailableRangesAcrossColdStartAndSync() {
+        val team = "TEST_AVAIL_SYNC"
+        val fakePrefs = FakePreferences()
+        com.example.syncedn.data.database.TeamRepository.clearCache()
+
+        val vacayRange = com.example.syncedn.data.model.UnavailableRange(
+            id = "range_vacay_1",
+            startDate = "2026-10-25",
+            endDate = "2026-10-27",
+            reason = "Family Vacation"
+        )
+        val member1 = com.example.syncedn.data.model.TeamMember(
+            uid = "uid_leader_1",
+            fullName = "Joshua Lagare",
+            username = "joshua",
+            email = "joshua@syncedn.org",
+            role = "Leader",
+            ministryRole = "Worship Leader",
+            teamCode = team
+        )
+        val member2 = com.example.syncedn.data.model.TeamMember(
+            uid = "uid_member_2",
+            fullName = "RL Gents",
+            username = "rlgents",
+            email = "rlgenturo@gmail.com",
+            role = "Member",
+            ministryRole = "Vocalist",
+            teamCode = team,
+            unavailableRanges = listOf(vacayRange)
+        )
+
+        // 1. Save roster locally with preferences (simulating Firestore roster fetch)
+        com.example.syncedn.data.database.TeamRepository.saveRosterLocally(team, listOf(member1, member2), fakePrefs)
+
+        // 2. Simulate cold start by clearing in-memory cache
+        com.example.syncedn.data.database.TeamRepository.clearCache()
+
+        // 3. getCachedRoster must deserialize unavailableRanges from JSONArray in SharedPreferences
+        val coldCached = com.example.syncedn.data.database.TeamRepository.getCachedRoster(team, fakePrefs)
+        val restoredMember = coldCached.find { it.uid == "uid_member_2" }
+        assertNotNull(restoredMember)
+        assertEquals("Unavailable ranges must survive JSONArray serialization in cached_roster", 1, restoredMember!!.unavailableRanges.size)
+        assertEquals("Family Vacation", restoredMember.unavailableRanges[0].reason)
+
+        // 4. syncFromPreferences must NOT overwrite unavailableRanges with emptyList()
+        fakePrefs.edit()
+            .putString("email_code_rlgenturo@gmail.com", team)
+            .putString("email_role_rlgenturo@gmail.com", "Member")
+            .putString("email_fullname_rlgenturo@gmail.com", "RL Gents")
+            .putString("email_username_rlgenturo@gmail.com", "rlgents")
+            .putString("email_ministry_rlgenturo@gmail.com", "Vocalist")
+            .putString("email_uid_rlgenturo@gmail.com", "uid_member_2")
+            .apply()
+        com.example.syncedn.data.database.TeamRepository.syncFromPreferences(fakePrefs, team)
+
+        val afterSync = com.example.syncedn.data.database.TeamRepository.getCachedRoster(team, fakePrefs)
+        val memberAfterSync = afterSync.find { it.email == "rlgenturo@gmail.com" }
+        assertNotNull(memberAfterSync)
+        assertEquals("syncFromPreferences must preserve unavailableRanges", 1, memberAfterSync!!.unavailableRanges.size)
+        assertEquals("Family Vacation", memberAfterSync.unavailableRanges[0].reason)
+
+        // 5. Calling cacheMember with empty unavailableRanges (like saveUserTeamState) must preserve existing ranges
+        com.example.syncedn.data.database.TeamRepository.cacheMember(
+            member2.copy(unavailableRanges = emptyList()),
+            fakePrefs
+        )
+        val afterCacheMember = com.example.syncedn.data.database.TeamRepository.getCachedRoster(team, fakePrefs)
+        val memberAfterCache = afterCacheMember.find { it.uid == "uid_member_2" }
+        assertNotNull(memberAfterCache)
+        assertEquals("cacheMember must not wipe existing unavailableRanges", 1, memberAfterCache!!.unavailableRanges.size)
+
+        // 6. Leader service creation check on 2026-10-26 must detect RL Gents as unavailable
+        val (_, unavailableList) = com.example.syncedn.data.database.TeamRepository.checkTeamAvailabilityForDate(
+            team,
+            "2026-10-26"
+        )
+        assertEquals(1, unavailableList.size)
+        assertEquals("RL Gents", unavailableList[0].first.fullName)
+        assertEquals("Family Vacation", unavailableList[0].second)
+    }
+
+    @Test
+    fun testMemberUnavailabilityPersistsAcrossLogoutAndLeaderDetection() {
+        val team = "TEST_LEADER_DETECT"
+        val fakePrefs = FakePreferences()
+        val repo = com.example.syncedn.data.database.TeamRepository
+        repo.clearCache()
+
+        // 1. Seed Leader and Member in preferences
+        fakePrefs.edit()
+            .putString("email_code_leader@syncedn.org", team)
+            .putString("email_role_leader@syncedn.org", "Leader")
+            .putString("email_fullname_leader@syncedn.org", "Leader Ryan")
+            .putString("email_username_leader@syncedn.org", "ryan")
+            .putString("email_ministry_leader@syncedn.org", "Worship Leader")
+            .putString("email_uid_leader@syncedn.org", "uid_leader_1")
+            .putString("email_code_member@syncedn.org", team)
+            .putString("email_role_member@syncedn.org", "Member")
+            .putString("email_fullname_member@syncedn.org", "Member Angelo")
+            .putString("email_username_member@syncedn.org", "angelo")
+            .putString("email_ministry_member@syncedn.org", "Guitarist")
+            .putString("email_uid_member@syncedn.org", "uid_member_2")
+            .putString(com.example.syncedn.data.auth.SessionManager.KEY_USER_ID, "uid_member_2")
+            .putString(com.example.syncedn.data.auth.SessionManager.KEY_EMAIL, "member@syncedn.org")
+            .putString(com.example.syncedn.data.auth.SessionManager.KEY_TEAM_CODE, team)
+            .apply()
+
+        repo.syncFromPreferences(fakePrefs, team)
+
+        // 2. Member adds an unavailable range on 2026-10-15..2026-10-18
+        val range = com.example.syncedn.data.model.UnavailableRange(
+            id = "r_oct15",
+            startDate = "2026-10-15",
+            endDate = "2026-10-18",
+            reason = "Out of Town Conference"
+        )
+        repo.addUnavailableRange("uid_member_2", range, fakePrefs)
+
+        // 3. Member logs out
+        com.example.syncedn.data.auth.SessionManager.clearSession(fakePrefs)
+
+        // 4. Leader logs in on the device
+        val leaderProfile = com.example.syncedn.data.model.UserProfile(
+            uid = "uid_leader_1",
+            username = "ryan",
+            email = "leader@syncedn.org",
+            role = "Leader",
+            teamName = "Synced Worship",
+            teamCode = team,
+            fullName = "Leader Ryan",
+            ministryRole = "Worship Leader"
+        )
+        com.example.syncedn.data.auth.SessionManager.saveSessionProfile(
+            fakePrefs,
+            leaderProfile,
+            fallbackUsername = "ryan",
+            fallbackEmail = "leader@syncedn.org"
+        )
+        repo.syncFromPreferences(fakePrefs, team)
+
+        // 5. Leader checks availability for 2026-10-16
+        val (available, unavailable) = repo.checkTeamAvailabilityForDate(team, "2026-10-16")
+        assertEquals(1, available.size)
+        assertEquals("Leader Ryan", available[0].fullName)
+        assertEquals(1, unavailable.size)
+        assertEquals("Member Angelo", unavailable[0].first.fullName)
+        assertEquals("Out of Town Conference", unavailable[0].second)
+    }
 }

@@ -179,24 +179,35 @@ open class MemberActivity : AppCompatActivity() {
         return SessionManager.resolveUserTeamSession(preferences, profile, email)
     }
 
+    private fun currentUserId(): String {
+        val emailLower = preferences.getString("email", "").orEmpty().trim().lowercase()
+        return com.example.syncedn.data.auth.AuthManager.currentUser?.uid?.takeIf { it.isNotBlank() }
+            ?: preferences.getString(SessionManager.KEY_USER_ID, "").orEmpty().takeIf { it.isNotBlank() && !it.startsWith("user_") }
+            ?: (if (emailLower.isNotBlank()) preferences.getString("email_uid_$emailLower", "").orEmpty().takeIf { it.isNotBlank() } else null)
+            ?: preferences.getString(SessionManager.KEY_USER_ID, "").orEmpty().ifBlank {
+                "user_${emailLower.ifBlank { displayName.lowercase() }.hashCode()}"
+            }
+    }
+
     private fun saveUserTeamState(role: String, team: String, code: String) {
-        val uid = com.example.syncedn.data.auth.AuthManager.currentUser?.uid?.takeIf { it.isNotBlank() }
-            ?: preferences.getString("userId", "").orEmpty().takeIf { it.isNotBlank() && !it.startsWith("user_") }
-            ?: preferences.getString("userId", "").orEmpty()
+        val uid = currentUserId()
         val emailLower = preferences.getString("email", "").orEmpty().trim().lowercase()
         val cleanTeamLower = team.trim().lowercase()
         if (code.isNotBlank() && team.isNotBlank()) {
             FirestoreManager.registerLocalTeam(code, team)
             val currentName = fullName.ifBlank { displayName }
             val ministry = preferences.getString("ministryRole", if (role.equals("Leader", true)) "Worship Leader" else "Member").orEmpty()
+            val existingRanges = TeamRepository.getMemberUnavailableRanges(uid, preferences, emailLower, currentName)
             val member = com.example.syncedn.data.model.TeamMember(
-                uid = uid.ifBlank { "user_${emailLower.hashCode()}" },
+                uid = uid,
                 fullName = currentName,
                 username = displayName,
                 email = emailLower,
                 role = role,
                 ministryRole = ministry,
-                teamCode = code
+                teamCode = code,
+                photoUri = preferences.getString("photoUri", "").orEmpty(),
+                unavailableRanges = existingRanges
             )
             TeamRepository.cacheMember(member, preferences)
         }
@@ -481,6 +492,12 @@ open class MemberActivity : AppCompatActivity() {
                 if (triggerRefresh) refreshTeamServices()
             }
             "teams" -> if (triggerRefresh) refreshTeamRoster()
+            "calendar" -> {
+                if (triggerRefresh) {
+                    refreshTeamRoster(force = true)
+                    refreshTeamServices()
+                }
+            }
             "settings" -> setupSettings()
             "profile" -> setupProfile()
         }
@@ -2009,6 +2026,15 @@ open class MemberActivity : AppCompatActivity() {
                     }
                     if (p.isNotBlank()) updated = updated.copy(photoUri = p)
                 }
+                val mergedRanges = (updated.unavailableRanges + TeamRepository.getMemberUnavailableRanges(
+                    uid = updated.uid,
+                    preferences = preferences,
+                    email = emailLower,
+                    name = updated.fullName.ifBlank { updated.username }
+                )).distinctBy { it.id.ifBlank { "${it.startDate}_${it.endDate}_${it.reason}" } }
+                if (mergedRanges != updated.unavailableRanges) {
+                    updated = updated.copy(unavailableRanges = mergedRanges)
+                }
                 updated
             }
         }
@@ -2072,18 +2098,23 @@ open class MemberActivity : AppCompatActivity() {
             val count = getActiveRoster().size
             val label = "$count Member${if (count == 1) "" else "s"}"
             homeMemberCount?.let { if (it.text.toString() != label) it.text = label }
-        } else if (page == "teams" && teamTab != "Team Chat") {
+        } else if ((page == "teams" && teamTab != "Team Chat") || page == "calendar") {
+            val targetPage = page
             val oldRoot = screenRoot
-            val oldScroll = primaryScroll(oldRoot) ?: return
-            oldScroll.whenIdle {
-                if (screenRoot === oldRoot && page == "teams") {
-                    val position = oldScroll.scrollY
-                    // Render updated rows once, without starting another roster request.
-                    navigate("teams", triggerRefresh = false)
-                    primaryScroll(screenRoot)?.let { scroll ->
-                        scroll.doOnLayout { scroll.scrollTo(0, position) }
+            val oldScroll = primaryScroll(oldRoot)
+            if (oldScroll != null) {
+                oldScroll.whenIdle {
+                    if (screenRoot === oldRoot && page == targetPage) {
+                        val position = oldScroll.scrollY
+                        // Render updated rows once, without starting another roster request.
+                        navigate(targetPage, triggerRefresh = false)
+                        primaryScroll(screenRoot)?.let { scroll ->
+                            scroll.doOnLayout { scroll.scrollTo(0, position) }
+                        }
                     }
                 }
+            } else if (screenRoot === oldRoot && page == targetPage) {
+                navigate(targetPage, triggerRefresh = false)
             }
         }
     }
@@ -2094,12 +2125,12 @@ open class MemberActivity : AppCompatActivity() {
         if (ticket == -1L && !force) return
         TeamRepository.syncFromPreferences(preferences, currentCode)
         val previous = getActiveRoster().sortedBy { it.uid }
-        TeamRepository.getTeamRoster(currentCode, force) { result ->
+        TeamRepository.getTeamRoster(currentCode, force, preferences) { result ->
             runOnUiThread {
                 if ((ticket == -1L || rosterRefreshGate.finish(ticket)) && !isFinishing && !isDestroyed && activeTeamCode() == currentCode) {
                     result.getOrNull()?.let { list ->
                         teamRoster = list
-                        if (list.sortedBy { it.uid } != previous) updateRosterViews()
+                        if (getActiveRoster().sortedBy { it.uid } != previous) updateRosterViews()
                     }
                 }
             }
@@ -2468,9 +2499,9 @@ open class MemberActivity : AppCompatActivity() {
         val prevCal = (date.clone() as java.util.Calendar).apply { add(java.util.Calendar.MONTH, -1) }
         val prevMax = prevCal.getActualMaximum(java.util.Calendar.DAY_OF_MONTH)
         val rows = (first + count + 6) / 7
-        val uid = preferences.getString(SessionManager.KEY_USER_ID, "").orEmpty()
-            .ifBlank { AuthManager.currentUser?.uid.orEmpty() }
-        val activeRanges = TeamRepository.getMemberUnavailableRanges(uid, preferences)
+        val uid = currentUserId()
+        val emailStr = preferences.getString("email", "").orEmpty()
+        val activeRanges = TeamRepository.getMemberUnavailableRanges(uid, preferences, emailStr, fullName.ifBlank { displayName })
         val allServices = storedServices()
 
         repeat(rows) { week ->
@@ -2486,7 +2517,7 @@ open class MemberActivity : AppCompatActivity() {
                             if (isSel) background = bg(purple, 24)
                         }, -1, 36)
 
-                        val hasUnavailable = activeRanges.any { it.includes(key) } || (calendarMonth == 9 && day in listOf(8, 9, 10))
+                        val hasUnavailable = activeRanges.any { it.includes(key) }
                         val hasService = allServices.any { it.optString("date") == key } || (calendarMonth == 9 && day in listOf(4, 11, 18, 25)) || (weekday == 0 && day in 1..count)
                         val hasRehearsal = allServices.any { it.optJSONObject("rehearsal")?.optString("date") == key } || (calendarMonth == 9 && day == 3)
 
@@ -2519,7 +2550,7 @@ open class MemberActivity : AppCompatActivity() {
 
         val selectedKey = calendarKey()
         val matchingRange = activeRanges.find { it.includes(selectedKey) }
-        val isUnavailable = matchingRange != null || (calendarMonth == 9 && calendarDay in listOf(8, 9, 10))
+        val isUnavailable = matchingRange != null
         val matchingService = allServices.find { it.optString("date") == selectedKey }
         val isService = matchingService != null || (calendarMonth == 9 && calendarDay in listOf(4, 11, 18, 25)) || (date.get(java.util.Calendar.DAY_OF_WEEK) == 1 && !isUnavailable)
         val isRehearsal = (allServices.any { it.optJSONObject("rehearsal")?.optString("date") == selectedKey } || (calendarMonth == 9 && calendarDay == 3)) && !isUnavailable && !isService
@@ -2540,8 +2571,10 @@ open class MemberActivity : AppCompatActivity() {
 
         val eventSub = when {
             isUnavailable -> {
-                if (matchingRange != null) formatRangeDisplay(matchingRange.startDate, matchingRange.endDate)
-                else "${calendarDay} Oct - 10 Oct"
+                if (matchingRange != null) {
+                    val rangeLabel = formatRangeDisplay(matchingRange.startDate, matchingRange.endDate)
+                    if (matchingRange.reason.isNotBlank()) "$rangeLabel • ${matchingRange.reason}" else rangeLabel
+                } else ""
             }
             isService -> {
                 val srv = matchingService
@@ -2624,8 +2657,8 @@ open class MemberActivity : AppCompatActivity() {
         val content = vertical()
         scroll.addView(content, FrameLayout.LayoutParams(-1, -2))
 
-        val uid = preferences.getString(SessionManager.KEY_USER_ID, "").orEmpty()
-            .ifBlank { AuthManager.currentUser?.uid.orEmpty() }
+        val uid = currentUserId()
+        val emailStr = preferences.getString("email", "").orEmpty()
 
         // Top Month Calendar view (matching Manage Schedule.png)
         val calContainer = vertical().apply { setPadding(dp(20), dp(10), dp(20), dp(10)) }
@@ -2634,7 +2667,13 @@ open class MemberActivity : AppCompatActivity() {
         }
         val monthRow = horizontal()
         monthRow.add(text("‹", 28, navy, centered = true).apply {
-            setOnClickListener { date.add(java.util.Calendar.MONTH, -1); setCalendarMonth(date) }
+            setOnClickListener {
+                date.add(java.util.Calendar.MONTH, -1)
+                calendarYear = date.get(java.util.Calendar.YEAR)
+                calendarMonth = date.get(java.util.Calendar.MONTH)
+                calendarDay = 1
+                navigate("availability")
+            }
             contentDescription = "Previous month"; isFocusable = true
         }, 48, 48)
         monthRow.add(vertical().apply {
@@ -2642,7 +2681,13 @@ open class MemberActivity : AppCompatActivity() {
             space(4); add(text(calendarYear.toString(), 12, Color.GRAY, centered = true))
         }, 0, -2, 1f)
         monthRow.add(text("›", 28, navy, centered = true).apply {
-            setOnClickListener { date.add(java.util.Calendar.MONTH, 1); setCalendarMonth(date) }
+            setOnClickListener {
+                date.add(java.util.Calendar.MONTH, 1)
+                calendarYear = date.get(java.util.Calendar.YEAR)
+                calendarMonth = date.get(java.util.Calendar.MONTH)
+                calendarDay = 1
+                navigate("availability")
+            }
             contentDescription = "Next month"; isFocusable = true
         }, 48, 48)
         calContainer.add(monthRow); calContainer.space(12)
@@ -2656,7 +2701,7 @@ open class MemberActivity : AppCompatActivity() {
         val prevCal = (date.clone() as java.util.Calendar).apply { add(java.util.Calendar.MONTH, -1) }
         val prevMax = prevCal.getActualMaximum(java.util.Calendar.DAY_OF_MONTH)
         val rows = (first + count + 6) / 7
-        val activeRanges = TeamRepository.getMemberUnavailableRanges(uid, preferences)
+        val activeRanges = TeamRepository.getMemberUnavailableRanges(uid, preferences, emailStr, fullName.ifBlank { displayName })
 
         repeat(rows) { week ->
             calContainer.add(horizontal().apply {
@@ -2665,7 +2710,17 @@ open class MemberActivity : AppCompatActivity() {
                     val cell = vertical().apply { gravity = Gravity.CENTER }
                     if (day in 1..count) {
                         val key = calendarKey(day)
-                        cell.add(text(day.toString(), 12, navy, centered = true), -1, 26)
+                        val isSel = day == calendarDay
+                        val hasUnavail = activeRanges.any { it.includes(key) }
+                        cell.add(text(day.toString(), 12,
+                            when {
+                                isSel -> Color.WHITE
+                                hasUnavail -> Color.rgb(239, 68, 68)
+                                else -> navy
+                            }, bold = isSel || hasUnavail, centered = true).apply {
+                            if (isSel) background = bg(purple, 13)
+                            else if (hasUnavail) background = bg(Color.rgb(254, 226, 226), 13)
+                        }, -1, 26)
                         cell.isClickable = true; cell.isFocusable = true; cell.contentDescription = key
                         cell.setOnClickListener { calendarDay = day; navigate("availability") }
                     } else if (day <= 0) {
@@ -2682,8 +2737,8 @@ open class MemberActivity : AppCompatActivity() {
         content.add(calContainer)
 
         // Bottom dark navy/midnight container matching uploaded design exactly (media_1792410432342_45846c86.png)
-        var startIso = calendarKey(if (calendarDay in 8..10) 8 else calendarDay)
-        var endIso = calendarKey(if (calendarDay in 8..10) 10 else calendarDay)
+        var startIso = calendarKey(calendarDay)
+        var endIso = calendarKey(calendarDay)
 
         val darkCard = vertical().apply {
             setPadding(dp(16), dp(20), dp(16), dp(24))
@@ -2710,6 +2765,7 @@ open class MemberActivity : AppCompatActivity() {
 
         darkCard.add(text("Starts", 14, Color.WHITE, bold = false)); darkCard.space(6)
         val startDisplay = text(formatDisplayDate(startIso), 14, Color.rgb(20, 27, 52))
+        val endDisplay = text(formatDisplayDate(endIso), 14, Color.rgb(20, 27, 52))
         val startRow = horizontal().apply {
             gravity = Gravity.CENTER_VERTICAL
             background = bg(Color.rgb(217, 217, 217), 21)
@@ -2722,13 +2778,16 @@ open class MemberActivity : AppCompatActivity() {
                 android.app.DatePickerDialog(this@MemberActivity, { _, year, month, day ->
                     startIso = "%04d-%02d-%02d".format(java.util.Locale.US, year, month + 1, day)
                     startDisplay.text = formatDisplayDate(startIso)
+                    if (endIso < startIso) {
+                        endIso = startIso
+                        endDisplay.text = formatDisplayDate(endIso)
+                    }
                 }, parts[0], parts[1] - 1, parts[2]).show()
             }
         }
         darkCard.add(startRow, -1, 42); darkCard.space(12)
 
         darkCard.add(text("Ends", 14, Color.WHITE, bold = false)); darkCard.space(6)
-        val endDisplay = text(formatDisplayDate(endIso), 14, Color.rgb(20, 27, 52))
         val endRow = horizontal().apply {
             gravity = Gravity.CENTER_VERTICAL
             background = bg(Color.rgb(217, 217, 217), 21)
@@ -2759,7 +2818,7 @@ open class MemberActivity : AppCompatActivity() {
             setPadding(0, 0, 0, 0)
             setOnClickListener {
                 val rText = reasonInput.text.toString().trim().ifBlank { "Family bonding" }
-                val currentRanges = TeamRepository.getMemberUnavailableRanges(uid, preferences)
+                val currentRanges = TeamRepository.getMemberUnavailableRanges(uid, preferences, emailStr, fullName.ifBlank { displayName })
                 when {
                     endIso < startIso -> toast("End date must be on or after the start date.")
                     currentRanges.size >= 100 -> toast("Maximum 100 unavailable ranges reached.")
@@ -2771,6 +2830,12 @@ open class MemberActivity : AppCompatActivity() {
                             reason = rText
                         )
                         TeamRepository.addUnavailableRange(uid, range, preferences)
+                        val parts = startIso.split("-").mapNotNull { it.toIntOrNull() }
+                        if (parts.size == 3) {
+                            calendarYear = parts[0]
+                            calendarMonth = parts[1] - 1
+                            calendarDay = parts[2]
+                        }
                         toast("Unavailable range added")
                         navigate("calendar")
                     }
