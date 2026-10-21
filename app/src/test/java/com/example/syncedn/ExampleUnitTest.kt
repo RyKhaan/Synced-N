@@ -2219,4 +2219,128 @@ class ExampleUnitTest {
         assertEquals("Member Angelo", unavailable[0].first.fullName)
         assertEquals("Out of Town Conference", unavailable[0].second)
     }
+
+    @Test
+    fun testDynamicRecentNotificationsFeedGeneration() {
+        val team = "TEST_NOTIF_FEED"
+        val fakePrefs = FakePreferences()
+        val repo = com.example.syncedn.data.database.TeamRepository
+        repo.clearCache()
+
+        // 1. Empty team has no notifications
+        val initial = repo.getRecentTeamNotifications(team, fakePrefs)
+        assertTrue("New team without activity should have empty notifications", initial.isEmpty())
+
+        val now = System.currentTimeMillis()
+        // 2. Add a published service with 2 songs
+        val srv = com.example.syncedn.data.model.ServiceData(
+            id = "srv_notif_1",
+            teamCode = team,
+            title = "Youth Worship Night",
+            date = "2026-10-25",
+            start = "18:00",
+            end = "20:00",
+            venue = "Main Sanctuary",
+            status = "Published",
+            songs = listOf(
+                com.example.syncedn.data.model.ServiceSong(title = "Praise"),
+                com.example.syncedn.data.model.ServiceSong(title = "Way Maker")
+            ),
+            createdAt = now - 3600_000L,
+            updatedAt = now - 3600_000L
+        )
+        repo.saveServiceLocally(team, srv, fakePrefs)
+
+        // 3. Add an urgent announcement
+        val ann = com.example.syncedn.data.model.AnnouncementData(
+            id = "ann_notif_1",
+            teamCode = team,
+            title = "Soundcheck Moved",
+            message = "Please arrive at 4:30 PM for soundcheck.",
+            urgent = true,
+            author = "Leader Ryan",
+            createdBy = "uid_leader",
+            createdAt = now - 1800_000L,
+            updatedAt = now - 1800_000L
+        )
+        repo.saveAnnouncementLocally(team, ann, fakePrefs)
+
+        // 4. Add a substitution request
+        val sub = com.example.syncedn.data.model.SubstitutionData(
+            id = "sub_notif_1",
+            teamCode = team,
+            serviceId = "srv_notif_1",
+            serviceTitle = "Youth Worship Night",
+            serviceDate = "2026-10-25",
+            requesterUid = "uid_m1",
+            requesterName = "Angelo Daniel",
+            role = "Guitarist",
+            substituteUid = "uid_m2",
+            substituteName = "RL Gents",
+            reason = "Exam schedule",
+            status = "Pending",
+            createdBy = "uid_m1",
+            createdAt = now - 60_000L,
+            updatedAt = now - 60_000L
+        )
+        repo.saveSubstitutionLocally(team, sub, fakePrefs)
+
+        val feed = repo.getRecentTeamNotifications(team, fakePrefs)
+        assertEquals(4, feed.size)
+        assertTrue(feed[0].title.contains("Substitution"))
+        assertTrue(feed[1].title.contains("Soundcheck Moved"))
+        assertEquals("New Service Scheduled", feed[2].title)
+        assertEquals("Lineup Published", feed[3].title)
+    }
+
+    @Test
+    fun testTeamReportSubmissionAndCaching() {
+        val team = "TEST_REPORT_01"
+        val fakePrefs = FakePreferences()
+        val repo = com.example.syncedn.data.database.TeamRepository
+        repo.clearCache()
+
+        var callbackSuccess = false
+        repo.submitTeamReport(
+            teamCode = team,
+            reporterUid = "uid_reporter_1",
+            reporterName = "RL Gents",
+            reason = "Incorrect schedule dates posted",
+            preferences = fakePrefs
+        ) { result ->
+            callbackSuccess = result.isSuccess
+        }
+
+        assertTrue(callbackSuccess)
+        val reports = repo.getCachedTeamReports(team, fakePrefs)
+        assertEquals(1, reports.size)
+        assertEquals("Incorrect schedule dates posted", reports[0]["reason"])
+        assertEquals("RL Gents", reports[0]["reporterName"])
+    }
+
+    @Test
+    fun testNotificationPreferencesPersistence() {
+        val fakePrefs = FakePreferences()
+        val repo = com.example.syncedn.data.database.TeamRepository
+
+        repo.saveNotificationPreferences(
+            uid = "uid_pref_1",
+            notificationsEnabled = false,
+            teamUnmuted = false,
+            preferences = fakePrefs
+        )
+
+        assertFalse(fakePrefs.getBoolean("notifications", true))
+        assertFalse(fakePrefs.getBoolean("teamUnmuted", true))
+
+        repo.saveNotificationPreferences(
+            uid = "uid_pref_1",
+            notificationsEnabled = true,
+            teamUnmuted = true,
+            preferences = fakePrefs
+        )
+
+        assertTrue(fakePrefs.getBoolean("notifications", false))
+        assertTrue(fakePrefs.getBoolean("teamUnmuted", false))
+    }
 }
