@@ -774,10 +774,7 @@ class AdminActivity : AppCompatActivity() {
         applyProfilePhoto(UI.profileButton)
         click(UI.profileButton) { openProfile("home") }
         click(UI.worshipCard) {
-            selectedService = "Sunday Worship Service"; serviceReturnPage = "home"
-            if (isLeader) loadSampleLeaderService(selectedService, "2025-05-18", "9:00AM")
-            preferences.edit { putString("serviceDate", "May 18, 2025"); putString("serviceTime", "9:00AM"); putString("serviceVenue", "Main Sanctuary") }
-            navigate("service")
+            openHomeUpcoming()
         }
         findViewById<TextView>(UI.teamTitle).apply {
             text = teamName.ifBlank { "Worship\nTeam" }
@@ -1490,7 +1487,12 @@ class AdminActivity : AppCompatActivity() {
             isClickable = true
             isFocusable = true
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES
-            contentDescription = "Next Worship Session. Sunday, May 18, 2025, 9:00 AM. Main Sanctuary. Open details."
+            val upcomingRec = homeUpcomingRecord()
+            contentDescription = if (upcomingRec != null) {
+                "Next Worship Session. ${upcomingRec.optString("title")}, ${upcomingRec.optString("date")}. ${upcomingRec.optString("venue", "Main Sanctuary")}. Open details."
+            } else {
+                "Next Worship Session. Open details."
+            }
         }
         hero.clipChildren = false
         hero.clipToPadding = false
@@ -1723,8 +1725,9 @@ class AdminActivity : AppCompatActivity() {
         findViewById<Switch>(UI.notificationSwitch).apply {
             isChecked=preferences.getBoolean("notifications",true)
             setOnCheckedChangeListener { _, checked ->
-                preferences.edit { putBoolean("notifications", checked) }
-                toast(if(checked) "Notifications enabled locally" else "Notifications disabled locally")
+                val unmuted = preferences.getBoolean("teamUnmuted", true)
+                TeamRepository.saveNotificationPreferences(currentUserId(), checked, unmuted, preferences)
+                toast(if(checked) "Notifications enabled" else "Notifications disabled")
             }
         }
         click(UI.logoutButton) {
@@ -1743,8 +1746,8 @@ class AdminActivity : AppCompatActivity() {
                 }
                 .setNegativeButton("Cancel", null).show()
         }
-        click(UI.aboutButton) {detail("About Synced N", "Church Ministry Management\nFront-end demonstration. Accounts, teams and notifications are not connected to a server.")}
-        click(UI.helpButton) {detail("Help", "Tap Profile to edit your details. Save Profile Changes stores them on this phone. Home, Schedule and Teams are available from the bottom bar.")}
+        click(UI.aboutButton) {detail("About Synced N", "Church Ministry Management\nCloud-synced worship scheduling, team roster, chord sheets, substitutions, and real-time ministry chat.")}
+        click(UI.helpButton) {detail("Help", "Tap Profile to update your details and avatar. Manage schedules, availability, song lineups, and team chat from the bottom navigation bar.")}
         click(UI.homeTab) {navigate("home")};click(UI.scheduleTab) {schedule()}
         click(UI.teamsTab) {navigate("teams")};click(UI.settingsTab) {toast("You are on Settings.")}
     }
@@ -2580,13 +2583,20 @@ class AdminActivity : AppCompatActivity() {
             }, 48, 48)
         })
         val assigned = draftAssignments()
+        val activeRoster = getActiveRoster()
         repeat(assigned.length()) {
             val member = assigned.getJSONObject(it)
             val name = member.optString("name")
             val role = member.optString("role")
             val uid = member.optString("uid")
             val photoUri = member.optString("photoUri").ifBlank { findMemberPhotoUri(uid, name) }
-            col.add(memberRow(name, role, if (name == "Joshua Lagare") "Admin" else "Member", photoUri = photoUri, uid = uid))
+            val rosterMatch = activeRoster.find { m ->
+                (uid.isNotBlank() && m.uid == uid) ||
+                m.fullName.equals(name, ignoreCase = true) ||
+                m.username.equals(name, ignoreCase = true)
+            }
+            val isAdminBadge = rosterMatch?.role.equals("Leader", ignoreCase = true) || name.equals("Joshua Lagare", ignoreCase = true)
+            col.add(memberRow(name, role, if (isAdminBadge) "Admin" else "Member", photoUri = photoUri, uid = uid))
         }
         col.space(20)
         col.add(memberButton("Schedule Rehearsal", navy) { navigate("scheduleRehearsal") }, -1, 48); col.space(12)
@@ -2816,6 +2826,14 @@ class AdminActivity : AppCompatActivity() {
                 updatedAt = System.currentTimeMillis()
             )
             TeamRepository.saveService(activeCode, serviceObj, preferences)
+            if (status == "Published") {
+                com.example.syncedn.data.auth.SyncedMessagingService.dispatchSystemNotification(
+                    this,
+                    preferences,
+                    "New Service Scheduled",
+                    "${serviceObj.title} scheduled for ${serviceObj.date}."
+                )
+            }
         }
 
         toast(if (status == "Published") "Schedule published." else "Draft saved.")
@@ -2870,15 +2888,16 @@ class AdminActivity : AppCompatActivity() {
         }
     } catch (_: Exception) { rawDate }
 
-    private fun leaderScheduleCards(col: LinearLayout) {
+    private fun leaderScheduleCards(col: LinearLayout): Int {
         val today = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).format(java.util.Date())
-        val hasUpcoming = localServices.any { it.optString("date") >= today && it.optString("status") == "Published" }
+        var renderedCount = 0
         localServices.forEachIndexed { index, record ->
             val date = record.optString("date")
             val isPublished = record.optString("status") == "Published"
-            val isPast = date < today && isPublished
+            val isPast = date.isNotBlank() && date < today && isPublished
             if (scheduleFilter == "Past" && !isPast) return@forEachIndexed
-            if (scheduleFilter == "Upcoming" && isPast && hasUpcoming) return@forEachIndexed
+            if (scheduleFilter == "Upcoming" && isPast) return@forEachIndexed
+            renderedCount++
 
             val title = record.optString("title", "Sunday Worship Service")
             val badgeDate = formatBadgeDate(date)
@@ -2911,6 +2930,7 @@ class AdminActivity : AppCompatActivity() {
             }
             col.add(row); col.space(16)
         }
+        return renderedCount
     }
     private fun songCatalog(): List<Pair<String, String>> {
         val activeCode = preferences.getString("teamCode", "").orEmpty()
@@ -3944,35 +3964,45 @@ class AdminActivity : AppCompatActivity() {
             Triple("AUG\n21", "Team Meeting", "7:00PM – 8:00PM"),
             Triple("AUG\n19", "Rehearsal", "7:00PM – 9:00PM"))
         val entries = when (scheduleFilter) { "Past" -> past; "All" -> upcoming + past; else -> upcoming }
-        if (isLeader) leaderScheduleCards(col)
-        col.add(text("Sample schedule • dates from your design", 11, Color.GRAY)); col.space(12)
-        entries.forEach { (date, title, time) ->
-            val row = horizontal().apply {
-                background = bg(Color.WHITE, 20, if (preferences.getString("serviceDate", "") == date.replace("\n", " ")) purple else Color.rgb(230, 230, 235))
-                elevation = dp(3).toFloat(); setPadding(dp(8), dp(10), dp(12), dp(10))
-                add(text(date, 15, Color.WHITE, bold = true, centered = true).apply {
-                    background = GradientDrawable(GradientDrawable.Orientation.TL_BR,
-                        intArrayOf(purple, Color.rgb(167, 0, 214))).apply { cornerRadius = dp(14).toFloat() }
-                }, 60, 66)
-                add(vertical().apply {
-                    setPadding(dp(12), 0, dp(8), 0)
-                    add(text(title, 13, navy, true)); space(4); add(text(time, 11, navy))
-                    space(3); add(text(if (title == "Team Meeting") "Fellowship Hall" else "Main Sanctuary", 11, navy))
-                }, 0, -2, 1f)
-                add(Symbol(this@AdminActivity, "arrow", Color.GRAY), 18, 24)
-                isClickable = true; isFocusable = true
-                setOnClickListener {
-                    selectedService = title; serviceReturnPage = "schedule"
-                    if (isLeader) {
-                        val parts = date.split("\n")
-                        val iso = "2026-" + (if (parts[0] == "AUG") "08" else "09") + "-" + parts[1].padStart(2, '0')
-                        loadSampleLeaderService(title, iso, time)
-                    }
-                    preferences.edit().putString("serviceTime", time).putString("serviceDate", date.replace("\n", " ")).putString("serviceVenue", if(title == "Team Meeting") "Fellowship Hall" else "Main Sanctuary").apply()
-                    navigate("service")
-                }
+        val renderedCount = if (isLeader) leaderScheduleCards(col) else 0
+        val activeCode = preferences.getString("teamCode", "").orEmpty()
+        if (localServices.isNotEmpty() || activeCode.isNotBlank()) {
+            if (renderedCount == 0) {
+                col.add(panel().apply {
+                    add(text("No ${scheduleFilter.lowercase()} services scheduled yet.", 13, Color.GRAY, centered = true))
+                })
+                col.space(16)
             }
-            col.add(row); col.space(16)
+        } else {
+            col.add(text("Sample schedule • dates from your design", 11, Color.GRAY)); col.space(12)
+            entries.forEach { (date, title, time) ->
+                val row = horizontal().apply {
+                    background = bg(Color.WHITE, 20, if (preferences.getString("serviceDate", "") == date.replace("\n", " ")) purple else Color.rgb(230, 230, 235))
+                    elevation = dp(3).toFloat(); setPadding(dp(8), dp(10), dp(12), dp(10))
+                    add(text(date, 15, Color.WHITE, bold = true, centered = true).apply {
+                        background = GradientDrawable(GradientDrawable.Orientation.TL_BR,
+                            intArrayOf(purple, Color.rgb(167, 0, 214))).apply { cornerRadius = dp(14).toFloat() }
+                    }, 60, 66)
+                    add(vertical().apply {
+                        setPadding(dp(12), 0, dp(8), 0)
+                        add(text(title, 13, navy, true)); space(4); add(text(time, 11, navy))
+                        space(3); add(text(if (title == "Team Meeting") "Fellowship Hall" else "Main Sanctuary", 11, navy))
+                    }, 0, -2, 1f)
+                    add(Symbol(this@AdminActivity, "arrow", Color.GRAY), 18, 24)
+                    isClickable = true; isFocusable = true
+                    setOnClickListener {
+                        selectedService = title; serviceReturnPage = "schedule"
+                        if (isLeader) {
+                            val parts = date.split("\n")
+                            val iso = "2026-" + (if (parts[0] == "AUG") "08" else "09") + "-" + parts[1].padStart(2, '0')
+                            loadSampleLeaderService(title, iso, time)
+                        }
+                        preferences.edit().putString("serviceTime", time).putString("serviceDate", date.replace("\n", " ")).putString("serviceVenue", if(title == "Team Meeting") "Fellowship Hall" else "Main Sanctuary").apply()
+                        navigate("service")
+                    }
+                }
+                col.add(row); col.space(16)
+            }
         }
         root.add(scroll, -1, 0, 1f)
         root.add(memberNavigation("Schedule"), -1, 64)
@@ -4048,8 +4078,10 @@ class AdminActivity : AppCompatActivity() {
                         }, -1, 36)
 
                         val hasUnavailable = activeRanges.any { it.includes(key) }
-                        val hasService = localServices.any { it.optString("date") == key } || (calendarMonth == 9 && day in listOf(4, 11, 18, 25)) || (weekday == 0 && day in 1..count)
-                        val hasRehearsal = localServices.any { it.optJSONObject("rehearsal")?.optString("date") == key } || (calendarMonth == 9 && day == 3)
+                        val hasService = localServices.any { it.optString("date") == key }
+                        val hasRehearsal = localServices.any {
+                            it.optJSONObject("rehearsal")?.optString("date") == key || it.optString("rehearsalDate") == key
+                        }
 
                         val dotColor = when {
                             hasUnavailable -> Color.rgb(239, 68, 68)
@@ -4083,8 +4115,11 @@ class AdminActivity : AppCompatActivity() {
         val isUnavailable = matchingRange != null
         val matchingServiceIndex = localServices.indexOfFirst { it.optString("date") == selectedKey }
         val matchingService = if (matchingServiceIndex >= 0) localServices[matchingServiceIndex] else null
-        val isService = matchingService != null || (calendarMonth == 9 && calendarDay in listOf(4, 11, 18, 25)) || (date.get(java.util.Calendar.DAY_OF_WEEK) == 1 && !isUnavailable)
-        val isRehearsal = (localServices.any { it.optJSONObject("rehearsal")?.optString("date") == selectedKey } || (calendarMonth == 9 && calendarDay == 3)) && !isUnavailable && !isService
+        val isService = matchingService != null && !isUnavailable
+        val matchingRehearsalService = localServices.find {
+            it.optJSONObject("rehearsal")?.optString("date") == selectedKey || it.optString("rehearsalDate") == selectedKey
+        }
+        val isRehearsal = matchingRehearsalService != null && !isUnavailable && !isService
 
         val strokeColor = when {
             isUnavailable -> Color.rgb(239, 68, 68)
@@ -4115,7 +4150,13 @@ class AdminActivity : AppCompatActivity() {
                 "${calendarDay} ${shortMonthName(calendarMonth)}, $timeStr"
             }
             isRehearsal -> {
-                "${calendarDay} ${shortMonthName(calendarMonth)}, 7:00PM - 9:00PM"
+                val rehObj = matchingRehearsalService?.optJSONObject("rehearsal")
+                val rStart = rehObj?.optString("start").orEmpty().ifBlank { matchingRehearsalService?.optString("rehearsalStart").orEmpty() }
+                val rEnd = rehObj?.optString("end").orEmpty().ifBlank { matchingRehearsalService?.optString("rehearsalEnd").orEmpty() }
+                val timeStr = if (rStart.isNotBlank() && rEnd.isNotBlank()) "${leaderTime(rStart)} - ${leaderTime(rEnd)}"
+                              else if (rStart.isNotBlank()) leaderTime(rStart)
+                              else "7:00PM - 9:00PM"
+                "${calendarDay} ${shortMonthName(calendarMonth)}, $timeStr"
             }
             else -> "No events scheduled"
         }
@@ -4624,25 +4665,30 @@ class AdminActivity : AppCompatActivity() {
     }
 
     private fun recentNotificationsList(col: LinearLayout) {
-        val items = listOf(
-            Triple("New Service Scheduled", "Sunday Worship Service scheduled for Oct 18, 2026 at 6:00 AM.", "Just now" to "calendar"),
-            Triple("Lineup Published", "4 songs attached to Sunday Worship Service.", "2 hours ago" to "musical_notes")
-        )
-        for ((title, msg, meta) in items) {
-            val (time, iconName) = meta
+        val activeCode = preferences.getString("teamCode", "").orEmpty()
+            .ifBlank { FirestoreManager.findCodeByTeamName(teamName).orEmpty() }
+        val dynamicItems = TeamRepository.getRecentTeamNotifications(activeCode, preferences)
+        if (dynamicItems.isEmpty()) {
+            col.add(panel().apply {
+                add(text("No recent notifications yet.", 12, Color.GRAY, centered = true))
+            })
+            col.space(12)
+            return
+        }
+        for (notif in dynamicItems) {
             col.add(panel().apply {
                 val row = horizontal().apply { gravity = Gravity.CENTER_VERTICAL }
                 val iconBox = FrameLayout(this@AdminActivity).apply {
-                    addView(Symbol(this@AdminActivity, iconName, purple), dp(26), dp(26))
+                    addView(Symbol(this@AdminActivity, notif.iconName, purple), dp(26), dp(26))
                 }
                 row.add(iconBox, 36, 36)
                 row.space(12)
                 val textCol = vertical()
-                textCol.add(text(title, 13, purple, bold = true))
+                textCol.add(text(notif.title, 13, purple, bold = true))
                 textCol.space(2)
-                textCol.add(text(msg, 11, navy))
+                textCol.add(text(notif.message, 11, navy))
                 textCol.space(2)
-                textCol.add(text(time, 10, Color.GRAY))
+                textCol.add(text(notif.timeLabel, 10, Color.GRAY))
                 row.add(textCol, 0, -2, 1f)
                 add(row)
             }); col.space(12)
@@ -5445,20 +5491,32 @@ class AdminActivity : AppCompatActivity() {
             trackTintList = ColorStateList(states, intArrayOf(Color.rgb(0, 122, 255), Color.rgb(209, 213, 219)))
             splitTrack = false
             isChecked = preferences.getBoolean("teamUnmuted", true)
-            setOnCheckedChangeListener { _, checked -> preferences.edit().putBoolean("teamUnmuted", checked).apply() }
+            setOnCheckedChangeListener { _, checked ->
+                val generalNotif = preferences.getBoolean("notifications", true)
+                TeamRepository.saveNotificationPreferences(currentUserId(), generalNotif, checked, preferences)
+            }
         }, 52, 48)
         col.add(unmuteRow); col.space(4)
 
         col.add(teamDetailAction("warning", "Report") {
             val reason = plainInput("Describe the issue", true)
             AlertDialog.Builder(this).setTitle("Report Team").setView(reason)
-                .setNegativeButton("Cancel", null).setPositiveButton("Save Demo Report", null).create().apply {
+                .setNegativeButton("Cancel", null).setPositiveButton("Submit Report", null).create().apply {
                     setOnShowListener {
                         getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
                             if (reason.text.isBlank()) invalid(reason, "Enter a reason.")
                             else {
-                                preferences.edit().putString("teamReport", reason.text.toString().trim()).apply()
-                                toast("Demo report saved locally"); dismiss()
+                                val activeCode = preferences.getString("teamCode", "").orEmpty()
+                                    .ifBlank { FirestoreManager.findCodeByTeamName(teamName).orEmpty() }
+                                val reporterName = fullName.ifBlank { displayName }.ifBlank { "Leader" }
+                                TeamRepository.submitTeamReport(
+                                    teamCode = activeCode,
+                                    reporterUid = currentUserId(),
+                                    reporterName = reporterName,
+                                    reason = reason.text.toString().trim(),
+                                    preferences = preferences
+                                )
+                                toast("Report submitted"); dismiss()
                             }
                         }
                     }

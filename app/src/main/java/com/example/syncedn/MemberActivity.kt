@@ -738,10 +738,7 @@ open class MemberActivity : AppCompatActivity() {
         applyProfilePhoto(UI.profileButton)
         click(UI.profileButton) { openProfile("home") }
         click(UI.worshipCard) {
-            selectSheetService(sampleSheetService())
-            selectedService = "Sunday Worship Service"; serviceReturnPage = "home"
-            preferences.edit().putString("serviceDate", "May 18, 2025").putString("serviceTime", "9:00AM").putString("serviceVenue", "Main Sanctuary").apply()
-            navigate("service")
+            openHomeUpcoming()
         }
         findViewById<TextView>(UI.teamTitle).apply {
             text = teamName.ifBlank { "Worship\nTeam" }
@@ -1472,7 +1469,12 @@ open class MemberActivity : AppCompatActivity() {
             isClickable = true
             isFocusable = true
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES
-            contentDescription = "Next Worship Session. Sunday, May 18, 2025, 9:00 AM. Main Sanctuary. Open details."
+            val upcomingRec = homeUpcomingRecord()
+            contentDescription = if (upcomingRec != null) {
+                "Next Worship Session. ${upcomingRec.optString("title")}, ${upcomingRec.optString("date")}. ${upcomingRec.optString("venue", "Main Sanctuary")}. Open details."
+            } else {
+                "Next Worship Session. Open details."
+            }
         }
         hero.clipChildren = false
         hero.clipToPadding = false
@@ -1694,8 +1696,9 @@ open class MemberActivity : AppCompatActivity() {
         findViewById<Switch>(UI.notificationSwitch).apply {
             isChecked=preferences.getBoolean("notifications",true)
             setOnCheckedChangeListener { _, checked ->
-                preferences.edit().putBoolean("notifications",checked).apply()
-                toast(if(checked) "Notifications enabled locally" else "Notifications disabled locally")
+                val unmuted = preferences.getBoolean("teamUnmuted", true)
+                TeamRepository.saveNotificationPreferences(currentUserId(), checked, unmuted, preferences)
+                toast(if(checked) "Notifications enabled" else "Notifications disabled")
             }
         }
         click(UI.logoutButton) {
@@ -1714,8 +1717,8 @@ open class MemberActivity : AppCompatActivity() {
                 }
                 .setNegativeButton("Cancel", null).show()
         }
-        click(UI.aboutButton) {detail("About Synced N", "Church Ministry Management\nFront-end demonstration. Accounts, teams and notifications are not connected to a server.")}
-        click(UI.helpButton) {detail("Help", "Tap Profile to edit your details. Save Profile Changes stores them on this phone. Home, Schedule and Teams are available from the bottom bar.")}
+        click(UI.aboutButton) {detail("About Synced N", "Church Ministry Management\nCloud-synced worship scheduling, team roster, chord sheets, substitutions, and real-time ministry chat.")}
+        click(UI.helpButton) {detail("Help", "Tap Profile to update your details and avatar. Manage schedules, availability, song lineups, and team chat from the bottom navigation bar.")}
         click(UI.homeTab) {navigate("home")};click(UI.scheduleTab) {schedule()}
         click(UI.teamsTab) {navigate("teams")};click(UI.settingsTab) {toast("You are on Settings.")}
     }
@@ -2371,77 +2374,84 @@ open class MemberActivity : AppCompatActivity() {
         val entries = when (scheduleFilter) { "Past" -> past; "All" -> upcoming + past; else -> upcoming }
 
         val realServices = storedServices()
+        val activeCode = preferences.getString("teamCode", "").orEmpty()
         val today = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).format(java.util.Date())
-        val hasUpcoming = realServices.any { it.optString("date") >= today }
         val filteredReal = realServices.filter { srv ->
             val date = srv.optString("date")
-            val isPast = date < today
+            val isPast = date.isNotBlank() && date < today
             when (scheduleFilter) {
                 "Past" -> isPast
-                "Upcoming" -> !isPast || !hasUpcoming
+                "Upcoming" -> !isPast
                 else -> true
             }
         }
 
-        if (filteredReal.isNotEmpty()) {
-            filteredReal.forEach { record ->
-                val title = record.optString("title", "Sunday Worship Service")
-                val date = record.optString("date")
-                val badgeDate = formatBadgeDate(date)
-                val start = record.optString("start")
-                val end = record.optString("end")
-                val time = if (start.isNotBlank() && end.isNotBlank()) "${formatServiceTime(start)} – ${formatServiceTime(end)}" else if (start.isNotBlank()) formatServiceTime(start) else "6:00AM – 11:00AM"
-                val venue = record.optString("venue", "Main Sanctuary")
+        if (realServices.isNotEmpty() || activeCode.isNotBlank()) {
+            if (filteredReal.isEmpty()) {
+                col.add(panel().apply {
+                    add(text("No ${scheduleFilter.lowercase()} services scheduled yet.", 13, Color.GRAY, centered = true))
+                })
+                col.space(16)
+            } else {
+                filteredReal.forEach { record ->
+                    val title = record.optString("title", "Sunday Worship Service")
+                    val date = record.optString("date")
+                    val badgeDate = formatBadgeDate(date)
+                    val start = record.optString("start")
+                    val end = record.optString("end")
+                    val time = if (start.isNotBlank() && end.isNotBlank()) "${formatServiceTime(start)} – ${formatServiceTime(end)}" else if (start.isNotBlank()) formatServiceTime(start) else "6:00AM – 11:00AM"
+                    val venue = record.optString("venue", "Main Sanctuary")
 
+                    val row = horizontal().apply {
+                        background = bg(Color.WHITE, 20, if (preferences.getString("serviceDate", "") == date) purple else Color.rgb(230, 230, 235))
+                        elevation = dp(3).toFloat(); setPadding(dp(8), dp(10), dp(12), dp(10))
+                        add(text(badgeDate, 15, Color.WHITE, bold = true, centered = true).apply {
+                            background = GradientDrawable(GradientDrawable.Orientation.TL_BR,
+                                intArrayOf(purple, Color.rgb(167, 0, 214))).apply { cornerRadius = dp(14).toFloat() }
+                        }, 60, 66)
+                        add(vertical().apply {
+                            setPadding(dp(12), 0, dp(8), 0)
+                            add(text(title, 13, navy, true)); space(4); add(text(time, 11, navy))
+                            space(3); add(text(venue, 11, navy))
+                        }, 0, -2, 1f)
+                        add(Symbol(this@MemberActivity, "arrow", Color.GRAY), 18, 24)
+                        isClickable = true; isFocusable = true
+                        setOnClickListener {
+                            selectSheetService(record)
+                            selectedService = title; serviceReturnPage = "schedule"
+                            preferences.edit().putString("serviceTime", time).putString("serviceDate", date).putString("serviceVenue", venue).apply()
+                            navigate("service")
+                        }
+                    }
+                    col.add(row); col.space(16)
+                }
+            }
+        } else {
+            col.add(text("Sample schedule • dates from your design", 11, Color.GRAY)); col.space(12)
+            entries.forEach { (date, title, time) ->
                 val row = horizontal().apply {
-                    background = bg(Color.WHITE, 20, if (preferences.getString("serviceDate", "") == date) purple else Color.rgb(230, 230, 235))
+                    background = bg(Color.WHITE, 20, if (preferences.getString("serviceDate", "") == date.replace("\n", " ")) purple else Color.rgb(230, 230, 235))
                     elevation = dp(3).toFloat(); setPadding(dp(8), dp(10), dp(12), dp(10))
-                    add(text(badgeDate, 15, Color.WHITE, bold = true, centered = true).apply {
+                    add(text(date, 15, Color.WHITE, true, true).apply {
                         background = GradientDrawable(GradientDrawable.Orientation.TL_BR,
                             intArrayOf(purple, Color.rgb(167, 0, 214))).apply { cornerRadius = dp(14).toFloat() }
                     }, 60, 66)
                     add(vertical().apply {
                         setPadding(dp(12), 0, dp(8), 0)
                         add(text(title, 13, navy, true)); space(4); add(text(time, 11, navy))
-                        space(3); add(text(venue, 11, navy))
+                        space(3); add(text(if (title == "Team Meeting") "Fellowship Hall" else "Main Sanctuary", 11, navy))
                     }, 0, -2, 1f)
                     add(Symbol(this@MemberActivity, "arrow", Color.GRAY), 18, 24)
                     isClickable = true; isFocusable = true
                     setOnClickListener {
-                        selectSheetService(record)
+                        selectSheetService(sampleSheetService())
                         selectedService = title; serviceReturnPage = "schedule"
-                        preferences.edit().putString("serviceTime", time).putString("serviceDate", date).putString("serviceVenue", venue).apply()
+                        preferences.edit().putString("serviceTime", time).putString("serviceDate", date.replace("\n", " ")).putString("serviceVenue", if(title == "Team Meeting") "Fellowship Hall" else "Main Sanctuary").apply()
                         navigate("service")
                     }
                 }
                 col.add(row); col.space(16)
             }
-        }
-
-        col.add(text("Sample schedule • dates from your design", 11, Color.GRAY)); col.space(12)
-        entries.forEach { (date, title, time) ->
-            val row = horizontal().apply {
-                background = bg(Color.WHITE, 20, if (preferences.getString("serviceDate", "") == date.replace("\n", " ")) purple else Color.rgb(230, 230, 235))
-                elevation = dp(3).toFloat(); setPadding(dp(8), dp(10), dp(12), dp(10))
-                add(text(date, 15, Color.WHITE, true, true).apply {
-                    background = GradientDrawable(GradientDrawable.Orientation.TL_BR,
-                        intArrayOf(purple, Color.rgb(167, 0, 214))).apply { cornerRadius = dp(14).toFloat() }
-                }, 60, 66)
-                add(vertical().apply {
-                    setPadding(dp(12), 0, dp(8), 0)
-                    add(text(title, 13, navy, true)); space(4); add(text(time, 11, navy))
-                    space(3); add(text(if (title == "Team Meeting") "Fellowship Hall" else "Main Sanctuary", 11, navy))
-                }, 0, -2, 1f)
-                add(Symbol(this@MemberActivity, "arrow", Color.GRAY), 18, 24)
-                isClickable = true; isFocusable = true
-                setOnClickListener {
-                    selectSheetService(sampleSheetService())
-                    selectedService = title; serviceReturnPage = "schedule"
-                    preferences.edit().putString("serviceTime", time).putString("serviceDate", date.replace("\n", " ")).putString("serviceVenue", if(title == "Team Meeting") "Fellowship Hall" else "Main Sanctuary").apply()
-                    navigate("service")
-                }
-            }
-            col.add(row); col.space(16)
         }
         root.add(scroll, -1, 0, 1f)
         root.add(memberNavigation("Schedule"), -1, 64)
@@ -2518,8 +2528,10 @@ open class MemberActivity : AppCompatActivity() {
                         }, -1, 36)
 
                         val hasUnavailable = activeRanges.any { it.includes(key) }
-                        val hasService = allServices.any { it.optString("date") == key } || (calendarMonth == 9 && day in listOf(4, 11, 18, 25)) || (weekday == 0 && day in 1..count)
-                        val hasRehearsal = allServices.any { it.optJSONObject("rehearsal")?.optString("date") == key } || (calendarMonth == 9 && day == 3)
+                        val hasService = allServices.any { it.optString("date") == key }
+                        val hasRehearsal = allServices.any {
+                            it.optJSONObject("rehearsal")?.optString("date") == key || it.optString("rehearsalDate") == key
+                        }
 
                         val dotColor = when {
                             hasUnavailable -> Color.rgb(239, 68, 68)
@@ -2552,8 +2564,11 @@ open class MemberActivity : AppCompatActivity() {
         val matchingRange = activeRanges.find { it.includes(selectedKey) }
         val isUnavailable = matchingRange != null
         val matchingService = allServices.find { it.optString("date") == selectedKey }
-        val isService = matchingService != null || (calendarMonth == 9 && calendarDay in listOf(4, 11, 18, 25)) || (date.get(java.util.Calendar.DAY_OF_WEEK) == 1 && !isUnavailable)
-        val isRehearsal = (allServices.any { it.optJSONObject("rehearsal")?.optString("date") == selectedKey } || (calendarMonth == 9 && calendarDay == 3)) && !isUnavailable && !isService
+        val isService = matchingService != null && !isUnavailable
+        val matchingRehearsalService = allServices.find {
+            it.optJSONObject("rehearsal")?.optString("date") == selectedKey || it.optString("rehearsalDate") == selectedKey
+        }
+        val isRehearsal = matchingRehearsalService != null && !isUnavailable && !isService
 
         val strokeColor = when {
             isUnavailable -> Color.rgb(239, 68, 68)
@@ -2584,7 +2599,13 @@ open class MemberActivity : AppCompatActivity() {
                 "${calendarDay} ${shortMonthName(calendarMonth)}, $timeStr"
             }
             isRehearsal -> {
-                "${calendarDay} ${shortMonthName(calendarMonth)}, 7:00PM - 9:00PM"
+                val rehObj = matchingRehearsalService?.optJSONObject("rehearsal")
+                val rStart = rehObj?.optString("start").orEmpty().ifBlank { matchingRehearsalService?.optString("rehearsalStart").orEmpty() }
+                val rEnd = rehObj?.optString("end").orEmpty().ifBlank { matchingRehearsalService?.optString("rehearsalEnd").orEmpty() }
+                val timeStr = if (rStart.isNotBlank() && rEnd.isNotBlank()) "${formatServiceTime(rStart)} - ${formatServiceTime(rEnd)}"
+                              else if (rStart.isNotBlank()) formatServiceTime(rStart)
+                              else "7:00PM - 9:00PM"
+                "${calendarDay} ${shortMonthName(calendarMonth)}, $timeStr"
             }
             else -> "No events scheduled"
         }
@@ -2598,6 +2619,21 @@ open class MemberActivity : AppCompatActivity() {
             clipToOutline = true
             add(text(eventTitle, 17, navy, bold = true), 0, -2, 1f)
             add(text(eventSub, 13, Color.rgb(100, 116, 139)), -2, -2)
+            if (matchingService != null) {
+                isClickable = true; isFocusable = true
+                setOnClickListener {
+                    selectSheetService(matchingService)
+                    selectedService = matchingService.optString("title", "Sunday Worship Service")
+                    serviceReturnPage = "calendar"
+                    val start = matchingService.optString("start")
+                    val end = matchingService.optString("end")
+                    val time = if (start.isNotBlank() && end.isNotBlank()) "${formatServiceTime(start)} – ${formatServiceTime(end)}" else "8:00AM – 11:00AM"
+                    preferences.edit().putString("serviceDate", matchingService.optString("date"))
+                        .putString("serviceTime", time)
+                        .putString("serviceVenue", matchingService.optString("venue", "Main Sanctuary")).apply()
+                    navigate("service")
+                }
+            }
         }
         col.add(eventCard)
         col.space(16)
@@ -3011,14 +3047,23 @@ open class MemberActivity : AppCompatActivity() {
                 gravity = Gravity.CENTER_VERTICAL
                 background = if (isSelected) bg(Color.rgb(250, 245, 255), 14, purple) else bg(Color.WHITE, 14, Color.rgb(226, 232, 240))
                 setPadding(dp(12), dp(10), dp(12), dp(10))
-                val pUri = getActiveRoster().find { it.uid == mUid || it.fullName.equals(mName, true) || it.username.equals(mName, true) }?.photoUri
+                val rosterMember = getActiveRoster().find { it.uid == mUid || it.fullName.equals(mName, true) || it.username.equals(mName, true) }
+                val pUri = rosterMember?.photoUri
                 addView(memberAvatarView(pUri, 40), LinearLayout.LayoutParams(dp(40), dp(40)))
+                val memberRanges = rosterMember?.unavailableRanges?.takeIf { it.isNotEmpty() }
+                    ?: TeamRepository.getMemberUnavailableRanges(mUid, preferences, rosterMember?.email.orEmpty(), mName)
+                val conflictRange = if (serviceDate.isNotBlank()) memberRanges.find { it.includes(serviceDate) } else null
                 val info = LinearLayout(this@MemberActivity).apply {
                     orientation = LinearLayout.VERTICAL
                     setPadding(dp(12), 0, dp(8), 0)
                     add(text(mName, 14, navy, true))
                     add(text(mRole.ifBlank { "Team Member" }, 12, Color.rgb(90, 90, 95)))
-                    add(text("Available", 11, Color.rgb(22, 163, 74), true))
+                    if (conflictRange != null) {
+                        val reasonLabel = if (conflictRange.reason.isNotBlank()) "Unavailable • ${conflictRange.reason}" else "Unavailable"
+                        add(text(reasonLabel, 11, Color.rgb(220, 38, 38), true))
+                    } else {
+                        add(text("Available", 11, Color.rgb(22, 163, 74), true))
+                    }
                 }
                 add(info, 0, -2, 1f)
 
@@ -3391,25 +3436,30 @@ open class MemberActivity : AppCompatActivity() {
     }
 
     private fun recentNotificationsList(col: LinearLayout) {
-        val items = listOf(
-            Triple("New Service Scheduled", "Sunday Worship Service scheduled for Oct 18, 2026 at 6:00 AM.", "Just now" to "calendar"),
-            Triple("Lineup Published", "4 songs attached to Sunday Worship Service.", "2 hours ago" to "musical_notes")
-        )
-        for ((title, msg, meta) in items) {
-            val (time, iconName) = meta
+        val activeCode = preferences.getString("teamCode", "").orEmpty()
+            .ifBlank { FirestoreManager.findCodeByTeamName(teamName).orEmpty() }
+        val dynamicItems = TeamRepository.getRecentTeamNotifications(activeCode, preferences)
+        if (dynamicItems.isEmpty()) {
+            col.add(panel().apply {
+                add(text("No recent notifications yet.", 12, Color.GRAY, centered = true))
+            })
+            col.space(12)
+            return
+        }
+        for (notif in dynamicItems) {
             col.add(panel().apply {
                 val row = horizontal().apply { gravity = Gravity.CENTER_VERTICAL }
                 val iconBox = FrameLayout(this@MemberActivity).apply {
-                    addView(Symbol(this@MemberActivity, iconName, purple), dp(26), dp(26))
+                    addView(Symbol(this@MemberActivity, notif.iconName, purple), dp(26), dp(26))
                 }
                 row.add(iconBox, 36, 36)
                 row.space(12)
                 val textCol = vertical()
-                textCol.add(text(title, 13, purple, bold = true))
+                textCol.add(text(notif.title, 13, purple, bold = true))
                 textCol.space(2)
-                textCol.add(text(msg, 11, navy))
+                textCol.add(text(notif.message, 11, navy))
                 textCol.space(2)
-                textCol.add(text(time, 10, Color.GRAY))
+                textCol.add(text(notif.timeLabel, 10, Color.GRAY))
                 row.add(textCol, 0, -2, 1f)
                 add(row)
             }); col.space(12)
@@ -4210,19 +4260,31 @@ open class MemberActivity : AppCompatActivity() {
             trackTintList = ColorStateList(states, intArrayOf(Color.rgb(0, 122, 255), Color.rgb(209, 213, 219)))
             splitTrack = false
             isChecked = preferences.getBoolean("teamUnmuted", true)
-            setOnCheckedChangeListener { _, checked -> preferences.edit().putBoolean("teamUnmuted", checked).apply() }
+            setOnCheckedChangeListener { _, checked ->
+                val generalNotif = preferences.getBoolean("notifications", true)
+                TeamRepository.saveNotificationPreferences(currentUserId(), generalNotif, checked, preferences)
+            }
         }, 52, 48)
         col.add(row); col.space(4)
         col.add(teamDetailAction("warning", "Report") {
             val reason = plainInput("Describe the issue", true)
             AlertDialog.Builder(this).setTitle("Report Team").setView(reason)
-                .setNegativeButton("Cancel", null).setPositiveButton("Save Demo Report", null).create().apply {
+                .setNegativeButton("Cancel", null).setPositiveButton("Submit Report", null).create().apply {
                     setOnShowListener {
                         getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
                             if (reason.text.isBlank()) invalid(reason, "Enter a reason.")
                             else {
-                                preferences.edit().putString("teamReport", reason.text.toString().trim()).apply()
-                                toast("Demo report saved locally"); dismiss()
+                                val activeCode = preferences.getString("teamCode", "").orEmpty()
+                                    .ifBlank { FirestoreManager.findCodeByTeamName(teamName).orEmpty() }
+                                val reporterName = fullName.ifBlank { displayName }.ifBlank { "Member" }
+                                TeamRepository.submitTeamReport(
+                                    teamCode = activeCode,
+                                    reporterUid = currentUserId(),
+                                    reporterName = reporterName,
+                                    reason = reason.text.toString().trim(),
+                                    preferences = preferences
+                                )
+                                toast("Report submitted"); dismiss()
                             }
                         }
                     }
