@@ -41,11 +41,7 @@ data class UserProfile(
 
     companion object {
         fun fromMap(map: Map<String, Any?>): UserProfile {
-            val rawRanges = map["unavailableRanges"] as? List<*>
-            val ranges = rawRanges?.mapNotNull { item ->
-                @Suppress("UNCHECKED_CAST")
-                (item as? Map<String, Any?>)?.let { UnavailableRange.fromMap(it) }
-            }.orEmpty()
+            val ranges = UnavailableRange.parseList(map["unavailableRanges"])
 
             return UserProfile(
                 uid = map["uid"] as? String ?: "",

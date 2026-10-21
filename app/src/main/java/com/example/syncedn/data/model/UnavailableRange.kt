@@ -36,5 +36,53 @@ data class UnavailableRange(
                 createdAt = (map["createdAt"] as? Number)?.toLong() ?: System.currentTimeMillis()
             )
         }
+
+        fun fromJsonObject(obj: org.json.JSONObject): UnavailableRange {
+            val map = mutableMapOf<String, Any?>()
+            val keys = obj.keys()
+            while (keys.hasNext()) {
+                val k = keys.next()
+                map[k] = obj.opt(k)
+            }
+            return fromMap(map)
+        }
+
+        fun parseList(raw: Any?): List<UnavailableRange> {
+            val result = mutableListOf<UnavailableRange>()
+            when (raw) {
+                is List<*> -> {
+                    for (item in raw) {
+                        when (item) {
+                            is UnavailableRange -> result.add(item)
+                            is Map<*, *> -> {
+                                @Suppress("UNCHECKED_CAST")
+                                result.add(fromMap(item as Map<String, Any?>))
+                            }
+                            is org.json.JSONObject -> result.add(fromJsonObject(item))
+                        }
+                    }
+                }
+                is org.json.JSONArray -> {
+                    for (i in 0 until raw.length()) {
+                        val obj = raw.optJSONObject(i)
+                        if (obj != null) {
+                            result.add(fromJsonObject(obj))
+                        }
+                    }
+                }
+                is String -> {
+                    if (raw.isNotBlank()) {
+                        try {
+                            val arr = org.json.JSONArray(raw)
+                            for (i in 0 until arr.length()) {
+                                val obj = arr.optJSONObject(i)
+                                if (obj != null) result.add(fromJsonObject(obj))
+                            }
+                        } catch (_: Throwable) {}
+                    }
+                }
+            }
+            return result
+        }
     }
 }

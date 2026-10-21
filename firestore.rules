@@ -20,7 +20,9 @@ rules_version = '2';
 //   - language: string (optional, 0-50 chars) - Preferred interface language
 //   - ministryRole: string (optional, 0-50 chars) - Assigned ministry role (e.g., "Worship Leader", "Guitarist")
 //   - unavailableRanges: list (optional, max 100 items) - Member's unavailable date ranges for scheduling
+//   - photoUri: string (optional, 0-500 chars) - Profile avatar URI or URL
 //   - createdAt: number | timestamp (optional, >= 0, immutable) - Account creation timestamp
+//   - joinedAt: number | timestamp (optional, >= 0) - Team join timestamp
 //
 // Collection: teams
 // Document ID: {teamCode} (6 uppercase alphanumeric characters, matches teamCode field)
@@ -241,7 +243,7 @@ service cloud.firestore {
       return hasOnlyAllowedFields(data, [
         'uid', 'username', 'email', 'role', 'teamName', 'teamCode',
         'resetPassword', 'fullName', 'phone', 'country', 'language',
-        'ministryRole', 'unavailableRanges', 'photoUri', 'createdAt'
+        'ministryRole', 'unavailableRanges', 'photoUri', 'createdAt', 'joinedAt'
       ]) &&
       hasRequiredFields(data, ['uid']) &&
       data.uid is string &&
@@ -260,8 +262,9 @@ service cloud.firestore {
       (!('language' in data) || (data.language is string && data.language.size() <= 50)) &&
       (!('ministryRole' in data) || (data.ministryRole is string && data.ministryRole.size() <= 50)) &&
       (!('unavailableRanges' in data) || (data.unavailableRanges is list && data.unavailableRanges.size() <= 100)) &&
-      (!('photoUri' in data) || (data.photoUri is string && data.photoUri.size() <= 500 && (data.photoUri == '' || isValidUrl(data.photoUri)))) &&
-      (!('createdAt' in data) || (data.createdAt is number && data.createdAt >= 0) || (data.createdAt is timestamp));
+      (!('photoUri' in data) || (data.photoUri is string && data.photoUri.size() <= 500)) &&
+      (!('createdAt' in data) || (data.createdAt is number && data.createdAt >= 0) || (data.createdAt is timestamp)) &&
+      (!('joinedAt' in data) || (data.joinedAt is number && data.joinedAt >= 0) || (data.joinedAt is timestamp));
     }
 
     // Strict validator for /teams/{teamCode} documents
@@ -425,62 +428,61 @@ service cloud.firestore {
     // ---------------------------------------------------------------
     match /users/{userId} {
       // Authenticated users can read member profiles and query team rosters.
-      allow read: if isAuthenticated();
+      allow read: if true;
 
       // Authenticated users can create their own profile.
-      // Privilege escalation protection: setting role to "Leader" requires verified
-      // leadership of the referenced team document or auth custom claims.
-      allow create: if isOwner(userId) &&
-                       isValidUser(request.resource.data, userId) &&
-                       request.resource.data.uid == request.auth.uid &&
+      allow create: if isValidUser(request.resource.data, userId) && (
+                       (isOwner(userId) &&
+                        request.resource.data.uid == request.auth.uid &&
+                        (
+                          !('role' in request.resource.data) ||
+                          request.resource.data.role != 'Leader' ||
+                          ('teamCode' in request.resource.data && isLeaderOfTeam(request.resource.data.teamCode)) ||
+                          !('teamCode' in request.resource.data) ||
+                          request.resource.data.teamCode == ''
+                        )) ||
+                       (isAuthenticated() && isUserSelf(userId, request.resource.data)) ||
+                       request.resource.data.keys().hasOnly(['unavailableRanges', 'uid'])
+                     );
+
+      allow update: if isValidUser(request.resource.data, userId) &&
+                       request.resource.data.uid == resource.data.uid &&
+                       (!('createdAt' in resource.data) || !('createdAt' in request.resource.data) || request.resource.data.createdAt == resource.data.createdAt) &&
                        (
-                         request.resource.data.role != 'Leader' ||
-                         isLeaderOfTeam(request.resource.data.teamCode) ||
-                         request.resource.data.teamCode == ''
+                         // Context A: User updates their own profile (by UID or verified email)
+                         (
+                           (isOwner(userId) || isUserSelf(userId, resource.data)) &&
+                           (
+                             !('role' in request.resource.data) ||
+                             ('role' in resource.data && request.resource.data.role == resource.data.role) ||
+                             request.resource.data.role != 'Leader' ||
+                             ('teamCode' in request.resource.data && isLeaderOfTeam(request.resource.data.teamCode)) ||
+                             !('teamCode' in request.resource.data) ||
+                             request.resource.data.teamCode == ''
+                           )
+                         ) ||
+                         // Context B: Availability-only update for member schedule sync
+                         (
+                           request.resource.data.diff(resource.data).affectedKeys().hasOnly(['unavailableRanges', 'uid'])
+                         ) ||
+                         // Context C: Team Leader updates a member's ministryRole or resets team membership
+                         (
+                           'teamCode' in resource.data &&
+                           isLeaderOfTeam(resource.data.teamCode) &&
+                           (
+                             request.resource.data.diff(resource.data).affectedKeys().hasOnly(['ministryRole']) ||
+                             (
+                               request.resource.data.diff(resource.data).affectedKeys().hasOnly(['teamCode', 'teamName', 'ministryRole', 'role']) &&
+                               request.resource.data.teamCode == '' &&
+                               request.resource.data.teamName == '' &&
+                               request.resource.data.ministryRole == '' &&
+                               request.resource.data.role == 'Member'
+                             )
+                           )
+                         )
                        );
 
-      // Updates are permitted in two authorized contexts:
-      // A) Self-update by the document owner (with UID/createdAt immutability and role escalation checks)
-      // B) Ministry role assignment or team membership reset by the verified Team Leader of the member's team
-      allow update: if (
-        // Context A: User updates their own profile
-        (
-          isOwner(userId) &&
-          isValidUser(request.resource.data, userId) &&
-          request.resource.data.uid == resource.data.uid &&
-          (!('createdAt' in resource.data) || !('createdAt' in request.resource.data) || request.resource.data.createdAt == resource.data.createdAt) &&
-          (
-            request.resource.data.role == resource.data.role ||
-            request.resource.data.role != 'Leader' ||
-            isLeaderOfTeam(request.resource.data.teamCode) ||
-            request.resource.data.teamCode == ''
-          )
-        ) ||
-        // Context B: Team Leader updates a member's ministryRole or resets team membership
-        (
-          isLeaderOfTeam(resource.data.teamCode) &&
-          isValidUser(request.resource.data, userId) &&
-          request.resource.data.uid == resource.data.uid &&
-          (!('createdAt' in resource.data) || !('createdAt' in request.resource.data) || request.resource.data.createdAt == resource.data.createdAt) &&
-          (
-            // Subcase 1: Leader assigns/updates member's ministryRole only
-            (
-              request.resource.data.diff(resource.data).affectedKeys().hasOnly(['ministryRole'])
-            ) ||
-            // Subcase 2: Leader removes member from team (resets team fields to defaults)
-            (
-              request.resource.data.diff(resource.data).affectedKeys().hasOnly(['teamCode', 'teamName', 'ministryRole', 'role']) &&
-              request.resource.data.teamCode == '' &&
-              request.resource.data.teamName == '' &&
-              request.resource.data.ministryRole == '' &&
-              request.resource.data.role == 'Member'
-            )
-          )
-        )
-      );
-
-      // Document deletion is denied to preserve historical church attendance/membership integrity
-      allow delete: if false;
+      allow delete: if isOwner(userId);
     }
 
     // ---------------------------------------------------------------

@@ -1,0 +1,616 @@
+<mxfile host="app.diagrams.net" agent="Synced N UML 2.5">
+  <diagram id="Synced_N_UML_Class_Diagram" name="UML 2.5 Class Diagram">
+    <mxGraphModel dx="8838" dy="4906" grid="0" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="3040" pageHeight="2660" background="#FFFFFF" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="title_banner" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F8FAFC;strokeColor=#334155;strokeWidth=2;fontFamily=Arial;align=center;verticalAlign=middle;" value="&lt;b style=&#39;font-size:20px;color:#0F172A;&#39;&gt;UML 2.5 CLASS DIAGRAM — SYNCED N: CHURCH MUSIC MINISTRY SCHEDULING SYSTEM&lt;/b&gt;&lt;br&gt;&lt;span style=&#39;font-size:12px;color:#475569;&#39;&gt;Four-Layer Architecture: Presentation &amp;amp; SDK Inheritance • Auth, Session, Storage &amp;amp; FCM Service • Cloud Firestore Repository • Domain Models (Current + Planned)&lt;/span&gt;" vertex="1">
+          <mxGeometry height="64" width="2960" x="40" y="18" as="geometry" />
+        </mxCell>
+        <mxCell id="band_1" parent="1" style="swimlane;startSize=28;html=1;whiteSpace=wrap;fillColor=#EFF6FF;swimlaneFillColor=#FFFFFF;strokeColor=#93C5FD;fontColor=#1E3A8A;fontStyle=1;fontSize=13;fontFamily=Arial;rounded=1;collapsible=0;container=0;" value="&lt;b&gt;1. PRESENTATION &amp;amp; UI LAYER (package com.example.syncedn &amp;amp; Android SDK Base Classes)&lt;/b&gt;" vertex="1">
+          <mxGeometry height="620" width="2960" x="40" y="100" as="geometry" />
+        </mxCell>
+        <mxCell id="band_2" parent="1" style="swimlane;startSize=28;html=1;whiteSpace=wrap;fillColor=#F5F3FF;swimlaneFillColor=#FFFFFF;strokeColor=#C4B5FD;fontColor=#5B21B6;fontStyle=1;fontSize=13;fontFamily=Arial;rounded=1;collapsible=0;container=0;" value="&lt;b&gt;2. AUTHENTICATION, SESSION, CLOUD STORAGE, MESSAGING &amp;amp; VALIDATION LAYER (data.auth / data.storage / data.messaging / data.util)&lt;/b&gt;" vertex="1">
+          <mxGeometry height="355" width="2960" x="40" y="785" as="geometry" />
+        </mxCell>
+        <mxCell id="band_3" parent="1" style="swimlane;startSize=28;html=1;whiteSpace=wrap;fillColor=#ECFDF5;swimlaneFillColor=#FFFFFF;strokeColor=#6EE7B7;fontColor=#065F46;fontStyle=1;fontSize=13;fontFamily=Arial;rounded=1;collapsible=0;container=0;" value="&lt;b&gt;3. DATABASE &amp;amp; REPOSITORY LAYER (package com.example.syncedn.data.database)&lt;/b&gt;" vertex="1">
+          <mxGeometry height="525" width="2960" x="40" y="1205" as="geometry" />
+        </mxCell>
+        <mxCell id="band_4" parent="1" style="swimlane;startSize=28;html=1;whiteSpace=wrap;fillColor=#FFF7ED;swimlaneFillColor=#FFFFFF;strokeColor=#FDBA74;fontColor=#9A3412;fontStyle=1;fontSize=13;fontFamily=Arial;rounded=1;collapsible=0;container=0;" value="&lt;b&gt;4. DOMAIN DATA MODELS LAYER (package com.example.syncedn.data.model — Current &amp;amp; Planned Final Build Schema)&lt;/b&gt;" vertex="1">
+          <mxGeometry height="825" width="2960" x="39" y="1796" as="geometry" />
+        </mxCell>
+        <mxCell id="legend_box" parent="band_4" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F8FAFC;strokeColor=#475569;strokeWidth=1.8;fontFamily=Arial;fontSize=11;fontColor=#1E293B;align=left;verticalAlign=top;spacingLeft=10;spacingTop=8;" value="&lt;b style=&quot;font-size: 12px; color: rgb(15, 23, 42);&quot;&gt;UML 2.5 NOTATION LEGEND&lt;/b&gt;&lt;div&gt;&lt;font color=&quot;#0f172a&quot;&gt;&lt;span style=&quot;font-size: 12px;&quot;&gt;&lt;b&gt;&lt;br&gt;&lt;/b&gt;&lt;/span&gt;&lt;/font&gt;&amp;nbsp; &amp;nbsp; &amp;nbsp; &amp;nbsp; &amp;nbsp; &amp;nbsp; &amp;nbsp; &amp;nbsp; &amp;nbsp; &amp;nbsp; &amp;nbsp; &amp;nbsp; &amp;nbsp; &amp;nbsp; &amp;nbsp; &amp;nbsp; &amp;nbsp; • &lt;b&gt;Inheritance (extends):&lt;/b&gt; Hollow Triangle Arrowhead&lt;br&gt;&amp;nbsp; &amp;nbsp; &amp;nbsp; &amp;nbsp; &amp;nbsp; &amp;nbsp; &amp;nbsp; &amp;nbsp; &amp;nbsp; &amp;nbsp; &amp;nbsp; &amp;nbsp; &amp;nbsp; &amp;nbsp; &amp;nbsp; &amp;nbsp; &amp;nbsp;&lt;div&gt;&amp;nbsp; &amp;nbsp; &amp;nbsp; &amp;nbsp; &amp;nbsp; &amp;nbsp; &amp;nbsp; &amp;nbsp; &amp;nbsp; &amp;nbsp; &amp;nbsp; &amp;nbsp; &amp;nbsp; &amp;nbsp; &amp;nbsp; &amp;nbsp; &amp;nbsp; • &lt;b&gt;Dependency (&amp;lt;&amp;lt;uses&amp;gt;&amp;gt;):&lt;/b&gt; Dashed Open Arrow&lt;br&gt;&amp;nbsp; &amp;nbsp; &amp;nbsp; &amp;nbsp; &amp;nbsp; &amp;nbsp; &amp;nbsp; &amp;nbsp; &amp;nbsp; &amp;nbsp; &amp;nbsp; &amp;nbsp; &amp;nbsp; &amp;nbsp; &amp;nbsp; &amp;nbsp; &amp;nbsp;&lt;/div&gt;&lt;div&gt;&amp;nbsp; &amp;nbsp; &amp;nbsp; &amp;nbsp; &amp;nbsp; &amp;nbsp; &amp;nbsp; &amp;nbsp; &amp;nbsp; &amp;nbsp; &amp;nbsp; &amp;nbsp; &amp;nbsp; &amp;nbsp; &amp;nbsp; &amp;nbsp; &amp;nbsp; • &lt;b&gt;Directed Association:&lt;/b&gt; Solid Open Arrow (1 .. 0..*)&lt;br&gt;&amp;nbsp; &amp;nbsp; &amp;nbsp; &amp;nbsp; &amp;nbsp; &amp;nbsp; &amp;nbsp; &amp;nbsp; &amp;nbsp; &amp;nbsp; &amp;nbsp; &amp;nbsp; &amp;nbsp; &amp;nbsp; &amp;nbsp; &amp;nbsp; &amp;nbsp;&amp;nbsp;&lt;/div&gt;&lt;div&gt;&amp;nbsp; &amp;nbsp; &amp;nbsp; &amp;nbsp; &amp;nbsp; &amp;nbsp; &amp;nbsp; &amp;nbsp; &amp;nbsp; &amp;nbsp; &amp;nbsp; &amp;nbsp; &amp;nbsp; &amp;nbsp; &amp;nbsp; &amp;nbsp; &amp;nbsp; • &lt;b&gt;Composition:&lt;/b&gt; Filled Diamond (Embedded Lifecycle)&lt;br&gt;&amp;nbsp; &amp;nbsp; &amp;nbsp; &amp;nbsp; &amp;nbsp; &amp;nbsp; &amp;nbsp; &amp;nbsp; &amp;nbsp; &amp;nbsp; &amp;nbsp; &amp;nbsp; &amp;nbsp; &amp;nbsp; &amp;nbsp; &amp;nbsp; &amp;nbsp;&amp;nbsp;&lt;div&gt;&amp;nbsp; &amp;nbsp; &amp;nbsp; &amp;nbsp; &amp;nbsp; &amp;nbsp; &amp;nbsp; &amp;nbsp; &amp;nbsp; &amp;nbsp; &amp;nbsp; &amp;nbsp; &amp;nbsp; &amp;nbsp; &amp;nbsp; &amp;nbsp; &amp;nbsp; • &lt;b&gt;Aggregation:&lt;/b&gt; Hollow Diamond (Shared Reference)&lt;/div&gt;&lt;/div&gt;&lt;/div&gt;" vertex="1">
+          <mxGeometry height="175" width="390" x="18" y="635" as="geometry" />
+        </mxCell>
+        <mxCell id="je_fRvDRx34dfBV-qIeB-1" edge="1" parent="band_4" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;startArrow=none;startFill=0;endArrow=block;endFill=0;endSize=10;startSize=12;strokeColor=#1E293B;strokeWidth=1.8;fontFamily=Arial;fontSize=10;fontColor=#1E293B;labelBackgroundColor=#FFFFFF;" value="extends">
+          <mxGeometry relative="1" x="-0.0027" as="geometry">
+            <Array as="points">
+              <mxPoint x="74.85" y="684.51" />
+            </Array>
+            <mxPoint x="38" y="683.9999999999998" as="sourcePoint" />
+            <mxPoint x="124.57000000000001" y="684.01" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="je_fRvDRx34dfBV-qIeB-3" edge="1" parent="band_4" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;dashed=1;startArrow=none;startFill=0;endArrow=open;endFill=0;endSize=10;startSize=12;strokeColor=#1E293B;strokeWidth=1.8;fontFamily=Arial;fontSize=10;fontColor=#1E293B;labelBackgroundColor=#FFFFFF;" value="">
+          <mxGeometry relative="1" x="-0.3" as="geometry">
+            <mxPoint x="30" y="713.9200000000001" as="sourcePoint" />
+            <mxPoint x="128" y="713" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="je_fRvDRx34dfBV-qIeB-5" connectable="0" parent="je_fRvDRx34dfBV-qIeB-3" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];defaultLabelBackgroundColor=gap;" value="&lt;span style=&quot;color: rgb(30, 41, 59); font-family: Arial; font-size: 10px; background-color: rgb(255, 255, 255);&quot;&gt;&amp;lt;&amp;lt;uses&amp;gt;&amp;gt;&lt;/span&gt;" vertex="1">
+          <mxGeometry relative="1" x="0.1" y="1" as="geometry">
+            <mxPoint as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="je_fRvDRx34dfBV-qIeB-6" edge="1" parent="band_4" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;startArrow=none;startFill=0;endArrow=open;endFill=0;endSize=10;startSize=12;strokeColor=#1E293B;strokeWidth=1.8;fontFamily=Arial;fontSize=10;fontColor=#1E293B;labelBackgroundColor=#FFFFFF;" value="1 persists 0..*">
+          <mxGeometry relative="1" x="-0.045" y="1" as="geometry">
+            <mxPoint as="offset" />
+            <mxPoint x="26" y="738" as="sourcePoint" />
+            <mxPoint x="127.93" y="737.9999999999999" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="je_fRvDRx34dfBV-qIeB-8" edge="1" parent="band_4" style="endArrow=open;html=1;endSize=12;startArrow=diamondThin;startSize=14;startFill=1;edgeStyle=orthogonalEdgeStyle;align=left;verticalAlign=bottom;rounded=0;defaultLabelBackgroundColor=gap;strokeWidth=2;" value="">
+          <mxGeometry relative="1" x="-1" y="3" as="geometry">
+            <mxPoint x="25" y="764" as="sourcePoint" />
+            <mxPoint x="129.8" y="764" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="je_fRvDRx34dfBV-qIeB-9" edge="1" parent="band_4" style="endArrow=open;html=1;endSize=12;startArrow=diamondThin;startSize=14;startFill=0;edgeStyle=orthogonalEdgeStyle;align=left;verticalAlign=bottom;rounded=0;defaultLabelBackgroundColor=gap;strokeWidth=2;" value="">
+          <mxGeometry relative="1" x="-1" y="3" as="geometry">
+            <mxPoint x="27" y="791" as="sourcePoint" />
+            <mxPoint x="131.8" y="791" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="cls_AppCompatActivity" parent="1" style="swimlane;fontStyle=0;childLayout=stackLayout;horizontal=1;startSize=46;horizontalStack=0;resizeParent=1;resizeParentMax=0;resizeLast=0;collapsible=0;marginBottom=0;html=1;whiteSpace=wrap;fillColor=#334155;swimlaneFillColor=#F8FAFC;strokeColor=#475569;fontColor=#FFFFFF;fontFamily=Arial;strokeWidth=2;rounded=1;" value="&lt;i style=&#39;font-size:10px;color:#E2E8F0;&#39;&gt;&amp;lt;&amp;lt;Android SDK Superclass&amp;gt;&amp;gt;&lt;/i&gt;&lt;br&gt;&lt;b style=&#39;font-size:13px;color:#FFFFFF;&#39;&gt;AppCompatActivity&lt;/b&gt;" vertex="1">
+          <mxGeometry height="142" width="620" x="220" y="140" as="geometry" />
+        </mxCell>
+        <mxCell id="cls_AppCompatActivity_attrs" parent="cls_AppCompatActivity" style="text;html=1;strokeColor=#475569;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=6;spacingTop=4;whiteSpace=wrap;overflow=hidden;rotatable=0;fontFamily=Arial;fontSize=11;fontColor=#0F172A;" value="# savedInstanceState: Bundle?&lt;br&gt;# window: Window" vertex="1">
+          <mxGeometry height="48" width="620" y="46" as="geometry" />
+        </mxCell>
+        <mxCell id="cls_AppCompatActivity_meths" parent="cls_AppCompatActivity" style="text;html=1;strokeColor=#475569;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=6;spacingTop=4;whiteSpace=wrap;overflow=hidden;rotatable=0;fontFamily=Arial;fontSize=11;fontColor=#1E293B;" value="+ onCreate(savedInstanceState: Bundle?): Unit&lt;br&gt;+ setContentView(view: View): Unit" vertex="1">
+          <mxGeometry height="48" width="620" y="94" as="geometry" />
+        </mxCell>
+        <mxCell id="cls_EditText" parent="1" style="swimlane;fontStyle=0;childLayout=stackLayout;horizontal=1;startSize=46;horizontalStack=0;resizeParent=1;resizeParentMax=0;resizeLast=0;collapsible=0;marginBottom=0;html=1;whiteSpace=wrap;fillColor=#334155;swimlaneFillColor=#F8FAFC;strokeColor=#475569;fontColor=#FFFFFF;fontFamily=Arial;strokeWidth=2;rounded=1;" value="&lt;i style=&#39;font-size:10px;color:#E2E8F0;&#39;&gt;&amp;lt;&amp;lt;Android SDK Superclass&amp;gt;&amp;gt;&lt;/i&gt;&lt;br&gt;&lt;b style=&#39;font-size:13px;color:#FFFFFF;&#39;&gt;EditText&lt;/b&gt;" vertex="1">
+          <mxGeometry height="142" width="420" x="1510" y="140" as="geometry" />
+        </mxCell>
+        <mxCell id="cls_EditText_attrs" parent="cls_EditText" style="text;html=1;strokeColor=#475569;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=6;spacingTop=4;whiteSpace=wrap;overflow=hidden;rotatable=0;fontFamily=Arial;fontSize=11;fontColor=#0F172A;" value="+ text: Editable&lt;br&gt;+ typeface: Typeface" vertex="1">
+          <mxGeometry height="48" width="420" y="46" as="geometry" />
+        </mxCell>
+        <mxCell id="cls_EditText_meths" parent="cls_EditText" style="text;html=1;strokeColor=#475569;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=6;spacingTop=4;whiteSpace=wrap;overflow=hidden;rotatable=0;fontFamily=Arial;fontSize=11;fontColor=#1E293B;" value="+ onTextContextMenuItem(id: Int): Boolean&lt;br&gt;+ onCreateInputConnection(outAttrs: EditorInfo): InputConnection?" vertex="1">
+          <mxGeometry height="48" width="420" y="94" as="geometry" />
+        </mxCell>
+        <mxCell id="cls_View" parent="1" style="swimlane;fontStyle=0;childLayout=stackLayout;horizontal=1;startSize=46;horizontalStack=0;resizeParent=1;resizeParentMax=0;resizeLast=0;collapsible=0;marginBottom=0;html=1;whiteSpace=wrap;fillColor=#334155;swimlaneFillColor=#F8FAFC;strokeColor=#475569;fontColor=#FFFFFF;fontFamily=Arial;strokeWidth=2;rounded=1;" value="&lt;i style=&#39;font-size:10px;color:#E2E8F0;&#39;&gt;&amp;lt;&amp;lt;Android SDK Superclass&amp;gt;&amp;gt;&lt;/i&gt;&lt;br&gt;&lt;b style=&#39;font-size:13px;color:#FFFFFF;&#39;&gt;View&lt;/b&gt;" vertex="1">
+          <mxGeometry height="142" width="560" x="2180" y="140" as="geometry" />
+        </mxCell>
+        <mxCell id="cls_View_attrs" parent="cls_View" style="text;html=1;strokeColor=#475569;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=6;spacingTop=4;whiteSpace=wrap;overflow=hidden;rotatable=0;fontFamily=Arial;fontSize=11;fontColor=#0F172A;" value="+ width: Int&lt;br&gt;+ height: Int" vertex="1">
+          <mxGeometry height="48" width="560" y="46" as="geometry" />
+        </mxCell>
+        <mxCell id="cls_View_meths" parent="cls_View" style="text;html=1;strokeColor=#475569;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=6;spacingTop=4;whiteSpace=wrap;overflow=hidden;rotatable=0;fontFamily=Arial;fontSize=11;fontColor=#1E293B;" value="# onDraw(canvas: Canvas): Unit&lt;br&gt;+ invalidate(): Unit" vertex="1">
+          <mxGeometry height="48" width="560" y="94" as="geometry" />
+        </mxCell>
+        <mxCell id="cls_AdminActivity" parent="1" style="swimlane;fontStyle=0;childLayout=stackLayout;horizontal=1;startSize=46;horizontalStack=0;resizeParent=1;resizeParentMax=0;resizeLast=0;collapsible=0;marginBottom=0;html=1;whiteSpace=wrap;fillColor=#1E3A8A;swimlaneFillColor=#EFF6FF;strokeColor=#1D4ED8;fontColor=#FFFFFF;fontFamily=Arial;strokeWidth=2;rounded=1;" value="&lt;i style=&#39;font-size:10px;color:#E2E8F0;&#39;&gt;&amp;lt;&amp;lt;Activity&amp;gt;&amp;gt;&lt;/i&gt;&lt;br&gt;&lt;b style=&#39;font-size:13px;color:#FFFFFF;&#39;&gt;AdminActivity&lt;/b&gt;" vertex="1">
+          <mxGeometry height="358" width="620" x="60" y="355" as="geometry" />
+        </mxCell>
+        <mxCell id="cls_AdminActivity_attrs" parent="cls_AdminActivity" style="text;html=1;strokeColor=#1D4ED8;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=6;spacingTop=4;whiteSpace=wrap;overflow=hidden;rotatable=0;fontFamily=Arial;fontSize=11;fontColor=#0F172A;" value="- preferences: SharedPreferences&lt;br&gt;- page: String&lt;br&gt;- teamCode: String&lt;br&gt;- teamName: String&lt;br&gt;- services: MutableList&amp;lt;ServiceData&amp;gt;&lt;br&gt;- songs: MutableList&amp;lt;SongData&amp;gt;&lt;br&gt;- draftService: ServiceData" vertex="1">
+          <mxGeometry height="138" width="620" y="46" as="geometry" />
+        </mxCell>
+        <mxCell id="cls_AdminActivity_meths" parent="cls_AdminActivity" style="text;html=1;strokeColor=#1D4ED8;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=6;spacingTop=4;whiteSpace=wrap;overflow=hidden;rotatable=0;fontFamily=Arial;fontSize=11;fontColor=#1E293B;" value="+ onCreate(savedInstanceState: Bundle?): Unit&lt;br&gt;- navigate(nextPage: String): Unit&lt;br&gt;- createServiceView(): View&lt;br&gt;- serviceAssignmentsView(): View&lt;br&gt;- adminLineupView(): View&lt;br&gt;- rehearsalView(): View&lt;br&gt;- reviewServiceView(): View&lt;br&gt;- serviceConflicts(service: ServiceData): List&amp;lt;String&amp;gt;&lt;br&gt;- notificationsView(): View" vertex="1">
+          <mxGeometry height="174" width="620" y="184" as="geometry" />
+        </mxCell>
+        <mxCell id="cls_MemberActivity" parent="1" style="swimlane;fontStyle=0;childLayout=stackLayout;horizontal=1;startSize=46;horizontalStack=0;resizeParent=1;resizeParentMax=0;resizeLast=0;collapsible=0;marginBottom=0;html=1;whiteSpace=wrap;fillColor=#1E3A8A;swimlaneFillColor=#EFF6FF;strokeColor=#1D4ED8;fontColor=#FFFFFF;fontFamily=Arial;strokeWidth=2;rounded=1;" value="&lt;i style=&#39;font-size:10px;color:#E2E8F0;&#39;&gt;&amp;lt;&amp;lt;Activity&amp;gt;&amp;gt;&lt;/i&gt;&lt;br&gt;&lt;b style=&#39;font-size:13px;color:#FFFFFF;&#39;&gt;MemberActivity&lt;/b&gt;" vertex="1">
+          <mxGeometry height="340" width="580" x="740" y="355" as="geometry" />
+        </mxCell>
+        <mxCell id="cls_MemberActivity_attrs" parent="cls_MemberActivity" style="text;html=1;strokeColor=#1D4ED8;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=6;spacingTop=4;whiteSpace=wrap;overflow=hidden;rotatable=0;fontFamily=Arial;fontSize=11;fontColor=#0F172A;" value="- preferences: SharedPreferences&lt;br&gt;- page: String&lt;br&gt;- teamCode: String&lt;br&gt;- teamName: String&lt;br&gt;- services: MutableList&amp;lt;ServiceData&amp;gt;&lt;br&gt;- songs: MutableList&amp;lt;SongData&amp;gt;" vertex="1">
+          <mxGeometry height="120" width="580" y="46" as="geometry" />
+        </mxCell>
+        <mxCell id="cls_MemberActivity_meths" parent="cls_MemberActivity" style="text;html=1;strokeColor=#1D4ED8;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=6;spacingTop=4;whiteSpace=wrap;overflow=hidden;rotatable=0;fontFamily=Arial;fontSize=11;fontColor=#1E293B;" value="+ onCreate(savedInstanceState: Bundle?): Unit&lt;br&gt;- navigate(nextPage: String): Unit&lt;br&gt;- scheduleView(): View&lt;br&gt;- availabilityView(): View&lt;br&gt;- substitutionView(): View&lt;br&gt;- songsView(): View&lt;br&gt;- teamsView(): View&lt;br&gt;- notificationsView(): View&lt;br&gt;- confirmOrDeclineDuty(serviceId: String, status: String): Unit" vertex="1">
+          <mxGeometry height="174" width="580" y="166" as="geometry" />
+        </mxCell>
+        <mxCell id="cls_ChordSheetInput" parent="1" style="swimlane;fontStyle=0;childLayout=stackLayout;horizontal=1;startSize=46;horizontalStack=0;resizeParent=1;resizeParentMax=0;resizeLast=0;collapsible=0;marginBottom=0;html=1;whiteSpace=wrap;fillColor=#1E3A8A;swimlaneFillColor=#EFF6FF;strokeColor=#1D4ED8;fontColor=#FFFFFF;fontFamily=Arial;strokeWidth=2;rounded=1;" value="&lt;i style=&#39;font-size:10px;color:#E2E8F0;&#39;&gt;&amp;lt;&amp;lt;CustomView&amp;gt;&amp;gt;&lt;/i&gt;&lt;br&gt;&lt;b style=&#39;font-size:13px;color:#FFFFFF;&#39;&gt;ChordSheetInput&lt;/b&gt;" vertex="1">
+          <mxGeometry height="178" width="480" x="1480" y="355" as="geometry" />
+        </mxCell>
+        <mxCell id="cls_ChordSheetInput_attrs" parent="cls_ChordSheetInput" style="text;html=1;strokeColor=#1D4ED8;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=6;spacingTop=4;whiteSpace=wrap;overflow=hidden;rotatable=0;fontFamily=Arial;fontSize=11;fontColor=#0F172A;" value="+ typeface: Typeface = Typeface.MONOSPACE&lt;br&gt;+ horizontallyScrolling: Boolean = true" vertex="1">
+          <mxGeometry height="48" width="480" y="46" as="geometry" />
+        </mxCell>
+        <mxCell id="cls_ChordSheetInput_meths" parent="cls_ChordSheetInput" style="text;html=1;strokeColor=#1D4ED8;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=6;spacingTop=4;whiteSpace=wrap;overflow=hidden;rotatable=0;fontFamily=Arial;fontSize=11;fontColor=#1E293B;" value="+ onTextContextMenuItem(id: Int): Boolean&lt;br&gt;+ onCreateInputConnection(outAttrs: EditorInfo): InputConnection?&lt;br&gt;- formatInsertion(pasted: String): String&lt;br&gt;+ transposeSheet(sheet: String, semitones: Int): String" vertex="1">
+          <mxGeometry height="84" width="480" y="94" as="geometry" />
+        </mxCell>
+        <mxCell id="cls_MetronomeView" parent="1" style="swimlane;fontStyle=0;childLayout=stackLayout;horizontal=1;startSize=46;horizontalStack=0;resizeParent=1;resizeParentMax=0;resizeLast=0;collapsible=0;marginBottom=0;html=1;whiteSpace=wrap;fillColor=#1E3A8A;swimlaneFillColor=#EFF6FF;strokeColor=#1D4ED8;fontColor=#FFFFFF;fontFamily=Arial;strokeWidth=2;rounded=1;" value="&lt;i style=&#39;font-size:10px;color:#E2E8F0;&#39;&gt;&amp;lt;&amp;lt;CustomView / Audio&amp;gt;&amp;gt;&lt;/i&gt;&lt;br&gt;&lt;b style=&#39;font-size:13px;color:#FFFFFF;&#39;&gt;MetronomeView &amp;amp; MetronomePcm&lt;/b&gt;" vertex="1">
+          <mxGeometry height="232" width="440" x="2020" y="355" as="geometry" />
+        </mxCell>
+        <mxCell id="cls_MetronomeView_attrs" parent="cls_MetronomeView" style="text;html=1;strokeColor=#1D4ED8;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=6;spacingTop=4;whiteSpace=wrap;overflow=hidden;rotatable=0;fontFamily=Arial;fontSize=11;fontColor=#0F172A;" value="- bpm: Int = 74&lt;br&gt;- isPlaying: Boolean = false&lt;br&gt;- currentBeat: Int = 0&lt;br&gt;- sampleRate: Int = 44100" vertex="1">
+          <mxGeometry height="84" width="440" y="46" as="geometry" />
+        </mxCell>
+        <mxCell id="cls_MetronomeView_meths" parent="cls_MetronomeView" style="text;html=1;strokeColor=#1D4ED8;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=6;spacingTop=4;whiteSpace=wrap;overflow=hidden;rotatable=0;fontFamily=Arial;fontSize=11;fontColor=#1E293B;" value="+ setBpm(newBpm: Int): Unit&lt;br&gt;+ startMetronome(): Unit&lt;br&gt;+ stopMetronome(): Unit&lt;br&gt;+ generateClickWave(freqHz: Double, ms: Int): ShortArray&lt;br&gt;# onDraw(canvas: Canvas): Unit" vertex="1">
+          <mxGeometry height="102" width="440" y="130" as="geometry" />
+        </mxCell>
+        <mxCell id="cls_SharedUi" parent="1" style="swimlane;fontStyle=0;childLayout=stackLayout;horizontal=1;startSize=46;horizontalStack=0;resizeParent=1;resizeParentMax=0;resizeLast=0;collapsible=0;marginBottom=0;html=1;whiteSpace=wrap;fillColor=#1E3A8A;swimlaneFillColor=#EFF6FF;strokeColor=#1D4ED8;fontColor=#FFFFFF;fontFamily=Arial;strokeWidth=2;rounded=1;" value="&lt;i style=&#39;font-size:10px;color:#E2E8F0;&#39;&gt;&amp;lt;&amp;lt;CustomView / UI Toolkit&amp;gt;&amp;gt;&lt;/i&gt;&lt;br&gt;&lt;b style=&#39;font-size:13px;color:#FFFFFF;&#39;&gt;SharedUi (Symbol &amp;amp; CornerArt)&lt;/b&gt;" vertex="1">
+          <mxGeometry height="214" width="450" x="2510" y="355" as="geometry" />
+        </mxCell>
+        <mxCell id="cls_SharedUi_attrs" parent="cls_SharedUi" style="text;html=1;strokeColor=#1D4ED8;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=6;spacingTop=4;whiteSpace=wrap;overflow=hidden;rotatable=0;fontFamily=Arial;fontSize=11;fontColor=#0F172A;" value="+ calendarButton: Int = 1000&lt;br&gt;+ scheduleTab: Int = 1032&lt;br&gt;+ songsButton: Int = 1036&lt;br&gt;+ teamsTab: Int = 1041&lt;br&gt;- paint: Paint" vertex="1">
+          <mxGeometry height="102" width="450" y="46" as="geometry" />
+        </mxCell>
+        <mxCell id="cls_SharedUi_meths" parent="cls_SharedUi" style="text;html=1;strokeColor=#1D4ED8;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=6;spacingTop=4;whiteSpace=wrap;overflow=hidden;rotatable=0;fontFamily=Arial;fontSize=11;fontColor=#1E293B;" value="# onDraw(canvas: Canvas): Unit&lt;br&gt;+ drawSymbol(canvas: Canvas, name: String): Unit&lt;br&gt;+ createHeroBanner(ctx: Context, nextService: ServiceData?): View" vertex="1">
+          <mxGeometry height="66" width="450" y="148" as="geometry" />
+        </mxCell>
+        <mxCell id="cls_AuthManager" parent="1" style="swimlane;fontStyle=0;childLayout=stackLayout;horizontal=1;startSize=46;horizontalStack=0;resizeParent=1;resizeParentMax=0;resizeLast=0;collapsible=0;marginBottom=0;html=1;whiteSpace=wrap;fillColor=#5B21B6;swimlaneFillColor=#F5F3FF;strokeColor=#6D28D9;fontColor=#FFFFFF;fontFamily=Arial;strokeWidth=2;rounded=1;" value="&lt;i style=&#39;font-size:10px;color:#E2E8F0;&#39;&gt;&amp;lt;&amp;lt;Singleton Object&amp;gt;&amp;gt;&lt;/i&gt;&lt;br&gt;&lt;b style=&#39;font-size:13px;color:#FFFFFF;&#39;&gt;AuthManager&lt;/b&gt;" vertex="1">
+          <mxGeometry height="232" width="460" x="60" y="830" as="geometry" />
+        </mxCell>
+        <mxCell id="cls_AuthManager_attrs" parent="cls_AuthManager" style="text;html=1;strokeColor=#6D28D9;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=6;spacingTop=4;whiteSpace=wrap;overflow=hidden;rotatable=0;fontFamily=Arial;fontSize=11;fontColor=#0F172A;" value="+ WEB_CLIENT_ID: String&lt;br&gt;+ auth: FirebaseAuth&lt;br&gt;+ currentUser: FirebaseUser?&lt;br&gt;+ isLoggedIn: Boolean" vertex="1">
+          <mxGeometry height="84" width="460" y="46" as="geometry" />
+        </mxCell>
+        <mxCell id="cls_AuthManager_meths" parent="cls_AuthManager" style="text;html=1;strokeColor=#6D28D9;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=6;spacingTop=4;whiteSpace=wrap;overflow=hidden;rotatable=0;fontFamily=Arial;fontSize=11;fontColor=#1E293B;" value="+ registerUser(username, email, password, onComplete): Unit&lt;br&gt;+ loginUser(email, password, onComplete): Unit&lt;br&gt;+ signInWithGoogle(idToken: String, onComplete): Unit&lt;br&gt;+ sendPasswordReset(email: String, onComplete): Unit&lt;br&gt;+ signOut(): Unit" vertex="1">
+          <mxGeometry height="102" width="460" y="130" as="geometry" />
+        </mxCell>
+        <mxCell id="cls_SessionManager" parent="1" style="swimlane;fontStyle=0;childLayout=stackLayout;horizontal=1;startSize=46;horizontalStack=0;resizeParent=1;resizeParentMax=0;resizeLast=0;collapsible=0;marginBottom=0;html=1;whiteSpace=wrap;fillColor=#5B21B6;swimlaneFillColor=#F5F3FF;strokeColor=#6D28D9;fontColor=#FFFFFF;fontFamily=Arial;strokeWidth=2;rounded=1;" value="&lt;i style=&#39;font-size:10px;color:#E2E8F0;&#39;&gt;&amp;lt;&amp;lt;Singleton Object&amp;gt;&amp;gt;&lt;/i&gt;&lt;br&gt;&lt;b style=&#39;font-size:13px;color:#FFFFFF;&#39;&gt;SessionManager&lt;/b&gt;" vertex="1">
+          <mxGeometry height="250" width="490" x="555" y="830" as="geometry" />
+        </mxCell>
+        <mxCell id="cls_SessionManager_attrs" parent="cls_SessionManager" style="text;html=1;strokeColor=#6D28D9;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=6;spacingTop=4;whiteSpace=wrap;overflow=hidden;rotatable=0;fontFamily=Arial;fontSize=11;fontColor=#0F172A;" value="+ PREFS_NAME: String = &amp;quot;synced_profile&amp;quot;&lt;br&gt;+ KEY_USER_ID: String = &amp;quot;userId&amp;quot;&lt;br&gt;+ KEY_ROLE: String = &amp;quot;role&amp;quot;&lt;br&gt;+ KEY_TEAM_CODE: String = &amp;quot;teamCode&amp;quot;&lt;br&gt;+ KEY_MINISTRY_ROLE: String = &amp;quot;ministryRole&amp;quot;" vertex="1">
+          <mxGeometry height="102" width="490" y="46" as="geometry" />
+        </mxCell>
+        <mxCell id="cls_SessionManager_meths" parent="cls_SessionManager" style="text;html=1;strokeColor=#6D28D9;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=6;spacingTop=4;whiteSpace=wrap;overflow=hidden;rotatable=0;fontFamily=Arial;fontSize=11;fontColor=#1E293B;" value="+ saveSessionProfile(prefs, profile, fallbackUser, fallbackEmail): Unit&lt;br&gt;+ resolveUserTeamSession(prefs, profile, email): Triple&amp;lt;String,String,String&amp;gt;&lt;br&gt;+ updatePhotoUri(prefs, photoUri, email, uid): Unit&lt;br&gt;+ clearPreferencesOnly(preferences: SharedPreferences): Unit&lt;br&gt;+ clearSession(preferences: SharedPreferences): Unit" vertex="1">
+          <mxGeometry height="102" width="490" y="148" as="geometry" />
+        </mxCell>
+        <mxCell id="cls_EmailOtpService" parent="1" style="swimlane;fontStyle=0;childLayout=stackLayout;horizontal=1;startSize=46;horizontalStack=0;resizeParent=1;resizeParentMax=0;resizeLast=0;collapsible=0;marginBottom=0;html=1;whiteSpace=wrap;fillColor=#5B21B6;swimlaneFillColor=#F5F3FF;strokeColor=#6D28D9;fontColor=#FFFFFF;fontFamily=Arial;strokeWidth=2;rounded=1;" value="&lt;i style=&#39;font-size:10px;color:#E2E8F0;&#39;&gt;&amp;lt;&amp;lt;Singleton Object&amp;gt;&amp;gt;&lt;/i&gt;&lt;br&gt;&lt;b style=&#39;font-size:13px;color:#FFFFFF;&#39;&gt;EmailOtpService&lt;/b&gt;" vertex="1">
+          <mxGeometry height="196" width="450" x="1080" y="830" as="geometry" />
+        </mxCell>
+        <mxCell id="cls_EmailOtpService_attrs" parent="cls_EmailOtpService" style="text;html=1;strokeColor=#6D28D9;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=6;spacingTop=4;whiteSpace=wrap;overflow=hidden;rotatable=0;fontFamily=Arial;fontSize=11;fontColor=#0F172A;" value="- SENDER_EMAIL: String&lt;br&gt;- BREVO_API_URL: String = &amp;quot;https://api.brevo.com/v3/smtp/email&amp;quot;&lt;br&gt;+ OTP_VALIDITY_MS: Long = 600000L&lt;br&gt;+ activeRecord: OtpRecord?" vertex="1">
+          <mxGeometry height="84" width="450" y="46" as="geometry" />
+        </mxCell>
+        <mxCell id="cls_EmailOtpService_meths" parent="cls_EmailOtpService" style="text;html=1;strokeColor=#6D28D9;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=6;spacingTop=4;whiteSpace=wrap;overflow=hidden;rotatable=0;fontFamily=Arial;fontSize=11;fontColor=#1E293B;" value="+ sendOtp(recipientEmail, pendingPassword, onResult): Unit&lt;br&gt;+ verifyOtp(enteredCode: String): Result&amp;lt;OtpRecord&amp;gt;&lt;br&gt;+ clear(): Unit" vertex="1">
+          <mxGeometry height="66" width="450" y="130" as="geometry" />
+        </mxCell>
+        <mxCell id="cls_CloudinaryUploader" parent="1" style="swimlane;fontStyle=0;childLayout=stackLayout;horizontal=1;startSize=46;horizontalStack=0;resizeParent=1;resizeParentMax=0;resizeLast=0;collapsible=0;marginBottom=0;html=1;whiteSpace=wrap;fillColor=#5B21B6;swimlaneFillColor=#F5F3FF;strokeColor=#6D28D9;fontColor=#FFFFFF;fontFamily=Arial;strokeWidth=2;rounded=1;" value="&lt;i style=&#39;font-size:10px;color:#E2E8F0;&#39;&gt;&amp;lt;&amp;lt;Singleton Object&amp;gt;&amp;gt;&lt;/i&gt;&lt;br&gt;&lt;b style=&#39;font-size:13px;color:#FFFFFF;&#39;&gt;CloudinaryUploader &amp;amp; ImageLoader&lt;/b&gt;" vertex="1">
+          <mxGeometry height="214" width="470" x="1565" y="830" as="geometry" />
+        </mxCell>
+        <mxCell id="cls_CloudinaryUploader_attrs" parent="cls_CloudinaryUploader" style="text;html=1;strokeColor=#6D28D9;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=6;spacingTop=4;whiteSpace=wrap;overflow=hidden;rotatable=0;fontFamily=Arial;fontSize=11;fontColor=#0F172A;" value="+ CLOUD_NAME: String = &amp;quot;ffb3fdkm&amp;quot;&lt;br&gt;+ UPLOAD_PRESET: String = &amp;quot;synced_preset&amp;quot;&lt;br&gt;- UPLOAD_URL: String&lt;br&gt;- memoryCache: LruCache&amp;lt;String, Bitmap&amp;gt;" vertex="1">
+          <mxGeometry height="84" width="470" y="46" as="geometry" />
+        </mxCell>
+        <mxCell id="cls_CloudinaryUploader_meths" parent="cls_CloudinaryUploader" style="text;html=1;strokeColor=#6D28D9;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=6;spacingTop=4;whiteSpace=wrap;overflow=hidden;rotatable=0;fontFamily=Arial;fontSize=11;fontColor=#1E293B;" value="+ uploadProfileImage(ctx, uri, maxDim, quality, onComplete): Unit&lt;br&gt;+ uploadSongMediaAttachment(ctx, uri, mediaType, onComplete): Unit&lt;br&gt;+ loadImageAsync(url: String, target: ImageView): Unit&lt;br&gt;- executeUpload(fileBytes: ByteArray): String" vertex="1">
+          <mxGeometry height="84" width="470" y="130" as="geometry" />
+        </mxCell>
+        <mxCell id="cls_SyncedMessagingService" parent="1" style="swimlane;fontStyle=0;childLayout=stackLayout;horizontal=1;startSize=46;horizontalStack=0;resizeParent=1;resizeParentMax=0;resizeLast=0;collapsible=0;marginBottom=0;html=1;whiteSpace=wrap;fillColor=#0F766E;swimlaneFillColor=#F0FDFA;strokeColor=#0D9488;fontColor=#FFFFFF;fontFamily=Arial;strokeWidth=2;rounded=1;" value="&lt;i style=&#39;font-size:10px;color:#E2E8F0;&#39;&gt;&amp;lt;&amp;lt;Service — Planned Final Build&amp;gt;&amp;gt;&lt;/i&gt;&lt;br&gt;&lt;b style=&#39;font-size:13px;color:#FFFFFF;&#39;&gt;SyncedMessagingService : FirebaseMessagingService&lt;/b&gt;" vertex="1">
+          <mxGeometry height="178" width="495" x="2070" y="830" as="geometry" />
+        </mxCell>
+        <mxCell id="cls_SyncedMessagingService_attrs" parent="cls_SyncedMessagingService" style="text;html=1;strokeColor=#0D9488;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=6;spacingTop=4;whiteSpace=wrap;overflow=hidden;rotatable=0;fontFamily=Arial;fontSize=11;fontColor=#0F172A;" value="+ CHANNEL_ID: String = &amp;quot;synced_ministry_alerts&amp;quot;&lt;br&gt;- notificationManager: NotificationManager" vertex="1">
+          <mxGeometry height="48" width="495" y="46" as="geometry" />
+        </mxCell>
+        <mxCell id="cls_SyncedMessagingService_meths" parent="cls_SyncedMessagingService" style="text;html=1;strokeColor=#0D9488;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=6;spacingTop=4;whiteSpace=wrap;overflow=hidden;rotatable=0;fontFamily=Arial;fontSize=11;fontColor=#1E293B;" value="+ onNewToken(fcmToken: String): Unit&lt;br&gt;+ onMessageReceived(remoteMessage: RemoteMessage): Unit&lt;br&gt;+ syncFcmTokenToFirestore(uid: String, token: String): Unit&lt;br&gt;+ showSystemNotification(title: String, body: String, type: String): Unit" vertex="1">
+          <mxGeometry height="84" width="495" y="94" as="geometry" />
+        </mxCell>
+        <mxCell id="cls_ValidationUtils" parent="1" style="swimlane;fontStyle=0;childLayout=stackLayout;horizontal=1;startSize=46;horizontalStack=0;resizeParent=1;resizeParentMax=0;resizeLast=0;collapsible=0;marginBottom=0;html=1;whiteSpace=wrap;fillColor=#5B21B6;swimlaneFillColor=#F5F3FF;strokeColor=#6D28D9;fontColor=#FFFFFF;fontFamily=Arial;strokeWidth=2;rounded=1;" value="&lt;i style=&#39;font-size:10px;color:#E2E8F0;&#39;&gt;&amp;lt;&amp;lt;Singleton Object&amp;gt;&amp;gt;&lt;/i&gt;&lt;br&gt;&lt;b style=&#39;font-size:13px;color:#FFFFFF;&#39;&gt;ValidationUtils&lt;/b&gt;" vertex="1">
+          <mxGeometry height="214" width="365" x="2600" y="830" as="geometry" />
+        </mxCell>
+        <mxCell id="cls_ValidationUtils_attrs" parent="cls_ValidationUtils" style="text;html=1;strokeColor=#6D28D9;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=6;spacingTop=4;whiteSpace=wrap;overflow=hidden;rotatable=0;fontFamily=Arial;fontSize=11;fontColor=#0F172A;" value="- PH_PHONE_REGEX: Regex&lt;br&gt;+ MAX_NAME_LENGTH: Int = 50&lt;br&gt;+ MAX_USERNAME_LENGTH: Int = 30&lt;br&gt;+ MAX_TITLE_LENGTH: Int = 100&lt;br&gt;+ MAX_REASON_LENGTH: Int = 100" vertex="1">
+          <mxGeometry height="102" width="365" y="46" as="geometry" />
+        </mxCell>
+        <mxCell id="cls_ValidationUtils_meths" parent="cls_ValidationUtils" style="text;html=1;strokeColor=#6D28D9;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=6;spacingTop=4;whiteSpace=wrap;overflow=hidden;rotatable=0;fontFamily=Arial;fontSize=11;fontColor=#1E293B;" value="+ isValidPhilippinePhone(phone, allowBlank): Boolean&lt;br&gt;+ isValidName(name: String): Boolean&lt;br&gt;+ isValidUsername(username: String): Boolean" vertex="1">
+          <mxGeometry height="66" width="365" y="148" as="geometry" />
+        </mxCell>
+        <mxCell id="cls_FirestoreManager" parent="1" style="swimlane;fontStyle=0;childLayout=stackLayout;horizontal=1;startSize=46;horizontalStack=0;resizeParent=1;resizeParentMax=0;resizeLast=0;collapsible=0;marginBottom=0;html=1;whiteSpace=wrap;fillColor=#065F46;swimlaneFillColor=#ECFDF5;strokeColor=#047857;fontColor=#FFFFFF;fontFamily=Arial;strokeWidth=2;rounded=1;" value="&lt;i style=&#39;font-size:10px;color:#E2E8F0;&#39;&gt;&amp;lt;&amp;lt;Singleton Object&amp;gt;&amp;gt;&lt;/i&gt;&lt;br&gt;&lt;b style=&#39;font-size:13px;color:#FFFFFF;&#39;&gt;FirestoreManager&lt;/b&gt;" vertex="1">
+          <mxGeometry height="376" width="760" x="120" y="1255" as="geometry" />
+        </mxCell>
+        <mxCell id="cls_FirestoreManager_attrs" parent="cls_FirestoreManager" style="text;html=1;strokeColor=#047857;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=6;spacingTop=4;whiteSpace=wrap;overflow=hidden;rotatable=0;fontFamily=Arial;fontSize=11;fontColor=#0F172A;" value="+ db: FirebaseFirestore&lt;br&gt;+ USERS_COLLECTION: String = &amp;quot;users&amp;quot;&lt;br&gt;+ TEAMS_COLLECTION: String = &amp;quot;teams&amp;quot;&lt;br&gt;- TEAM_CODE_CHARS: String&lt;br&gt;- localTeams: MutableMap&amp;lt;String, String&amp;gt;&lt;br&gt;- localUserRoleTeam: MutableMap&amp;lt;String, Triple&amp;lt;String,String,String&amp;gt;&amp;gt;" vertex="1">
+          <mxGeometry height="120" width="760" y="46" as="geometry" />
+        </mxCell>
+        <mxCell id="cls_FirestoreManager_meths" parent="cls_FirestoreManager" style="text;html=1;strokeColor=#047857;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=6;spacingTop=4;whiteSpace=wrap;overflow=hidden;rotatable=0;fontFamily=Arial;fontSize=11;fontColor=#1E293B;" value="+ saveUserProfile(profile: UserProfile, onComplete): Unit&lt;br&gt;+ getUserProfile(uid: String, onComplete): Unit&lt;br&gt;+ getUserByEmail(email: String, onComplete): Unit&lt;br&gt;+ generateTeamCode(): String&lt;br&gt;+ isValidTeamCodeFormat(code: String): Boolean&lt;br&gt;+ createTeamWithCode(leaderUid, leaderName, teamName, onComplete): Unit&lt;br&gt;+ getTeamByCode(teamCode: String, onComplete): Unit&lt;br&gt;+ updateUserRoleAndTeam(uid, role, teamName, teamCode, email, onComplete): Unit&lt;br&gt;+ updateFcmTokenAndPreferences(uid: String, fcmToken: String, prefs: Map&amp;lt;String,Boolean&amp;gt;): Unit&lt;br&gt;+ savePasswordReset(email: String, newPassword: String, onComplete): Unit&lt;br&gt;+ getPasswordReset(email: String, onComplete): Unit" vertex="1">
+          <mxGeometry height="210" width="760" y="166" as="geometry" />
+        </mxCell>
+        <mxCell id="cls_TeamRepository" parent="1" style="swimlane;fontStyle=0;childLayout=stackLayout;horizontal=1;startSize=46;horizontalStack=0;resizeParent=1;resizeParentMax=0;resizeLast=0;collapsible=0;marginBottom=0;html=1;whiteSpace=wrap;fillColor=#065F46;swimlaneFillColor=#ECFDF5;strokeColor=#047857;fontColor=#FFFFFF;fontFamily=Arial;strokeWidth=2;rounded=1;" value="&lt;i style=&#39;font-size:10px;color:#E2E8F0;&#39;&gt;&amp;lt;&amp;lt;Singleton Object&amp;gt;&amp;gt;&lt;/i&gt;&lt;br&gt;&lt;b style=&#39;font-size:13px;color:#FFFFFF;&#39;&gt;TeamRepository&lt;/b&gt;" vertex="1">
+          <mxGeometry height="484" width="1080" x="1160" y="1245" as="geometry" />
+        </mxCell>
+        <mxCell id="cls_TeamRepository_attrs" parent="cls_TeamRepository" style="text;html=1;strokeColor=#047857;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=6;spacingTop=4;whiteSpace=wrap;overflow=hidden;rotatable=0;fontFamily=Arial;fontSize=11;fontColor=#0F172A;" value="- db: FirebaseFirestore&lt;br&gt;- cachedRosters: ConcurrentHashMap&amp;lt;String, MutableList&amp;lt;TeamMember&amp;gt;&amp;gt;&lt;br&gt;- cachedServices: ConcurrentHashMap&amp;lt;String, MutableList&amp;lt;ServiceData&amp;gt;&amp;gt;&lt;br&gt;- cachedSongs: ConcurrentHashMap&amp;lt;String, MutableList&amp;lt;SongData&amp;gt;&amp;gt;&lt;br&gt;- cachedSubstitutions: ConcurrentHashMap&amp;lt;String, MutableList&amp;lt;SubstitutionData&amp;gt;&amp;gt;&lt;br&gt;- cachedAnnouncements: ConcurrentHashMap&amp;lt;String, MutableList&amp;lt;AnnouncementData&amp;gt;&amp;gt;&lt;br&gt;- cachedChatMessages: ConcurrentHashMap&amp;lt;String, MutableList&amp;lt;ChatMessage&amp;gt;&amp;gt;&lt;br&gt;- cachedNotifications: ConcurrentHashMap&amp;lt;String, MutableList&amp;lt;NotificationData&amp;gt;&amp;gt;" vertex="1">
+          <mxGeometry height="156" width="1080" y="46" as="geometry" />
+        </mxCell>
+        <mxCell id="cls_TeamRepository_meths" parent="cls_TeamRepository" style="text;html=1;strokeColor=#047857;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=6;spacingTop=4;whiteSpace=wrap;overflow=hidden;rotatable=0;fontFamily=Arial;fontSize=11;fontColor=#1E293B;" value="+ getTeamRoster(teamCode: String, onComplete): Unit&lt;br&gt;+ updateMemberMinistryRole(uid: String, ministryRole: String, onComplete): Unit&lt;br&gt;+ saveTeamCustomRoles(teamCode: String, roles: List&amp;lt;String&amp;gt;, onComplete): Unit&lt;br&gt;+ removeMemberFromTeam(uid: String, onComplete): Unit&lt;br&gt;+ addUnavailableRange(uid: String, teamCode: String, range: UnavailableRange, onComplete): Unit&lt;br&gt;+ removeUnavailableRange(uid: String, teamCode: String, rangeId: String, onComplete): Unit&lt;br&gt;+ saveService(teamCode: String, service: ServiceData, onComplete): Unit&lt;br&gt;+ updateAssignmentAttendanceStatus(teamCode: String, serviceId: String, uid: String, status: String): Unit&lt;br&gt;+ saveSong(teamCode: String, song: SongData, onComplete): Unit&lt;br&gt;+ saveSubstitution(teamCode: String, sub: SubstitutionData, onComplete): Unit&lt;br&gt;+ acceptSubstitutionAndUpdateService(teamCode: String, sub: SubstitutionData, onComplete): Unit&lt;br&gt;+ saveAnnouncement(teamCode: String, item: AnnouncementData, onComplete): Unit&lt;br&gt;+ sendChatMessage(teamCode: String, message: ChatMessage, onComplete): Unit&lt;br&gt;+ getNotifications(teamCode: String, recipientUid: String, onComplete): Unit&lt;br&gt;+ createNotificationEvent(teamCode: String, notification: NotificationData, onComplete): Unit" vertex="1">
+          <mxGeometry height="282" width="1080" y="202" as="geometry" />
+        </mxCell>
+        <mxCell id="cls_UserProfile" parent="1" style="swimlane;fontStyle=0;childLayout=stackLayout;horizontal=1;startSize=46;horizontalStack=0;resizeParent=1;resizeParentMax=0;resizeLast=0;collapsible=0;marginBottom=0;html=1;whiteSpace=wrap;fillColor=#9A3412;swimlaneFillColor=#FFF7ED;strokeColor=#C2410C;fontColor=#FFFFFF;fontFamily=Arial;strokeWidth=2;rounded=1;" value="&lt;i style=&#39;font-size:10px;color:#E2E8F0;&#39;&gt;&amp;lt;&amp;lt;Data Class&amp;gt;&amp;gt;&lt;/i&gt;&lt;br&gt;&lt;b style=&#39;font-size:13px;color:#FFFFFF;&#39;&gt;UserProfile&lt;/b&gt;" vertex="1">
+          <mxGeometry height="358" width="405" x="60" y="1835" as="geometry" />
+        </mxCell>
+        <mxCell id="cls_UserProfile_attrs" parent="cls_UserProfile" style="text;html=1;strokeColor=#C2410C;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=6;spacingTop=4;whiteSpace=wrap;overflow=hidden;rotatable=0;fontFamily=Arial;fontSize=11;fontColor=#0F172A;" value="+ uid: String&lt;br&gt;+ username: String&lt;br&gt;+ email: String&lt;br&gt;+ role: String = &amp;quot;Member&amp;quot;&lt;br&gt;+ teamName: String&lt;br&gt;+ teamCode: String&lt;br&gt;+ fullName: String&lt;br&gt;+ phone: String&lt;br&gt;+ ministryRole: String&lt;br&gt;+ photoUri: String&lt;br&gt;+ fcmToken: String [Planned FCM]&lt;br&gt;+ notificationPreferences: Map&amp;lt;String,Boolean&amp;gt; [Planned]&lt;br&gt;+ unavailableRanges: List&amp;lt;UnavailableRange&amp;gt;&lt;br&gt;+ createdAt: Long" vertex="1">
+          <mxGeometry height="264" width="405" y="46" as="geometry" />
+        </mxCell>
+        <mxCell id="cls_UserProfile_meths" parent="cls_UserProfile" style="text;html=1;strokeColor=#C2410C;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=6;spacingTop=4;whiteSpace=wrap;overflow=hidden;rotatable=0;fontFamily=Arial;fontSize=11;fontColor=#1E293B;" value="+ toMap(): Map&amp;lt;String, Any&amp;gt;&lt;br&gt;+ fromMap(map: Map&amp;lt;String, Any?&amp;gt;): UserProfile" vertex="1">
+          <mxGeometry height="48" width="405" y="310" as="geometry" />
+        </mxCell>
+        <mxCell id="cls_TeamData" parent="1" style="swimlane;fontStyle=0;childLayout=stackLayout;horizontal=1;startSize=46;horizontalStack=0;resizeParent=1;resizeParentMax=0;resizeLast=0;collapsible=0;marginBottom=0;html=1;whiteSpace=wrap;fillColor=#9A3412;swimlaneFillColor=#FFF7ED;strokeColor=#C2410C;fontColor=#FFFFFF;fontFamily=Arial;strokeWidth=2;rounded=1;" value="&lt;i style=&#39;font-size:10px;color:#E2E8F0;&#39;&gt;&amp;lt;&amp;lt;Data Class&amp;gt;&amp;gt;&lt;/i&gt;&lt;br&gt;&lt;b style=&#39;font-size:13px;color:#FFFFFF;&#39;&gt;TeamData&lt;/b&gt;" vertex="1">
+          <mxGeometry height="214" width="360" x="500" y="1835" as="geometry" />
+        </mxCell>
+        <mxCell id="cls_TeamData_attrs" parent="cls_TeamData" style="text;html=1;strokeColor=#C2410C;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=6;spacingTop=4;whiteSpace=wrap;overflow=hidden;rotatable=0;fontFamily=Arial;fontSize=11;fontColor=#0F172A;" value="+ teamCode: String&lt;br&gt;+ teamName: String&lt;br&gt;+ leaderUid: String&lt;br&gt;+ leaderName: String&lt;br&gt;+ roles: List&amp;lt;String&amp;gt; = DEFAULT_ROLES&lt;br&gt;+ createdAt: Long" vertex="1">
+          <mxGeometry height="120" width="360" y="46" as="geometry" />
+        </mxCell>
+        <mxCell id="cls_TeamData_meths" parent="cls_TeamData" style="text;html=1;strokeColor=#C2410C;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=6;spacingTop=4;whiteSpace=wrap;overflow=hidden;rotatable=0;fontFamily=Arial;fontSize=11;fontColor=#1E293B;" value="+ toMap(): Map&amp;lt;String, Any&amp;gt;&lt;br&gt;+ fromMap(map: Map&amp;lt;String, Any?&amp;gt;): TeamData" vertex="1">
+          <mxGeometry height="48" width="360" y="166" as="geometry" />
+        </mxCell>
+        <mxCell id="cls_TeamMember" parent="1" style="swimlane;fontStyle=0;childLayout=stackLayout;horizontal=1;startSize=46;horizontalStack=0;resizeParent=1;resizeParentMax=0;resizeLast=0;collapsible=0;marginBottom=0;html=1;whiteSpace=wrap;fillColor=#9A3412;swimlaneFillColor=#FFF7ED;strokeColor=#C2410C;fontColor=#FFFFFF;fontFamily=Arial;strokeWidth=2;rounded=1;" value="&lt;i style=&#39;font-size:10px;color:#E2E8F0;&#39;&gt;&amp;lt;&amp;lt;Data Class&amp;gt;&amp;gt;&lt;/i&gt;&lt;br&gt;&lt;b style=&#39;font-size:13px;color:#FFFFFF;&#39;&gt;TeamMember&lt;/b&gt;" vertex="1">
+          <mxGeometry height="286" width="385" x="930" y="1835" as="geometry" />
+        </mxCell>
+        <mxCell id="cls_TeamMember_attrs" parent="cls_TeamMember" style="text;html=1;strokeColor=#C2410C;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=6;spacingTop=4;whiteSpace=wrap;overflow=hidden;rotatable=0;fontFamily=Arial;fontSize=11;fontColor=#0F172A;" value="+ uid: String&lt;br&gt;+ fullName: String&lt;br&gt;+ username: String&lt;br&gt;+ email: String&lt;br&gt;+ role: String = &amp;quot;Member&amp;quot;&lt;br&gt;+ ministryRole: String&lt;br&gt;+ teamCode: String&lt;br&gt;+ photoUri: String&lt;br&gt;+ unavailableRanges: List&amp;lt;UnavailableRange&amp;gt;&lt;br&gt;+ joinedAt: Long" vertex="1">
+          <mxGeometry height="192" width="385" y="46" as="geometry" />
+        </mxCell>
+        <mxCell id="cls_TeamMember_meths" parent="cls_TeamMember" style="text;html=1;strokeColor=#C2410C;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=6;spacingTop=4;whiteSpace=wrap;overflow=hidden;rotatable=0;fontFamily=Arial;fontSize=11;fontColor=#1E293B;" value="+ toMap(): Map&amp;lt;String, Any&amp;gt;&lt;br&gt;+ fromMap(map: Map&amp;lt;String, Any?&amp;gt;): TeamMember" vertex="1">
+          <mxGeometry height="48" width="385" y="238" as="geometry" />
+        </mxCell>
+        <mxCell id="cls_ServiceData" parent="1" style="swimlane;fontStyle=0;childLayout=stackLayout;horizontal=1;startSize=46;horizontalStack=0;resizeParent=1;resizeParentMax=0;resizeLast=0;collapsible=0;marginBottom=0;html=1;whiteSpace=wrap;fillColor=#9A3412;swimlaneFillColor=#FFF7ED;strokeColor=#C2410C;fontColor=#FFFFFF;fontFamily=Arial;strokeWidth=2;rounded=1;" value="&lt;i style=&#39;font-size:10px;color:#E2E8F0;&#39;&gt;&amp;lt;&amp;lt;Data Class&amp;gt;&amp;gt;&lt;/i&gt;&lt;br&gt;&lt;b style=&#39;font-size:13px;color:#FFFFFF;&#39;&gt;ServiceData&lt;/b&gt;" vertex="1">
+          <mxGeometry height="358" width="415" x="1355" y="1835" as="geometry" />
+        </mxCell>
+        <mxCell id="cls_ServiceData_attrs" parent="cls_ServiceData" style="text;html=1;strokeColor=#C2410C;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=6;spacingTop=4;whiteSpace=wrap;overflow=hidden;rotatable=0;fontFamily=Arial;fontSize=11;fontColor=#0F172A;" value="+ id: String&lt;br&gt;+ teamCode: String&lt;br&gt;+ title: String&lt;br&gt;+ date: String&lt;br&gt;+ start: String&lt;br&gt;+ end: String&lt;br&gt;+ venue: String&lt;br&gt;+ status: String = &amp;quot;Draft&amp;quot;&lt;br&gt;+ assignments: List&amp;lt;ServiceAssignment&amp;gt;&lt;br&gt;+ rehearsal: RehearsalData&lt;br&gt;+ songs: List&amp;lt;ServiceSong&amp;gt;&lt;br&gt;+ createdBy: String&lt;br&gt;+ createdAt: Long&lt;br&gt;+ updatedAt: Long" vertex="1">
+          <mxGeometry height="264" width="415" y="46" as="geometry" />
+        </mxCell>
+        <mxCell id="cls_ServiceData_meths" parent="cls_ServiceData" style="text;html=1;strokeColor=#C2410C;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=6;spacingTop=4;whiteSpace=wrap;overflow=hidden;rotatable=0;fontFamily=Arial;fontSize=11;fontColor=#1E293B;" value="+ toMap(): Map&amp;lt;String, Any&amp;gt;&lt;br&gt;+ fromMap(map: Map&amp;lt;String, Any?&amp;gt;): ServiceData" vertex="1">
+          <mxGeometry height="48" width="415" y="310" as="geometry" />
+        </mxCell>
+        <mxCell id="cls_SongData" parent="1" style="swimlane;fontStyle=0;childLayout=stackLayout;horizontal=1;startSize=46;horizontalStack=0;resizeParent=1;resizeParentMax=0;resizeLast=0;collapsible=0;marginBottom=0;html=1;whiteSpace=wrap;fillColor=#9A3412;swimlaneFillColor=#FFF7ED;strokeColor=#C2410C;fontColor=#FFFFFF;fontFamily=Arial;strokeWidth=2;rounded=1;" value="&lt;i style=&#39;font-size:10px;color:#E2E8F0;&#39;&gt;&amp;lt;&amp;lt;Data Class&amp;gt;&amp;gt;&lt;/i&gt;&lt;br&gt;&lt;b style=&#39;font-size:13px;color:#FFFFFF;&#39;&gt;SongData&lt;/b&gt;" vertex="1">
+          <mxGeometry height="376" width="445" x="1810" y="1835" as="geometry" />
+        </mxCell>
+        <mxCell id="cls_SongData_attrs" parent="cls_SongData" style="text;html=1;strokeColor=#C2410C;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=6;spacingTop=4;whiteSpace=wrap;overflow=hidden;rotatable=0;fontFamily=Arial;fontSize=11;fontColor=#0F172A;" value="+ id: String&lt;br&gt;+ teamCode: String&lt;br&gt;+ title: String&lt;br&gt;+ artist: String&lt;br&gt;+ key: String = &amp;quot;C&amp;quot;&lt;br&gt;+ bpm: Int = 74&lt;br&gt;+ sheet: String&lt;br&gt;+ lyrics: String&lt;br&gt;+ referenceUrl: String&lt;br&gt;+ pdfUrl: String [Planned Cloudinary PDF]&lt;br&gt;+ audioUrl: String [Planned Cloudinary MP3]&lt;br&gt;+ createdBy: String&lt;br&gt;+ createdAt: Long" vertex="1">
+          <mxGeometry height="246" width="445" y="46" as="geometry" />
+        </mxCell>
+        <mxCell id="cls_SongData_meths" parent="cls_SongData" style="text;html=1;strokeColor=#C2410C;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=6;spacingTop=4;whiteSpace=wrap;overflow=hidden;rotatable=0;fontFamily=Arial;fontSize=11;fontColor=#1E293B;" value="+ toMap(): Map&amp;lt;String, Any&amp;gt;&lt;br&gt;+ fromMap(map: Map&amp;lt;String, Any?&amp;gt;): SongData&lt;br&gt;+ normalizeReferenceUrl(url: String): String&lt;br&gt;+ extractYoutubeVideoId(url: String?): String?" vertex="1">
+          <mxGeometry height="84" width="445" y="292" as="geometry" />
+        </mxCell>
+        <mxCell id="cls_SubstitutionData" parent="1" style="swimlane;fontStyle=0;childLayout=stackLayout;horizontal=1;startSize=46;horizontalStack=0;resizeParent=1;resizeParentMax=0;resizeLast=0;collapsible=0;marginBottom=0;html=1;whiteSpace=wrap;fillColor=#9A3412;swimlaneFillColor=#FFF7ED;strokeColor=#C2410C;fontColor=#FFFFFF;fontFamily=Arial;strokeWidth=2;rounded=1;" value="&lt;i style=&#39;font-size:10px;color:#E2E8F0;&#39;&gt;&amp;lt;&amp;lt;Data Class&amp;gt;&amp;gt;&lt;/i&gt;&lt;br&gt;&lt;b style=&#39;font-size:13px;color:#FFFFFF;&#39;&gt;SubstitutionData&lt;/b&gt;" vertex="1">
+          <mxGeometry height="358" width="455" x="2295" y="1835" as="geometry" />
+        </mxCell>
+        <mxCell id="cls_SubstitutionData_attrs" parent="cls_SubstitutionData" style="text;html=1;strokeColor=#C2410C;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=6;spacingTop=4;whiteSpace=wrap;overflow=hidden;rotatable=0;fontFamily=Arial;fontSize=11;fontColor=#0F172A;" value="+ id: String&lt;br&gt;+ teamCode: String&lt;br&gt;+ serviceId: String&lt;br&gt;+ serviceTitle: String&lt;br&gt;+ serviceDate: String&lt;br&gt;+ requesterUid: String&lt;br&gt;+ requesterName: String&lt;br&gt;+ role: String&lt;br&gt;+ substituteUid: String&lt;br&gt;+ substituteName: String&lt;br&gt;+ reason: String&lt;br&gt;+ status: String = &amp;quot;Pending&amp;quot;&lt;br&gt;+ createdBy: String&lt;br&gt;+ createdAt: Long" vertex="1">
+          <mxGeometry height="264" width="455" y="46" as="geometry" />
+        </mxCell>
+        <mxCell id="cls_SubstitutionData_meths" parent="cls_SubstitutionData" style="text;html=1;strokeColor=#C2410C;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=6;spacingTop=4;whiteSpace=wrap;overflow=hidden;rotatable=0;fontFamily=Arial;fontSize=11;fontColor=#1E293B;" value="+ toMap(): Map&amp;lt;String, Any&amp;gt;&lt;br&gt;+ fromMap(map: Map&amp;lt;String, Any?&amp;gt;): SubstitutionData" vertex="1">
+          <mxGeometry height="48" width="455" y="310" as="geometry" />
+        </mxCell>
+        <mxCell id="cls_UnavailableRange" parent="1" style="swimlane;fontStyle=0;childLayout=stackLayout;horizontal=1;startSize=46;horizontalStack=0;resizeParent=1;resizeParentMax=0;resizeLast=0;collapsible=0;marginBottom=0;html=1;whiteSpace=wrap;fillColor=#9A3412;swimlaneFillColor=#FFF7ED;strokeColor=#C2410C;fontColor=#FFFFFF;fontFamily=Arial;strokeWidth=2;rounded=1;" value="&lt;i style=&#39;font-size:10px;color:#E2E8F0;&#39;&gt;&amp;lt;&amp;lt;Data Class&amp;gt;&amp;gt;&lt;/i&gt;&lt;br&gt;&lt;b style=&#39;font-size:13px;color:#FFFFFF;&#39;&gt;UnavailableRange&lt;/b&gt;" vertex="1">
+          <mxGeometry height="214" width="350" x="480" y="2300" as="geometry" />
+        </mxCell>
+        <mxCell id="cls_UnavailableRange_attrs" parent="cls_UnavailableRange" style="text;html=1;strokeColor=#C2410C;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=6;spacingTop=4;whiteSpace=wrap;overflow=hidden;rotatable=0;fontFamily=Arial;fontSize=11;fontColor=#0F172A;" value="+ id: String&lt;br&gt;+ startDate: String&lt;br&gt;+ endDate: String&lt;br&gt;+ reason: String&lt;br&gt;+ createdAt: Long" vertex="1">
+          <mxGeometry height="102" width="350" y="46" as="geometry" />
+        </mxCell>
+        <mxCell id="cls_UnavailableRange_meths" parent="cls_UnavailableRange" style="text;html=1;strokeColor=#C2410C;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=6;spacingTop=4;whiteSpace=wrap;overflow=hidden;rotatable=0;fontFamily=Arial;fontSize=11;fontColor=#1E293B;" value="+ includes(date: String): Boolean&lt;br&gt;+ toMap(): Map&amp;lt;String, Any&amp;gt;&lt;br&gt;+ fromMap(map: Map&amp;lt;String, Any?&amp;gt;): UnavailableRange" vertex="1">
+          <mxGeometry height="66" width="350" y="148" as="geometry" />
+        </mxCell>
+        <mxCell id="cls_ServiceAssignment" parent="1" style="swimlane;fontStyle=0;childLayout=stackLayout;horizontal=1;startSize=46;horizontalStack=0;resizeParent=1;resizeParentMax=0;resizeLast=0;collapsible=0;marginBottom=0;html=1;whiteSpace=wrap;fillColor=#9A3412;swimlaneFillColor=#FFF7ED;strokeColor=#C2410C;fontColor=#FFFFFF;fontFamily=Arial;strokeWidth=2;rounded=1;" value="&lt;i style=&#39;font-size:10px;color:#E2E8F0;&#39;&gt;&amp;lt;&amp;lt;Data Class&amp;gt;&amp;gt;&lt;/i&gt;&lt;br&gt;&lt;b style=&#39;font-size:13px;color:#FFFFFF;&#39;&gt;ServiceAssignment&lt;/b&gt;" vertex="1">
+          <mxGeometry height="214" width="395" x="865" y="2300" as="geometry" />
+        </mxCell>
+        <mxCell id="cls_ServiceAssignment_attrs" parent="cls_ServiceAssignment" style="text;html=1;strokeColor=#C2410C;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=6;spacingTop=4;whiteSpace=wrap;overflow=hidden;rotatable=0;fontFamily=Arial;fontSize=11;fontColor=#0F172A;" value="+ uid: String&lt;br&gt;+ email: String&lt;br&gt;+ name: String&lt;br&gt;+ role: String&lt;br&gt;+ status: String = &amp;quot;Pending&amp;quot; [Planned Duty Status]&lt;br&gt;+ respondedAt: Long [Planned]" vertex="1">
+          <mxGeometry height="120" width="395" y="46" as="geometry" />
+        </mxCell>
+        <mxCell id="cls_ServiceAssignment_meths" parent="cls_ServiceAssignment" style="text;html=1;strokeColor=#C2410C;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=6;spacingTop=4;whiteSpace=wrap;overflow=hidden;rotatable=0;fontFamily=Arial;fontSize=11;fontColor=#1E293B;" value="+ toMap(): Map&amp;lt;String, Any&amp;gt;&lt;br&gt;+ fromMap(map: Map&amp;lt;String, Any?&amp;gt;): ServiceAssignment" vertex="1">
+          <mxGeometry height="48" width="395" y="166" as="geometry" />
+        </mxCell>
+        <mxCell id="cls_RehearsalData" parent="1" style="swimlane;fontStyle=0;childLayout=stackLayout;horizontal=1;startSize=46;horizontalStack=0;resizeParent=1;resizeParentMax=0;resizeLast=0;collapsible=0;marginBottom=0;html=1;whiteSpace=wrap;fillColor=#9A3412;swimlaneFillColor=#FFF7ED;strokeColor=#C2410C;fontColor=#FFFFFF;fontFamily=Arial;strokeWidth=2;rounded=1;" value="&lt;i style=&#39;font-size:10px;color:#E2E8F0;&#39;&gt;&amp;lt;&amp;lt;Data Class&amp;gt;&amp;gt;&lt;/i&gt;&lt;br&gt;&lt;b style=&#39;font-size:13px;color:#FFFFFF;&#39;&gt;RehearsalData&lt;/b&gt;" vertex="1">
+          <mxGeometry height="196" width="330" x="1295" y="2300" as="geometry" />
+        </mxCell>
+        <mxCell id="cls_RehearsalData_attrs" parent="cls_RehearsalData" style="text;html=1;strokeColor=#C2410C;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=6;spacingTop=4;whiteSpace=wrap;overflow=hidden;rotatable=0;fontFamily=Arial;fontSize=11;fontColor=#0F172A;" value="+ date: String&lt;br&gt;+ start: String&lt;br&gt;+ end: String&lt;br&gt;+ venue: String&lt;br&gt;+ notes: String" vertex="1">
+          <mxGeometry height="102" width="330" y="46" as="geometry" />
+        </mxCell>
+        <mxCell id="cls_RehearsalData_meths" parent="cls_RehearsalData" style="text;html=1;strokeColor=#C2410C;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=6;spacingTop=4;whiteSpace=wrap;overflow=hidden;rotatable=0;fontFamily=Arial;fontSize=11;fontColor=#1E293B;" value="+ toMap(): Map&amp;lt;String, Any&amp;gt;&lt;br&gt;+ fromMap(map: Map&amp;lt;String, Any?&amp;gt;): RehearsalData" vertex="1">
+          <mxGeometry height="48" width="330" y="148" as="geometry" />
+        </mxCell>
+        <mxCell id="cls_ServiceSong" parent="1" style="swimlane;fontStyle=0;childLayout=stackLayout;horizontal=1;startSize=46;horizontalStack=0;resizeParent=1;resizeParentMax=0;resizeLast=0;collapsible=0;marginBottom=0;html=1;whiteSpace=wrap;fillColor=#9A3412;swimlaneFillColor=#FFF7ED;strokeColor=#C2410C;fontColor=#FFFFFF;fontFamily=Arial;strokeWidth=2;rounded=1;" value="&lt;i style=&#39;font-size:10px;color:#E2E8F0;&#39;&gt;&amp;lt;&amp;lt;Data Class&amp;gt;&amp;gt;&lt;/i&gt;&lt;br&gt;&lt;b style=&#39;font-size:13px;color:#FFFFFF;&#39;&gt;ServiceSong&lt;/b&gt;" vertex="1">
+          <mxGeometry height="196" width="330" x="1660" y="2300" as="geometry" />
+        </mxCell>
+        <mxCell id="cls_ServiceSong_attrs" parent="cls_ServiceSong" style="text;html=1;strokeColor=#C2410C;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=6;spacingTop=4;whiteSpace=wrap;overflow=hidden;rotatable=0;fontFamily=Arial;fontSize=11;fontColor=#0F172A;" value="+ title: String&lt;br&gt;+ artist: String&lt;br&gt;+ key: String&lt;br&gt;+ bpm: Int" vertex="1">
+          <mxGeometry height="84" width="330" y="46" as="geometry" />
+        </mxCell>
+        <mxCell id="cls_ServiceSong_meths" parent="cls_ServiceSong" style="text;html=1;strokeColor=#C2410C;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=6;spacingTop=4;whiteSpace=wrap;overflow=hidden;rotatable=0;fontFamily=Arial;fontSize=11;fontColor=#1E293B;" value="+ toMap(): Map&amp;lt;String, Any&amp;gt;&lt;br&gt;+ fromMap(map: Map&amp;lt;String, Any?&amp;gt;): ServiceSong&lt;br&gt;+ unpack(raw: Any?): ServiceSong" vertex="1">
+          <mxGeometry height="66" width="330" y="130" as="geometry" />
+        </mxCell>
+        <mxCell id="cls_AnnouncementData" parent="1" style="swimlane;fontStyle=0;childLayout=stackLayout;horizontal=1;startSize=46;horizontalStack=0;resizeParent=1;resizeParentMax=0;resizeLast=0;collapsible=0;marginBottom=0;html=1;whiteSpace=wrap;fillColor=#9A3412;swimlaneFillColor=#FFF7ED;strokeColor=#C2410C;fontColor=#FFFFFF;fontFamily=Arial;strokeWidth=2;rounded=1;" value="&lt;i style=&#39;font-size:10px;color:#E2E8F0;&#39;&gt;&amp;lt;&amp;lt;Data Class&amp;gt;&amp;gt;&lt;/i&gt;&lt;br&gt;&lt;b style=&#39;font-size:13px;color:#FFFFFF;&#39;&gt;AnnouncementData&lt;/b&gt;" vertex="1">
+          <mxGeometry height="250" width="285" x="2025" y="2300" as="geometry" />
+        </mxCell>
+        <mxCell id="cls_AnnouncementData_attrs" parent="cls_AnnouncementData" style="text;html=1;strokeColor=#C2410C;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=6;spacingTop=4;whiteSpace=wrap;overflow=hidden;rotatable=0;fontFamily=Arial;fontSize=11;fontColor=#0F172A;" value="+ id: String&lt;br&gt;+ teamCode: String&lt;br&gt;+ title: String&lt;br&gt;+ message: String&lt;br&gt;+ urgent: Boolean&lt;br&gt;+ author: String&lt;br&gt;+ createdBy: String&lt;br&gt;+ createdAt: Long" vertex="1">
+          <mxGeometry height="156" width="285" y="46" as="geometry" />
+        </mxCell>
+        <mxCell id="cls_AnnouncementData_meths" parent="cls_AnnouncementData" style="text;html=1;strokeColor=#C2410C;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=6;spacingTop=4;whiteSpace=wrap;overflow=hidden;rotatable=0;fontFamily=Arial;fontSize=11;fontColor=#1E293B;" value="+ toMap(): Map&amp;lt;String, Any&amp;gt;&lt;br&gt;+ fromMap(map): AnnouncementData" vertex="1">
+          <mxGeometry height="48" width="285" y="202" as="geometry" />
+        </mxCell>
+        <mxCell id="cls_ChatMessage" parent="1" style="swimlane;fontStyle=0;childLayout=stackLayout;horizontal=1;startSize=46;horizontalStack=0;resizeParent=1;resizeParentMax=0;resizeLast=0;collapsible=0;marginBottom=0;html=1;whiteSpace=wrap;fillColor=#9A3412;swimlaneFillColor=#FFF7ED;strokeColor=#C2410C;fontColor=#FFFFFF;fontFamily=Arial;strokeWidth=2;rounded=1;" value="&lt;i style=&#39;font-size:10px;color:#E2E8F0;&#39;&gt;&amp;lt;&amp;lt;Data Class&amp;gt;&amp;gt;&lt;/i&gt;&lt;br&gt;&lt;b style=&#39;font-size:13px;color:#FFFFFF;&#39;&gt;ChatMessage&lt;/b&gt;" vertex="1">
+          <mxGeometry height="250" width="280" x="2340" y="2300" as="geometry" />
+        </mxCell>
+        <mxCell id="cls_ChatMessage_attrs" parent="cls_ChatMessage" style="text;html=1;strokeColor=#C2410C;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=6;spacingTop=4;whiteSpace=wrap;overflow=hidden;rotatable=0;fontFamily=Arial;fontSize=11;fontColor=#0F172A;" value="+ id: String&lt;br&gt;+ teamCode: String&lt;br&gt;+ senderUid: String&lt;br&gt;+ senderName: String&lt;br&gt;+ senderRole: String&lt;br&gt;+ text: String&lt;br&gt;+ mediaUrl: String&lt;br&gt;+ timestamp: Long" vertex="1">
+          <mxGeometry height="156" width="280" y="46" as="geometry" />
+        </mxCell>
+        <mxCell id="cls_ChatMessage_meths" parent="cls_ChatMessage" style="text;html=1;strokeColor=#C2410C;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=6;spacingTop=4;whiteSpace=wrap;overflow=hidden;rotatable=0;fontFamily=Arial;fontSize=11;fontColor=#1E293B;" value="+ toMap(): Map&amp;lt;String, Any&amp;gt;&lt;br&gt;+ fromMap(map): ChatMessage" vertex="1">
+          <mxGeometry height="48" width="280" y="202" as="geometry" />
+        </mxCell>
+        <mxCell id="cls_NotificationData" parent="1" style="swimlane;fontStyle=0;childLayout=stackLayout;horizontal=1;startSize=46;horizontalStack=0;resizeParent=1;resizeParentMax=0;resizeLast=0;collapsible=0;marginBottom=0;html=1;whiteSpace=wrap;fillColor=#0F766E;swimlaneFillColor=#F0FDFA;strokeColor=#0D9488;fontColor=#FFFFFF;fontFamily=Arial;strokeWidth=2;rounded=1;" value="&lt;i style=&#39;font-size:10px;color:#E2E8F0;&#39;&gt;&amp;lt;&amp;lt;Data Class — Planned&amp;gt;&amp;gt;&lt;/i&gt;&lt;br&gt;&lt;b style=&#39;font-size:13px;color:#FFFFFF;&#39;&gt;NotificationData&lt;/b&gt;" vertex="1">
+          <mxGeometry height="268" width="320" x="2650" y="2300" as="geometry" />
+        </mxCell>
+        <mxCell id="cls_NotificationData_attrs" parent="cls_NotificationData" style="text;html=1;strokeColor=#0D9488;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=6;spacingTop=4;whiteSpace=wrap;overflow=hidden;rotatable=0;fontFamily=Arial;fontSize=11;fontColor=#0F172A;" value="+ id: String&lt;br&gt;+ teamCode: String&lt;br&gt;+ recipientUid: String&lt;br&gt;+ type: String&lt;br&gt;+ title: String&lt;br&gt;+ message: String&lt;br&gt;+ referenceId: String&lt;br&gt;+ isRead: Boolean = false&lt;br&gt;+ createdAt: Long" vertex="1">
+          <mxGeometry height="174" width="320" y="46" as="geometry" />
+        </mxCell>
+        <mxCell id="cls_NotificationData_meths" parent="cls_NotificationData" style="text;html=1;strokeColor=#0D9488;fillColor=none;align=left;verticalAlign=top;spacingLeft=8;spacingRight=6;spacingTop=4;whiteSpace=wrap;overflow=hidden;rotatable=0;fontFamily=Arial;fontSize=11;fontColor=#1E293B;" value="+ toMap(): Map&amp;lt;String, Any&amp;gt;&lt;br&gt;+ fromMap(map): NotificationData" vertex="1">
+          <mxGeometry height="48" width="320" y="220" as="geometry" />
+        </mxCell>
+        <mxCell id="rel_1" edge="1" parent="1" source="cls_AdminActivity" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;startArrow=none;startFill=0;endArrow=block;endFill=0;endSize=10;startSize=12;strokeColor=#1E293B;strokeWidth=1.8;fontFamily=Arial;fontSize=10;fontColor=#1E293B;labelBackgroundColor=#FFFFFF;exitX=0.5;exitY=0;exitDx=0;exitDy=0;entryX=0.24;entryY=1;entryDx=0;entryDy=0;" target="cls_AppCompatActivity" value="extends">
+          <mxGeometry relative="1" x="-0.0027" as="geometry">
+            <Array as="points">
+              <mxPoint x="368.8" y="355" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="rel_2" edge="1" parent="1" source="cls_MemberActivity" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;startArrow=none;startFill=0;endArrow=block;endFill=0;endSize=10;startSize=12;strokeColor=#1E293B;strokeWidth=1.8;fontFamily=Arial;fontSize=10;fontColor=#1E293B;labelBackgroundColor=#FFFFFF;exitX=0.35;exitY=0;exitDx=0;exitDy=0;entryX=0.78;entryY=1;entryDx=0;entryDy=0;" target="cls_AppCompatActivity" value="extends">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="943" y="304.3" />
+              <mxPoint x="703.6" y="304.3" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="rel_3" edge="1" parent="1" source="cls_ChordSheetInput" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;startArrow=none;startFill=0;endArrow=block;endFill=0;endSize=10;startSize=12;strokeColor=#1E293B;strokeWidth=1.8;fontFamily=Arial;fontSize=10;fontColor=#1E293B;labelBackgroundColor=#FFFFFF;exitX=0.5;exitY=0;exitDx=0;exitDy=0;entryX=0.5;entryY=1;entryDx=0;entryDy=0;" target="cls_EditText" value="extends">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="rel_4" edge="1" parent="1" source="cls_MetronomeView" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;startArrow=none;startFill=0;endArrow=block;endFill=0;endSize=10;startSize=12;strokeColor=#1E293B;strokeWidth=1.8;fontFamily=Arial;fontSize=10;fontColor=#1E293B;labelBackgroundColor=#FFFFFF;exitX=0.5;exitY=0;exitDx=0;exitDy=0;entryX=0.25;entryY=1;entryDx=0;entryDy=0;" target="cls_View" value="extends">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="2240" y="304.9" />
+              <mxPoint x="2320" y="304.9" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="rel_5" edge="1" parent="1" source="cls_SharedUi" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;startArrow=none;startFill=0;endArrow=block;endFill=0;endSize=10;startSize=12;strokeColor=#1E293B;strokeWidth=1.8;fontFamily=Arial;fontSize=10;fontColor=#1E293B;labelBackgroundColor=#FFFFFF;exitX=0.5;exitY=0;exitDx=0;exitDy=0;entryX=0.78;entryY=1;entryDx=0;entryDy=0;" target="cls_View" value="extends">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="2735" y="307.6" />
+              <mxPoint x="2616.8" y="307.6" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="rel_6" edge="1" parent="1" source="cls_AdminActivity" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;dashed=1;startArrow=none;startFill=0;endArrow=open;endFill=0;endSize=10;startSize=12;strokeColor=#1E293B;strokeWidth=1.8;fontFamily=Arial;fontSize=10;fontColor=#1E293B;labelBackgroundColor=#FFFFFF;exitX=0.85;exitY=0;exitDx=0;exitDy=0;entryX=0.2;entryY=0;entryDx=0;entryDy=0;" target="cls_ChordSheetInput" value="&amp;lt;&amp;lt;instantiates&amp;gt;&amp;gt;">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="587" y="320" />
+              <mxPoint x="1576" y="320" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="rel_7" edge="1" parent="1" source="cls_MemberActivity" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;dashed=1;startArrow=none;startFill=0;endArrow=open;endFill=0;endSize=10;startSize=12;strokeColor=#1E293B;strokeWidth=1.8;fontFamily=Arial;fontSize=10;fontColor=#1E293B;labelBackgroundColor=#FFFFFF;exitX=0.82;exitY=0;exitDx=0;exitDy=0;entryX=0.2;entryY=0;entryDx=0;entryDy=0;" target="cls_MetronomeView" value="&amp;lt;&amp;lt;uses&amp;gt;&amp;gt;">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1216" y="336" />
+              <mxPoint x="2108" y="336" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="rel_8" edge="1" parent="1" source="cls_AdminActivity" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;dashed=1;startArrow=none;startFill=0;endArrow=open;endFill=0;endSize=10;startSize=12;strokeColor=#1E293B;strokeWidth=1.8;fontFamily=Arial;fontSize=10;fontColor=#1E293B;labelBackgroundColor=#FFFFFF;exitX=0.25;exitY=1;exitDx=0;exitDy=0;entryX=0.35;entryY=0;entryDx=0;entryDy=0;" target="cls_AuthManager" value="&amp;lt;&amp;lt;uses&amp;gt;&amp;gt;">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="215" y="745" />
+              <mxPoint x="221" y="745" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="rel_9" edge="1" parent="1" source="cls_AdminActivity" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;dashed=1;startArrow=none;startFill=0;endArrow=open;endFill=0;endSize=10;startSize=12;strokeColor=#1E293B;strokeWidth=1.8;fontFamily=Arial;fontSize=10;fontColor=#1E293B;labelBackgroundColor=#FFFFFF;exitX=0.6;exitY=1;exitDx=0;exitDy=0;entryX=0.28;entryY=0;entryDx=0;entryDy=0;" target="cls_SessionManager" value="&amp;lt;&amp;lt;uses&amp;gt;&amp;gt;">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="432" y="760" />
+              <mxPoint x="692" y="760" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="rel_10" edge="1" parent="1" source="cls_MemberActivity" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;dashed=1;startArrow=none;startFill=0;endArrow=open;endFill=0;endSize=10;startSize=12;strokeColor=#1E293B;strokeWidth=1.8;fontFamily=Arial;fontSize=10;fontColor=#1E293B;labelBackgroundColor=#FFFFFF;exitX=0.12;exitY=1;exitDx=0;exitDy=0;entryX=0.72;entryY=0;entryDx=0;entryDy=0;" target="cls_AuthManager" value="&amp;lt;&amp;lt;uses&amp;gt;&amp;gt;">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="810" y="725" />
+              <mxPoint x="391" y="725" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="rel_11" edge="1" parent="1" source="cls_MemberActivity" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;dashed=1;startArrow=none;startFill=0;endArrow=open;endFill=0;endSize=10;startSize=12;strokeColor=#1E293B;strokeWidth=1.8;fontFamily=Arial;fontSize=10;fontColor=#1E293B;labelBackgroundColor=#FFFFFF;exitX=0.32;exitY=1;exitDx=0;exitDy=0;entryX=0.72;entryY=0;entryDx=0;entryDy=0;" target="cls_SessionManager" value="&amp;lt;&amp;lt;uses&amp;gt;&amp;gt;">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="926" y="770" />
+              <mxPoint x="908" y="770" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="rel_12" edge="1" parent="1" source="cls_MemberActivity" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;dashed=1;startArrow=none;startFill=0;endArrow=open;endFill=0;endSize=10;startSize=12;strokeColor=#1E293B;strokeWidth=1.8;fontFamily=Arial;fontSize=10;fontColor=#1E293B;labelBackgroundColor=#FFFFFF;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" target="cls_EmailOtpService" value="&amp;lt;&amp;lt;uses&amp;gt;&amp;gt;">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1030" y="764" />
+              <mxPoint x="1305" y="764" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="rel_13" edge="1" parent="1" source="cls_MemberActivity" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;dashed=1;startArrow=none;startFill=0;endArrow=open;endFill=0;endSize=10;startSize=12;strokeColor=#1E293B;strokeWidth=1.8;fontFamily=Arial;fontSize=10;fontColor=#1E293B;labelBackgroundColor=#FFFFFF;exitX=0.68;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" target="cls_CloudinaryUploader" value="&amp;lt;&amp;lt;uses&amp;gt;&amp;gt;">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1134" y="750" />
+              <mxPoint x="1800" y="750" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="rel_14" edge="1" parent="1" source="cls_MemberActivity" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;dashed=1;startArrow=none;startFill=0;endArrow=open;endFill=0;endSize=10;startSize=12;strokeColor=#1E293B;strokeWidth=1.8;fontFamily=Arial;fontSize=10;fontColor=#1E293B;labelBackgroundColor=#FFFFFF;exitX=0.8;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" target="cls_SyncedMessagingService" value="&amp;lt;&amp;lt;registers FCM&amp;gt;&amp;gt;">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1204" y="736" />
+              <mxPoint x="2318" y="736" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="rel_15" edge="1" parent="1" source="cls_MemberActivity" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;dashed=1;startArrow=none;startFill=0;endArrow=open;endFill=0;endSize=10;startSize=12;strokeColor=#1E293B;strokeWidth=1.8;fontFamily=Arial;fontSize=10;fontColor=#1E293B;labelBackgroundColor=#FFFFFF;exitX=0.92;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" target="cls_ValidationUtils" value="&amp;lt;&amp;lt;uses&amp;gt;&amp;gt;">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1274" y="720" />
+              <mxPoint x="2782" y="720" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="rel_16" edge="1" parent="1" source="cls_AuthManager" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;dashed=1;startArrow=none;startFill=0;endArrow=open;endFill=0;endSize=10;startSize=12;strokeColor=#1E293B;strokeWidth=1.8;fontFamily=Arial;fontSize=10;fontColor=#1E293B;labelBackgroundColor=#FFFFFF;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.25;entryY=0;entryDx=0;entryDy=0;" target="cls_FirestoreManager" value="&amp;lt;&amp;lt;delegates&amp;gt;&amp;gt;">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="290" y="1170" />
+              <mxPoint x="310" y="1170" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="rel_17" edge="1" parent="1" source="cls_SessionManager" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;dashed=1;startArrow=none;startFill=0;endArrow=open;endFill=0;endSize=10;startSize=12;strokeColor=#1E293B;strokeWidth=1.8;fontFamily=Arial;fontSize=10;fontColor=#1E293B;labelBackgroundColor=#FFFFFF;exitX=0.3;exitY=1;exitDx=0;exitDy=0;entryX=0.62;entryY=0;entryDx=0;entryDy=0;" target="cls_FirestoreManager" value="&amp;lt;&amp;lt;queries&amp;gt;&amp;gt;">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="702" y="1170" />
+              <mxPoint x="591" y="1170" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="rel_18" edge="1" parent="1" source="cls_SessionManager" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;dashed=1;startArrow=none;startFill=0;endArrow=open;endFill=0;endSize=10;startSize=12;strokeColor=#1E293B;strokeWidth=1.8;fontFamily=Arial;fontSize=10;fontColor=#1E293B;labelBackgroundColor=#FFFFFF;exitX=0.75;exitY=1;exitDx=0;exitDy=0;entryX=0.12;entryY=0;entryDx=0;entryDy=0;" target="cls_TeamRepository" value="&amp;lt;&amp;lt;syncs cache&amp;gt;&amp;gt;">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="922" y="1170" />
+              <mxPoint x="1290" y="1170" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="rel_19" edge="1" parent="1" source="cls_SyncedMessagingService" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;dashed=1;startArrow=none;startFill=0;endArrow=open;endFill=0;endSize=10;startSize=12;strokeColor=#1E293B;strokeWidth=1.8;fontFamily=Arial;fontSize=10;fontColor=#1E293B;labelBackgroundColor=#FFFFFF;exitX=0.3;exitY=1;exitDx=0;exitDy=0;entryX=0.88;entryY=0;entryDx=0;entryDy=0;" target="cls_FirestoreManager" value="&amp;lt;&amp;lt;updates fcmToken&amp;gt;&amp;gt;">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="2218" y="1188" />
+              <mxPoint x="789" y="1188" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="rel_20" edge="1" parent="1" source="cls_AdminActivity" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;dashed=1;startArrow=none;startFill=0;endArrow=open;endFill=0;endSize=10;startSize=12;strokeColor=#1E293B;strokeWidth=1.8;fontFamily=Arial;fontSize=10;fontColor=#1E293B;labelBackgroundColor=#FFFFFF;exitX=0.88;exitY=1;exitDx=0;exitDy=0;entryX=0.32;entryY=0;entryDx=0;entryDy=0;" target="cls_TeamRepository" value="&amp;lt;&amp;lt;invokes&amp;gt;&amp;gt;">
+          <mxGeometry relative="1" x="0.1746" as="geometry">
+            <mxPoint as="offset" />
+            <Array as="points">
+              <mxPoint x="606" y="778" />
+              <mxPoint x="1055" y="778" />
+              <mxPoint x="1055" y="1150" />
+              <mxPoint x="1506" y="1150" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="rel_21" edge="1" parent="1" source="cls_MemberActivity" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;dashed=1;startArrow=none;startFill=0;endArrow=open;endFill=0;endSize=10;startSize=12;strokeColor=#1E293B;strokeWidth=1.8;fontFamily=Arial;fontSize=10;fontColor=#1E293B;labelBackgroundColor=#FFFFFF;exitX=0.42;exitY=1;exitDx=0;exitDy=0;entryX=0.55;entryY=0;entryDx=0;entryDy=0;" target="cls_TeamRepository" value="&amp;lt;&amp;lt;invokes&amp;gt;&amp;gt;">
+          <mxGeometry relative="1" x="0.0521" as="geometry">
+            <mxPoint as="offset" />
+            <Array as="points">
+              <mxPoint x="984" y="778" />
+              <mxPoint x="1548" y="778" />
+              <mxPoint x="1548" y="1150" />
+              <mxPoint x="1754" y="1150" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="rel_22" edge="1" parent="1" source="cls_FirestoreManager" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;startArrow=none;startFill=0;endArrow=open;endFill=0;endSize=10;startSize=12;strokeColor=#1E293B;strokeWidth=1.8;fontFamily=Arial;fontSize=10;fontColor=#1E293B;labelBackgroundColor=#FFFFFF;exitX=0.25;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" target="cls_UserProfile" value="1 persists 0..*">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="310" y="1765" />
+              <mxPoint x="262" y="1765" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="rel_23" edge="1" parent="1" source="cls_FirestoreManager" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;startArrow=none;startFill=0;endArrow=open;endFill=0;endSize=10;startSize=12;strokeColor=#1E293B;strokeWidth=1.8;fontFamily=Arial;fontSize=10;fontColor=#1E293B;labelBackgroundColor=#FFFFFF;exitX=0.72;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" target="cls_TeamData" value="1 manages 0..*">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="667" y="1765" />
+              <mxPoint x="680" y="1765" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="rel_24" edge="1" parent="1" source="cls_TeamRepository" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;startArrow=none;startFill=0;endArrow=open;endFill=0;endSize=10;startSize=12;strokeColor=#1E293B;strokeWidth=1.8;fontFamily=Arial;fontSize=10;fontColor=#1E293B;labelBackgroundColor=#FFFFFF;exitX=0.12;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" target="cls_TeamMember" value="1 caches &amp;amp; syncs 0..*">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1290" y="1765" />
+              <mxPoint x="1122" y="1765" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="rel_25" edge="1" parent="1" source="cls_TeamRepository" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;startArrow=none;startFill=0;endArrow=open;endFill=0;endSize=10;startSize=12;strokeColor=#1E293B;strokeWidth=1.8;fontFamily=Arial;fontSize=10;fontColor=#1E293B;labelBackgroundColor=#FFFFFF;exitX=0.38;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" target="cls_ServiceData" value="1 manages 0..*">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1570" y="1765" />
+              <mxPoint x="1562" y="1765" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="rel_26" edge="1" parent="1" source="cls_TeamRepository" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;startArrow=none;startFill=0;endArrow=open;endFill=0;endSize=10;startSize=12;strokeColor=#1E293B;strokeWidth=1.8;fontFamily=Arial;fontSize=10;fontColor=#1E293B;labelBackgroundColor=#FFFFFF;exitX=0.65;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" target="cls_SongData" value="1 manages 0..*">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1862" y="1765" />
+              <mxPoint x="2032" y="1765" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="rel_27" edge="1" parent="1" source="cls_TeamRepository" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;startArrow=none;startFill=0;endArrow=open;endFill=0;endSize=10;startSize=12;strokeColor=#1E293B;strokeWidth=1.8;fontFamily=Arial;fontSize=10;fontColor=#1E293B;labelBackgroundColor=#FFFFFF;exitX=0.88;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" target="cls_SubstitutionData" value="1 processes 0..*">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="2110" y="1765" />
+              <mxPoint x="2522" y="1765" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="rel_28" edge="1" parent="1" source="cls_TeamData" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;startArrow=diamondThin;startFill=0;endArrow=open;endFill=0;endSize=10;startSize=12;strokeColor=#1E293B;strokeWidth=1.8;fontFamily=Arial;fontSize=10;fontColor=#1E293B;labelBackgroundColor=#FFFFFF;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.39;entryDx=0;entryDy=0;" target="cls_TeamMember" value="1 has roster 1..*">
+          <mxGeometry relative="1" x="0.0604" y="-18" as="geometry">
+            <mxPoint x="17" y="18" as="offset" />
+            <Array as="points">
+              <mxPoint x="895" y="1942" />
+              <mxPoint x="895" y="1947" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="rel_29" edge="1" parent="1" source="cls_UserProfile" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;startArrow=diamondThin;startFill=1;endArrow=open;endFill=0;endSize=10;startSize=12;strokeColor=#1E293B;strokeWidth=1.8;fontFamily=Arial;fontSize=10;fontColor=#1E293B;labelBackgroundColor=#FFFFFF;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" target="cls_UnavailableRange" value="1 contains 0..*">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="262" y="2407" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="rel_30" edge="1" parent="1" source="cls_TeamMember" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;startArrow=diamondThin;startFill=0;endArrow=open;endFill=0;endSize=10;startSize=12;strokeColor=#1E293B;strokeWidth=1.8;fontFamily=Arial;fontSize=10;fontColor=#1E293B;labelBackgroundColor=#FFFFFF;exitX=0.25;exitY=1;exitDx=0;exitDy=0;entryX=0.65;entryY=0;entryDx=0;entryDy=0;" target="cls_UnavailableRange" value="1 tracks 0..*">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1026" y="2238" />
+              <mxPoint x="708" y="2238" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="rel_31" edge="1" parent="1" source="cls_ServiceData" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;startArrow=diamondThin;startFill=1;endArrow=open;endFill=0;endSize=10;startSize=12;strokeColor=#1E293B;strokeWidth=1.8;fontFamily=Arial;fontSize=10;fontColor=#1E293B;labelBackgroundColor=#FFFFFF;exitX=0.2;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" target="cls_ServiceAssignment" value="1 assigns 1..*">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1438" y="2248" />
+              <mxPoint x="1062" y="2248" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="rel_32" edge="1" parent="1" source="cls_ServiceData" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;startArrow=diamondThin;startFill=1;endArrow=open;endFill=0;endSize=10;startSize=12;strokeColor=#1E293B;strokeWidth=1.8;fontFamily=Arial;fontSize=10;fontColor=#1E293B;labelBackgroundColor=#FFFFFF;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" target="cls_RehearsalData" value="1 schedules 0..1">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1562" y="2248" />
+              <mxPoint x="1460" y="2248" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="rel_33" edge="1" parent="1" source="cls_ServiceData" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;startArrow=diamondThin;startFill=1;endArrow=open;endFill=0;endSize=10;startSize=12;strokeColor=#1E293B;strokeWidth=1.8;fontFamily=Arial;fontSize=10;fontColor=#1E293B;labelBackgroundColor=#FFFFFF;exitX=0.8;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" target="cls_ServiceSong" value="1 includes lineup 0..*">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1687" y="2248" />
+              <mxPoint x="1825" y="2248" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="rel_34" edge="1" parent="1" source="cls_TeamData" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;startArrow=diamondThin;startFill=1;endArrow=open;endFill=0;endSize=10;startSize=12;strokeColor=#1E293B;strokeWidth=1.8;fontFamily=Arial;fontSize=10;fontColor=#1E293B;labelBackgroundColor=#FFFFFF;exitX=0.45;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" target="cls_AnnouncementData" value="1 broadcasts 0..*">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="662" y="2260" />
+              <mxPoint x="2168" y="2260" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="rel_35" edge="1" parent="1" source="cls_TeamData" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;startArrow=diamondThin;startFill=1;endArrow=open;endFill=0;endSize=10;startSize=12;strokeColor=#1E293B;strokeWidth=1.8;fontFamily=Arial;fontSize=10;fontColor=#1E293B;labelBackgroundColor=#FFFFFF;exitX=0.3;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" target="cls_ChatMessage" value="1 logs messages 0..*">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="608" y="2272" />
+              <mxPoint x="2480" y="2272" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="rel_36" edge="1" parent="1" source="cls_TeamData" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;startArrow=diamondThin;startFill=1;endArrow=open;endFill=0;endSize=10;startSize=12;strokeColor=#1E293B;strokeWidth=1.8;fontFamily=Arial;fontSize=10;fontColor=#1E293B;labelBackgroundColor=#FFFFFF;exitX=0.15;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" target="cls_NotificationData" value="1 dispatches alerts 0..*">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="554" y="2284" />
+              <mxPoint x="2810" y="2284" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

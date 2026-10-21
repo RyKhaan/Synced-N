@@ -79,63 +79,125 @@ object TeamRepository {
         substitutionsInFlight.clear()
     }
 
+    fun serializeRangesJson(ranges: List<UnavailableRange>): String {
+        val array = org.json.JSONArray()
+        for (item in ranges) {
+            val obj = org.json.JSONObject()
+            item.toMap().forEach { (k, v) -> obj.put(k, v) }
+            array.put(obj)
+        }
+        return array.toString()
+    }
+
     /**
      * Adds or updates a member in the local in-memory roster cache.
-     * Matches by UID or email, and optionally persists the member record to SharedPreferences.
+     * Matches by UID or email, preserving existing unavailableRanges/photoUri/ministryRole when incoming fields are empty,
+     * and optionally persists the member record to SharedPreferences.
      */
     @Synchronized
     fun cacheMember(member: TeamMember, preferences: android.content.SharedPreferences? = null) {
         val code = member.teamCode.trim().uppercase()
         if (code.isBlank() || member.uid.isBlank()) return
+        val emailLower = member.email.trim().lowercase()
         val list = cachedRosters.getOrPut(code) { java.util.Collections.synchronizedList(mutableListOf()) }
+        var effectiveMember = member
         synchronized(list) {
             val index = list.indexOfFirst {
                 it.uid == member.uid || (it.email.isNotBlank() && it.email.equals(member.email, ignoreCase = true))
             }
             if (index >= 0) {
-                list[index] = member
+                val existing = list[index]
+                val mergedUid = if (!member.uid.startsWith("user_") && member.uid.isNotBlank()) {
+                    member.uid
+                } else {
+                    existing.uid.takeIf { it.isNotBlank() && !it.startsWith("user_") } ?: member.uid
+                }
+                val mergedRanges = when {
+                    member.unavailableRanges.isNotEmpty() -> member.unavailableRanges
+                    existing.unavailableRanges.isNotEmpty() -> existing.unavailableRanges
+                    else -> cachedUserRanges[mergedUid]?.toList()
+                        ?: cachedUserRanges[member.uid]?.toList()
+                        ?: (if (emailLower.isNotBlank()) cachedUserRanges["email_$emailLower"]?.toList() else null)
+                        ?: emptyList()
+                }
+                effectiveMember = member.copy(
+                    uid = mergedUid,
+                    ministryRole = member.ministryRole.ifBlank { existing.ministryRole },
+                    photoUri = member.photoUri.ifBlank { existing.photoUri },
+                    unavailableRanges = mergedRanges
+                )
+                list[index] = effectiveMember
             } else {
-                list.add(member)
+                val fallbackRanges = if (member.unavailableRanges.isNotEmpty()) {
+                    member.unavailableRanges
+                } else {
+                    cachedUserRanges[member.uid]?.toList()
+                        ?: (if (emailLower.isNotBlank()) cachedUserRanges["email_$emailLower"]?.toList() else null)
+                        ?: emptyList()
+                }
+                effectiveMember = if (fallbackRanges.isNotEmpty() && member.unavailableRanges.isEmpty()) {
+                    member.copy(unavailableRanges = fallbackRanges)
+                } else {
+                    member
+                }
+                list.add(effectiveMember)
             }
             sortRoster(list)
         }
 
-        if (member.unavailableRanges.isNotEmpty()) {
-            cachedUserRanges[member.uid] = java.util.Collections.synchronizedList(member.unavailableRanges.toMutableList())
+        if (effectiveMember.unavailableRanges.isNotEmpty()) {
+            cachedUserRanges[effectiveMember.uid] = java.util.Collections.synchronizedList(effectiveMember.unavailableRanges.toMutableList())
+            if (emailLower.isNotBlank()) {
+                cachedUserRanges["email_$emailLower"] = java.util.Collections.synchronizedList(effectiveMember.unavailableRanges.toMutableList())
+            }
         }
 
         if (preferences != null) {
-            val emailLower = member.email.trim().lowercase()
             if (emailLower.isNotBlank()) {
                 preferences.edit()
                     .putString("email_code_$emailLower", code)
-                    .putString("email_role_$emailLower", member.role)
-                    .putString("email_uid_$emailLower", member.uid)
+                    .putString("email_role_$emailLower", effectiveMember.role)
+                    .putString("email_uid_$emailLower", effectiveMember.uid)
                     .apply()
-                if (member.fullName.isNotBlank()) {
-                    preferences.edit().putString("email_fullname_$emailLower", member.fullName).apply()
+                if (effectiveMember.fullName.isNotBlank()) {
+                    preferences.edit().putString("email_fullname_$emailLower", effectiveMember.fullName).apply()
                 }
-                if (member.username.isNotBlank()) {
-                    preferences.edit().putString("email_username_$emailLower", member.username).apply()
+                if (effectiveMember.username.isNotBlank()) {
+                    preferences.edit().putString("email_username_$emailLower", effectiveMember.username).apply()
                 }
-                if (member.ministryRole.isNotBlank()) {
+                if (effectiveMember.ministryRole.isNotBlank()) {
                     preferences.edit()
-                        .putString("email_ministry_$emailLower", member.ministryRole)
-                        .putString("user_ministry_${member.uid}", member.ministryRole)
+                        .putString("email_ministry_$emailLower", effectiveMember.ministryRole)
+                        .putString("user_ministry_${effectiveMember.uid}", effectiveMember.ministryRole)
                         .apply()
                 }
+            }
+            if (effectiveMember.unavailableRanges.isNotEmpty()) {
+                try {
+                    val rangesJson = serializeRangesJson(effectiveMember.unavailableRanges)
+                    preferences.edit().apply {
+                        putString("user_unavailable_ranges_${effectiveMember.uid}", rangesJson)
+                        if (emailLower.isNotBlank()) {
+                            putString("email_unavailable_ranges_$emailLower", rangesJson)
+                        }
+                    }.apply()
+                } catch (_: Throwable) {}
             }
         }
     }
 
     /**
      * Synchronizes and restores any known team members for this teamCode from SharedPreferences
-     * into the in-memory cache, ensuring members are preserved across logout/login and offline scenarios.
+     * into the in-memory cache, ensuring members and their unavailableRanges are preserved across
+     * logout/login and offline scenarios.
      */
     @Synchronized
     fun syncFromPreferences(preferences: android.content.SharedPreferences, teamCode: String) {
         val code = teamCode.trim().uppercase()
         if (code.isBlank()) return
+
+        // Hydrate cachedRosters[code] from cached_roster_$code first if in-memory cache is empty
+        getCachedRoster(code, preferences)
 
         val all = preferences.all
         val memberRolesMap = try {
@@ -148,7 +210,16 @@ object TeamRepository {
                 val role = (all["email_role_$emailLower"] as? String).orEmpty().ifBlank { "Member" }
                 val fullName = (all["email_fullname_$emailLower"] as? String).orEmpty()
                 val username = (all["email_username_$emailLower"] as? String).orEmpty().ifBlank { emailLower.substringBefore("@") }
-                val uid = (all["email_uid_$emailLower"] as? String).orEmpty().ifBlank { "user_${emailLower.hashCode()}" }
+                val rawUid = (all["email_uid_$emailLower"] as? String).orEmpty().ifBlank { "user_${emailLower.hashCode()}" }
+
+                val existingInRoster = cachedRosters[code]?.let { list ->
+                    synchronized(list) {
+                        list.find {
+                            it.uid == rawUid || (emailLower.isNotBlank() && it.email.equals(emailLower, ignoreCase = true))
+                        }
+                    }
+                }
+                val uid = existingInRoster?.uid?.takeIf { it.isNotBlank() && !it.startsWith("user_") } ?: rawUid
 
                 val assignedRole = memberRolesMap?.let { map ->
                     val byUid = if (uid.isNotBlank()) map.optString(uid, "") else ""
@@ -160,13 +231,17 @@ object TeamRepository {
 
                 val ministry = assignedRole
                     ?: (all["email_ministry_$emailLower"] as? String).orEmpty().takeIf { it.isNotBlank() }
-                    ?: (all["user_ministry_$uid"] as? String).orEmpty()
+                    ?: (all["user_ministry_$uid"] as? String).orEmpty().takeIf { it.isNotBlank() }
+                    ?: existingInRoster?.ministryRole.orEmpty()
 
                 val photo = (all["email_photo_$emailLower"] as? String).orEmpty().takeIf { it.isNotBlank() }
-                    ?: (all["user_photo_$uid"] as? String).orEmpty()
-                val memberName = fullName.ifBlank { username }
+                    ?: (all["user_photo_$uid"] as? String).orEmpty().takeIf { it.isNotBlank() }
+                    ?: existingInRoster?.photoUri.orEmpty()
+                val memberName = fullName.ifBlank { existingInRoster?.fullName.orEmpty() }.ifBlank { username }
                 if (memberName.isNotBlank()) {
-                    val ranges = getMemberUnavailableRanges(uid, preferences)
+                    val ranges = getMemberUnavailableRanges(uid, preferences, emailLower, memberName).ifEmpty {
+                        existingInRoster?.unavailableRanges.orEmpty()
+                    }
                     val member = TeamMember(
                         uid = uid,
                         fullName = memberName,
@@ -214,7 +289,17 @@ object TeamRepository {
                             val k = keys.next()
                             map[k] = obj.opt(k)
                         }
-                        result.add(TeamMember.fromMap(map))
+                        val parsedMember = TeamMember.fromMap(map)
+                        if (parsedMember.unavailableRanges.isNotEmpty()) {
+                            if (parsedMember.uid.isNotBlank()) {
+                                cachedUserRanges[parsedMember.uid] = java.util.Collections.synchronizedList(parsedMember.unavailableRanges.toMutableList())
+                            }
+                            val emailLower = parsedMember.email.trim().lowercase()
+                            if (emailLower.isNotBlank()) {
+                                cachedUserRanges["email_$emailLower"] = java.util.Collections.synchronizedList(parsedMember.unavailableRanges.toMutableList())
+                            }
+                        }
+                        result.add(parsedMember)
                     }
                     if (result.isNotEmpty()) {
                         sortRoster(result)
@@ -234,7 +319,30 @@ object TeamRepository {
     ) {
         val code = teamCode.trim().uppercase()
         if (code.isBlank()) return
-        val sorted = members.toMutableList()
+        val sorted = members.map { m ->
+            val emailLower = m.email.trim().lowercase()
+            val effectiveRanges = if (m.unavailableRanges.isNotEmpty()) {
+                m.unavailableRanges
+            } else {
+                cachedUserRanges[m.uid]?.toList()
+                    ?: (if (emailLower.isNotBlank()) cachedUserRanges["email_$emailLower"]?.toList() else null)
+                    ?: emptyList()
+            }
+            val updated = if (effectiveRanges.isNotEmpty() && m.unavailableRanges.isEmpty()) {
+                m.copy(unavailableRanges = effectiveRanges)
+            } else {
+                m
+            }
+            if (updated.unavailableRanges.isNotEmpty()) {
+                if (updated.uid.isNotBlank()) {
+                    cachedUserRanges[updated.uid] = java.util.Collections.synchronizedList(updated.unavailableRanges.toMutableList())
+                }
+                if (emailLower.isNotBlank()) {
+                    cachedUserRanges["email_$emailLower"] = java.util.Collections.synchronizedList(updated.unavailableRanges.toMutableList())
+                }
+            }
+            updated
+        }.toMutableList()
         sortRoster(sorted)
         cachedRosters[code] = java.util.Collections.synchronizedList(sorted)
 
@@ -257,9 +365,18 @@ object TeamRepository {
                 preferences.edit().apply {
                     putString("$PREFS_KEY_ROSTER_PREFIX$code", arr.toString())
                     for (m in sorted) {
+                        val emailLower = m.email.trim().lowercase()
+                        if (emailLower.isNotBlank() && m.uid.isNotBlank()) {
+                            putString("email_uid_$emailLower", m.uid)
+                        }
                         if (m.photoUri.isNotBlank()) {
                             if (m.uid.isNotBlank()) putString("user_photo_${m.uid}", m.photoUri)
-                            if (m.email.isNotBlank()) putString("email_photo_${m.email.trim().lowercase()}", m.photoUri)
+                            if (emailLower.isNotBlank()) putString("email_photo_$emailLower", m.photoUri)
+                        }
+                        if (m.unavailableRanges.isNotEmpty()) {
+                            val rangesJson = serializeRangesJson(m.unavailableRanges)
+                            if (m.uid.isNotBlank()) putString("user_unavailable_ranges_${m.uid}", rangesJson)
+                            if (emailLower.isNotBlank()) putString("email_unavailable_ranges_$emailLower", rangesJson)
                         }
                     }
                 }.apply()
@@ -291,7 +408,8 @@ object TeamRepository {
                 role = profile.role,
                 ministryRole = profile.ministryRole,
                 teamCode = profile.teamCode,
-                photoUri = profile.photoUri
+                photoUri = profile.photoUri,
+                unavailableRanges = profile.unavailableRanges
             )
             cacheMember(member)
         }
@@ -375,20 +493,43 @@ object TeamRepository {
                 .whereEqualTo("teamCode", code)
                 .get()
                 .addOnSuccessListener { snapshot ->
-                    val members = mutableListOf<TeamMember>()
+                    val rawMembers = mutableListOf<TeamMember>()
                     if (snapshot != null) {
                         for (doc in snapshot.documents) {
                             val data = doc.data ?: continue
                             val mapWithId = data.toMutableMap()
                             val uidFromDoc = (mapWithId["uid"] as? String)?.ifBlank { doc.id } ?: doc.id
                             mapWithId["uid"] = uidFromDoc
-                            members.add(TeamMember.fromMap(mapWithId))
+                            rawMembers.add(TeamMember.fromMap(mapWithId))
                         }
                     }
+                    // Merge any duplicate documents for the same email/uid so unavailableRanges and ministryRole are never lost
+                    val mergedByIdentity = LinkedHashMap<String, TeamMember>()
+                    for (m in rawMembers) {
+                        val key = m.email.trim().lowercase().ifBlank { m.uid }
+                        val existing = mergedByIdentity[key]
+                        if (existing == null) {
+                            mergedByIdentity[key] = m
+                        } else {
+                            val preferredUid = if (!m.uid.startsWith("user_") && m.uid.isNotBlank()) m.uid else existing.uid.ifBlank { m.uid }
+                            val combinedRanges = (existing.unavailableRanges + m.unavailableRanges)
+                                .distinctBy { it.id.ifBlank { "${it.startDate}_${it.endDate}_${it.reason}" } }
+                            mergedByIdentity[key] = existing.copy(
+                                uid = preferredUid,
+                                fullName = existing.fullName.ifBlank { m.fullName },
+                                username = existing.username.ifBlank { m.username },
+                                role = if (existing.role.equals("Leader", true) || m.role.equals("Leader", true)) "Leader" else existing.role.ifBlank { m.role },
+                                ministryRole = existing.ministryRole.ifBlank { m.ministryRole },
+                                photoUri = existing.photoUri.ifBlank { m.photoUri },
+                                unavailableRanges = combinedRanges
+                            )
+                        }
+                    }
+                    val members = mergedByIdentity.values.toList()
                     if (members.isNotEmpty()) {
                         saveRosterLocally(code, members, preferences)
                     }
-                    finishOnce(Result.success(members.ifEmpty { getCachedRoster(code, preferences) }))
+                    finishOnce(Result.success(getCachedRoster(code, preferences)))
                 }
                 .addOnFailureListener {
                     finishOnce(Result.success(getCachedRoster(code, preferences)))
@@ -610,46 +751,126 @@ object TeamRepository {
         removeMemberFromTeam(uid, onComplete)
     }
 
+    private fun resolveMemberEmailAndAltUid(
+        uid: String,
+        email: String = "",
+        name: String = "",
+        preferences: android.content.SharedPreferences? = null
+    ): Pair<String, String> {
+        var emailLower = email.trim().lowercase()
+        for ((_, roster) in cachedRosters) {
+            synchronized(roster) {
+                val found = roster.find {
+                    (uid.isNotBlank() && it.uid == uid) ||
+                    (emailLower.isNotBlank() && it.email.equals(emailLower, ignoreCase = true)) ||
+                    (name.isNotBlank() && (it.fullName.equals(name, ignoreCase = true) || it.username.equals(name, ignoreCase = true)))
+                }
+                if (found != null) {
+                    if (emailLower.isBlank() && found.email.isNotBlank()) {
+                        emailLower = found.email.trim().lowercase()
+                    }
+                    if (found.uid.isNotBlank() && found.uid != uid) {
+                        return Pair(emailLower, found.uid)
+                    }
+                }
+            }
+        }
+        if (preferences != null) {
+            if (emailLower.isBlank()) {
+                val activeUid = preferences.getString("userId", "").orEmpty()
+                if (uid.isNotBlank() && uid == activeUid) {
+                    emailLower = preferences.getString("email", "").orEmpty().trim().lowercase()
+                }
+            }
+            if (emailLower.isBlank() && uid.isNotBlank()) {
+                for ((k, v) in preferences.all) {
+                    if (k.startsWith("email_uid_") && v == uid) {
+                        emailLower = k.removePrefix("email_uid_").trim().lowercase()
+                        break
+                    }
+                }
+            }
+            val altUid = if (emailLower.isNotBlank()) {
+                preferences.getString("email_uid_$emailLower", "").orEmpty()
+            } else ""
+            return Pair(emailLower, altUid)
+        }
+        return Pair(emailLower, "")
+    }
+
     /**
      * Retrieves the unavailable date ranges for a user from in-memory cache, SharedPreferences, or roster cache.
      */
     @Synchronized
+    @JvmOverloads
     fun getMemberUnavailableRanges(
         uid: String,
-        preferences: android.content.SharedPreferences? = null
+        preferences: android.content.SharedPreferences? = null,
+        email: String = "",
+        name: String = ""
     ): List<UnavailableRange> {
-        if (uid.isBlank()) return emptyList()
-        val fromMemory = cachedUserRanges[uid]
-        if (fromMemory != null) {
-            return synchronized(fromMemory) { fromMemory.toList() }
+        val (emailLower, altUid) = resolveMemberEmailAndAltUid(uid, email, name, preferences)
+        if (uid.isBlank() && emailLower.isBlank() && name.isBlank()) return emptyList()
+
+        val collected = mutableListOf<UnavailableRange>()
+        var hasMemoryCacheEntry = false
+
+        if (uid.isNotBlank() && cachedUserRanges.containsKey(uid)) {
+            hasMemoryCacheEntry = true
+            cachedUserRanges[uid]?.let { synchronized(it) { collected.addAll(it) } }
+        }
+        if (altUid.isNotBlank() && altUid != uid && cachedUserRanges.containsKey(altUid)) {
+            hasMemoryCacheEntry = true
+            cachedUserRanges[altUid]?.let { synchronized(it) { collected.addAll(it) } }
+        }
+        if (emailLower.isNotBlank() && cachedUserRanges.containsKey("email_$emailLower")) {
+            hasMemoryCacheEntry = true
+            cachedUserRanges["email_$emailLower"]?.let { synchronized(it) { collected.addAll(it) } }
+        }
+        if (hasMemoryCacheEntry) {
+            return collected.distinctBy { it.id.ifBlank { "${it.startDate}_${it.endDate}_${it.reason}" } }
         }
 
         if (preferences != null) {
-            val jsonStr = preferences.getString("user_unavailable_ranges_$uid", null)
-            if (!jsonStr.isNullOrBlank()) {
-                try {
-                    val array = org.json.JSONArray(jsonStr)
-                    val list = mutableListOf<UnavailableRange>()
-                    for (i in 0 until array.length()) {
-                        val obj = array.getJSONObject(i)
-                        val map = mutableMapOf<String, Any?>()
-                        val keys = obj.keys()
-                        while (keys.hasNext()) {
-                            val k = keys.next()
-                            map[k] = obj.opt(k)
-                        }
-                        list.add(UnavailableRange.fromMap(map))
-                    }
-                    cachedUserRanges[uid] = java.util.Collections.synchronizedList(list)
-                    return list
-                } catch (_: Throwable) {}
+            val keysToCheck = mutableListOf<String>()
+            if (uid.isNotBlank()) keysToCheck.add("user_unavailable_ranges_$uid")
+            if (altUid.isNotBlank() && altUid != uid) keysToCheck.add("user_unavailable_ranges_$altUid")
+            if (emailLower.isNotBlank()) keysToCheck.add("email_unavailable_ranges_$emailLower")
+
+            for (prefKey in keysToCheck) {
+                val jsonStr = preferences.getString(prefKey, null)
+                if (!jsonStr.isNullOrBlank()) {
+                    collected.addAll(UnavailableRange.parseList(jsonStr))
+                }
+            }
+            if (collected.isNotEmpty()) {
+                val distinct = collected.distinctBy { it.id.ifBlank { "${it.startDate}_${it.endDate}_${it.reason}" } }
+                if (uid.isNotBlank()) {
+                    cachedUserRanges[uid] = java.util.Collections.synchronizedList(distinct.toMutableList())
+                }
+                if (emailLower.isNotBlank()) {
+                    cachedUserRanges["email_$emailLower"] = java.util.Collections.synchronizedList(distinct.toMutableList())
+                }
+                return distinct
             }
         }
 
         for ((_, roster) in cachedRosters) {
-            val found = synchronized(roster) { roster.find { it.uid == uid } }
+            val found = synchronized(roster) {
+                roster.find {
+                    (uid.isNotBlank() && it.uid == uid) ||
+                    (altUid.isNotBlank() && it.uid == altUid) ||
+                    (emailLower.isNotBlank() && it.email.equals(emailLower, ignoreCase = true)) ||
+                    (name.isNotBlank() && (it.fullName.equals(name, ignoreCase = true) || it.username.equals(name, ignoreCase = true)))
+                }
+            }
             if (found != null && found.unavailableRanges.isNotEmpty()) {
-                cachedUserRanges[uid] = java.util.Collections.synchronizedList(found.unavailableRanges.toMutableList())
+                if (uid.isNotBlank()) {
+                    cachedUserRanges[uid] = java.util.Collections.synchronizedList(found.unavailableRanges.toMutableList())
+                }
+                if (emailLower.isNotBlank()) {
+                    cachedUserRanges["email_$emailLower"] = java.util.Collections.synchronizedList(found.unavailableRanges.toMutableList())
+                }
                 return found.unavailableRanges
             }
         }
@@ -671,29 +892,48 @@ object TeamRepository {
             return
         }
 
-        val current = getMemberUnavailableRanges(uid, preferences).toMutableList()
+        val (emailLower, altUid) = resolveMemberEmailAndAltUid(uid, preferences = preferences)
+        val current = getMemberUnavailableRanges(uid, preferences, emailLower).toMutableList()
         current.removeAll { it.id == range.id }
         current.add(range)
-        cachedUserRanges[uid] = java.util.Collections.synchronizedList(current)
 
-        for ((_, roster) in cachedRosters) {
+        cachedUserRanges[uid] = java.util.Collections.synchronizedList(current.toMutableList())
+        if (altUid.isNotBlank()) {
+            cachedUserRanges[altUid] = java.util.Collections.synchronizedList(current.toMutableList())
+        }
+        if (emailLower.isNotBlank()) {
+            cachedUserRanges["email_$emailLower"] = java.util.Collections.synchronizedList(current.toMutableList())
+        }
+
+        val updatedTeamCodes = mutableListOf<String>()
+        for ((teamCode, roster) in cachedRosters) {
+            var modified = false
             synchronized(roster) {
-                val idx = roster.indexOfFirst { it.uid == uid }
-                if (idx >= 0) {
-                    roster[idx] = roster[idx].copy(unavailableRanges = current)
+                for (idx in roster.indices) {
+                    val m = roster[idx]
+                    if (m.uid == uid || (altUid.isNotBlank() && m.uid == altUid) || (emailLower.isNotBlank() && m.email.equals(emailLower, ignoreCase = true))) {
+                        roster[idx] = m.copy(unavailableRanges = current.toList())
+                        modified = true
+                    }
                 }
             }
+            if (modified) updatedTeamCodes.add(teamCode)
         }
 
         if (preferences != null) {
             try {
-                val array = org.json.JSONArray()
-                current.forEach { item ->
-                    val obj = org.json.JSONObject()
-                    item.toMap().forEach { (k, v) -> obj.put(k, v) }
-                    array.put(obj)
+                val jsonStr = serializeRangesJson(current)
+                preferences.edit().apply {
+                    putString("user_unavailable_ranges_$uid", jsonStr)
+                    if (altUid.isNotBlank()) putString("user_unavailable_ranges_$altUid", jsonStr)
+                    if (emailLower.isNotBlank()) putString("email_unavailable_ranges_$emailLower", jsonStr)
+                }.apply()
+                for (teamCode in updatedTeamCodes) {
+                    val list = cachedRosters[teamCode]
+                    if (list != null) {
+                        saveRosterLocally(teamCode, synchronized(list) { list.toList() }, preferences)
+                    }
                 }
-                preferences.edit().putString("user_unavailable_ranges_$uid", array.toString()).apply()
             } catch (_: Throwable) {}
         }
 
@@ -702,7 +942,26 @@ object TeamRepository {
             db.collection(USERS_COLLECTION)
                 .document(uid)
                 .set(mapOf("uid" to uid, "unavailableRanges" to serialized), com.google.firebase.firestore.SetOptions.merge())
-                .addOnSuccessListener { onComplete(Result.success(Unit)) }
+                .addOnSuccessListener {
+                    if (emailLower.isNotBlank()) {
+                        db.collection(USERS_COLLECTION)
+                            .whereEqualTo("email", emailLower)
+                            .get()
+                            .addOnSuccessListener { snap ->
+                                if (snap != null) {
+                                    for (doc in snap.documents) {
+                                        if (doc.id != uid) {
+                                            doc.reference.set(mapOf("unavailableRanges" to serialized), com.google.firebase.firestore.SetOptions.merge())
+                                        }
+                                    }
+                                }
+                                onComplete(Result.success(Unit))
+                            }
+                            .addOnFailureListener { onComplete(Result.success(Unit)) }
+                    } else {
+                        onComplete(Result.success(Unit))
+                    }
+                }
                 .addOnFailureListener { onComplete(Result.failure(it)) }
         } catch (e: Exception) {
             onComplete(Result.failure(e))
@@ -724,28 +983,47 @@ object TeamRepository {
             return
         }
 
-        val current = getMemberUnavailableRanges(uid, preferences).toMutableList()
+        val (emailLower, altUid) = resolveMemberEmailAndAltUid(uid, preferences = preferences)
+        val current = getMemberUnavailableRanges(uid, preferences, emailLower).toMutableList()
         current.removeAll { it.id == rangeId }
-        cachedUserRanges[uid] = java.util.Collections.synchronizedList(current)
 
-        for ((_, roster) in cachedRosters) {
+        cachedUserRanges[uid] = java.util.Collections.synchronizedList(current.toMutableList())
+        if (altUid.isNotBlank()) {
+            cachedUserRanges[altUid] = java.util.Collections.synchronizedList(current.toMutableList())
+        }
+        if (emailLower.isNotBlank()) {
+            cachedUserRanges["email_$emailLower"] = java.util.Collections.synchronizedList(current.toMutableList())
+        }
+
+        val updatedTeamCodes = mutableListOf<String>()
+        for ((teamCode, roster) in cachedRosters) {
+            var modified = false
             synchronized(roster) {
-                val idx = roster.indexOfFirst { it.uid == uid }
-                if (idx >= 0) {
-                    roster[idx] = roster[idx].copy(unavailableRanges = current)
+                for (idx in roster.indices) {
+                    val m = roster[idx]
+                    if (m.uid == uid || (altUid.isNotBlank() && m.uid == altUid) || (emailLower.isNotBlank() && m.email.equals(emailLower, ignoreCase = true))) {
+                        roster[idx] = m.copy(unavailableRanges = current.toList())
+                        modified = true
+                    }
                 }
             }
+            if (modified) updatedTeamCodes.add(teamCode)
         }
 
         if (preferences != null) {
             try {
-                val array = org.json.JSONArray()
-                current.forEach { item ->
-                    val obj = org.json.JSONObject()
-                    item.toMap().forEach { (k, v) -> obj.put(k, v) }
-                    array.put(obj)
+                val jsonStr = serializeRangesJson(current)
+                preferences.edit().apply {
+                    putString("user_unavailable_ranges_$uid", jsonStr)
+                    if (altUid.isNotBlank()) putString("user_unavailable_ranges_$altUid", jsonStr)
+                    if (emailLower.isNotBlank()) putString("email_unavailable_ranges_$emailLower", jsonStr)
+                }.apply()
+                for (teamCode in updatedTeamCodes) {
+                    val list = cachedRosters[teamCode]
+                    if (list != null) {
+                        saveRosterLocally(teamCode, synchronized(list) { list.toList() }, preferences)
+                    }
                 }
-                preferences.edit().putString("user_unavailable_ranges_$uid", array.toString()).apply()
             } catch (_: Throwable) {}
         }
 
@@ -754,7 +1032,26 @@ object TeamRepository {
             db.collection(USERS_COLLECTION)
                 .document(uid)
                 .set(mapOf("uid" to uid, "unavailableRanges" to serialized), com.google.firebase.firestore.SetOptions.merge())
-                .addOnSuccessListener { onComplete(Result.success(Unit)) }
+                .addOnSuccessListener {
+                    if (emailLower.isNotBlank()) {
+                        db.collection(USERS_COLLECTION)
+                            .whereEqualTo("email", emailLower)
+                            .get()
+                            .addOnSuccessListener { snap ->
+                                if (snap != null) {
+                                    for (doc in snap.documents) {
+                                        if (doc.id != uid) {
+                                            doc.reference.set(mapOf("unavailableRanges" to serialized), com.google.firebase.firestore.SetOptions.merge())
+                                        }
+                                    }
+                                }
+                                onComplete(Result.success(Unit))
+                            }
+                            .addOnFailureListener { onComplete(Result.success(Unit)) }
+                    } else {
+                        onComplete(Result.success(Unit))
+                    }
+                }
                 .addOnFailureListener { onComplete(Result.failure(it)) }
         } catch (e: Exception) {
             onComplete(Result.failure(e))
@@ -766,20 +1063,19 @@ object TeamRepository {
      * Returns Pair(AvailableMembers, UnavailableMembersWithReason).
      */
     @Synchronized
+    @JvmOverloads
     fun checkTeamAvailabilityForDate(
         teamCode: String,
-        targetDate: String
+        targetDate: String,
+        preferences: android.content.SharedPreferences? = null
     ): Pair<List<TeamMember>, List<Pair<TeamMember, String>>> {
-        val roster = getCachedRoster(teamCode)
+        val roster = getCachedRoster(teamCode, preferences)
         val available = mutableListOf<TeamMember>()
         val unavailable = mutableListOf<Pair<TeamMember, String>>()
 
         for (member in roster) {
-            val ranges = if (member.unavailableRanges.isNotEmpty()) {
-                member.unavailableRanges
-            } else {
-                getMemberUnavailableRanges(member.uid)
-            }
+            val ranges = (member.unavailableRanges + getMemberUnavailableRanges(member.uid, preferences, member.email, member.fullName))
+                .distinctBy { it.id.ifBlank { "${it.startDate}_${it.endDate}_${it.reason}" } }
             val conflict = ranges.find { it.includes(targetDate) }
             if (conflict != null) {
                 unavailable.add(Pair(member, conflict.reason.ifBlank { "Unavailable" }))
