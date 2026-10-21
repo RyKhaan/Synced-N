@@ -121,6 +121,9 @@ object SessionManager {
             ?: (if (effectiveUid.isNotBlank()) preferences.getString("user_photo_$effectiveUid", "").orEmpty().takeIf { it.isNotBlank() } else null)
             ?: preferences.getString(KEY_PHOTO_URI, "").orEmpty()
 
+        val profileRangesJson = profile?.unavailableRanges?.takeIf { it.isNotEmpty() }
+            ?.let { TeamRepository.serializeRangesJson(it) }.orEmpty()
+
         preferences.edit {
             putString(KEY_USER_ID, effectiveUid)
             putString(KEY_EMAIL, email)
@@ -147,11 +150,21 @@ object SessionManager {
                 putString("email_language_$emailLower", language)
                 if (ministryRole.isNotBlank()) putString("email_ministry_$emailLower", ministryRole)
                 if (photoUri.isNotBlank()) putString("email_photo_$emailLower", photoUri)
+                if (profileRangesJson.isNotBlank()) putString("email_unavailable_ranges_$emailLower", profileRangesJson)
             }
             if (effectiveUid.isNotBlank()) {
                 if (ministryRole.isNotBlank()) putString("user_ministry_$effectiveUid", ministryRole)
                 if (photoUri.isNotBlank()) putString("user_photo_$effectiveUid", photoUri)
+                if (profileRangesJson.isNotBlank()) putString("user_unavailable_ranges_$effectiveUid", profileRangesJson)
             }
+        }
+        if (effectiveUid.isNotBlank()) {
+            TeamRepository.getMemberUnavailableRanges(
+                uid = effectiveUid,
+                preferences = preferences,
+                email = emailLower,
+                name = fullName.ifBlank { username }
+            )
         }
     }
 

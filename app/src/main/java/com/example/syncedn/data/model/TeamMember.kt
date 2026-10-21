@@ -31,11 +31,7 @@ data class TeamMember(
 
     companion object {
         fun fromMap(map: Map<String, Any?>): TeamMember {
-            val rawRanges = map["unavailableRanges"] as? List<*>
-            val ranges = rawRanges?.mapNotNull { item ->
-                @Suppress("UNCHECKED_CAST")
-                (item as? Map<String, Any?>)?.let { UnavailableRange.fromMap(it) }
-            }.orEmpty()
+            val ranges = UnavailableRange.parseList(map["unavailableRanges"])
 
             return TeamMember(
                 uid = map["uid"] as? String ?: "",
