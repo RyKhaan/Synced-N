@@ -27,8 +27,10 @@ object TeamRepository {
     private const val ANNOUNCEMENTS_SUBCOLLECTION = "announcements"
     private const val SUBSTITUTIONS_SUBCOLLECTION = "substitutions"
     private const val MESSAGES_SUBCOLLECTION = "messages"
+    private const val REPORTS_SUBCOLLECTION = "reports"
     private const val PREFS_KEY_MESSAGES_PREFIX = "cached_messages_"
     private const val PREFS_KEY_ROSTER_PREFIX = "cached_roster_"
+    private const val PREFS_KEY_REPORTS_PREFIX = "cached_reports_"
 
     // In-memory cache for fast UI updates, offline fallback, and unit tests
     private val cachedRosters = java.util.concurrent.ConcurrentHashMap<String, MutableList<TeamMember>>()
@@ -54,6 +56,16 @@ object TeamRepository {
     private val substitutionsInFlight = java.util.concurrent.ConcurrentHashMap<String, Boolean>()
 
     private val cachedChatMessages = java.util.concurrent.ConcurrentHashMap<String, MutableList<ChatMessage>>()
+    private val cachedReports = java.util.concurrent.ConcurrentHashMap<String, MutableList<Map<String, Any>>>()
+
+    data class TeamNotificationItem(
+        val id: String,
+        val title: String,
+        val message: String,
+        val timeLabel: String,
+        val iconName: String,
+        val timestamp: Long
+    )
 
     /**
      * Clears all in-memory roster, role, service, song, announcement, and substitution caches (primarily for unit tests).
@@ -77,6 +89,8 @@ object TeamRepository {
         cachedSubstitutions.clear()
         lastSubstitutionsFetchTimes.clear()
         substitutionsInFlight.clear()
+        cachedChatMessages.clear()
+        cachedReports.clear()
     }
 
     fun serializeRangesJson(ranges: List<UnavailableRange>): String {
@@ -2756,6 +2770,232 @@ object TeamRepository {
         } catch (e: Throwable) {
             android.util.Log.e("TeamRepository", "listenTeamMessages exception: ${e.message}")
             null
+        }
+    }
+
+    private fun formatRelativeNotificationTime(timestamp: Long): String {
+        if (timestamp <= 0L) return "Recently"
+        val diffMs = (System.currentTimeMillis() - timestamp).coerceAtLeast(0L)
+        val mins = diffMs / 60_000L
+        val hours = diffMs / 3_600_000L
+        val days = diffMs / 86_400_000L
+        return when {
+            mins < 1L -> "Just now"
+            mins < 60L -> "${mins}m ago"
+            hours < 24L -> "${hours} hour${if (hours == 1L) "" else "s"} ago"
+            days < 7L -> "${days} day${if (days == 1L) "" else "s"} ago"
+            else -> java.text.SimpleDateFormat("MMM d, yyyy", java.util.Locale.US).format(java.util.Date(timestamp))
+        }
+    }
+
+    /**
+     * Builds a dynamic recent notifications feed from real team services, announcements, and substitutions.
+     */
+    fun getRecentTeamNotifications(
+        teamCode: String,
+        preferences: android.content.SharedPreferences? = null
+    ): List<TeamNotificationItem> {
+        val code = teamCode.trim().uppercase()
+        if (code.isBlank()) return emptyList()
+
+        val items = mutableListOf<TeamNotificationItem>()
+
+        // 1. Published Services & Lineups
+        val publishedServices = getCachedServices(code, preferences).filter { it.status == "Published" }
+        for (srv in publishedServices) {
+            val ts = srv.updatedAt.takeIf { it > 0L } ?: srv.createdAt
+            val timePart = if (srv.start.isNotBlank()) " at ${srv.start}" else ""
+            items.add(
+                TeamNotificationItem(
+                    id = "notif_srv_${srv.id}",
+                    title = "New Service Scheduled",
+                    message = "${srv.title} scheduled for ${srv.date}$timePart.",
+                    timeLabel = formatRelativeNotificationTime(ts),
+                    iconName = "calendar",
+                    timestamp = ts
+                )
+            )
+            if (srv.songs.isNotEmpty()) {
+                val songCount = srv.songs.size
+                items.add(
+                    TeamNotificationItem(
+                        id = "notif_lineup_${srv.id}",
+                        title = "Lineup Published",
+                        message = "$songCount song${if (songCount == 1) "" else "s"} attached to ${srv.title}.",
+                        timeLabel = formatRelativeNotificationTime(ts - 1L),
+                        iconName = "musical_notes",
+                        timestamp = ts - 1L
+                    )
+                )
+            }
+        }
+
+        // 2. Team Announcements
+        val announcements = getCachedAnnouncements(code, preferences)
+        for (ann in announcements) {
+            val ts = ann.updatedAt.takeIf { it > 0L } ?: ann.createdAt
+            val prefix = if (ann.urgent) "Urgent Alert: " else "Announcement: "
+            items.add(
+                TeamNotificationItem(
+                    id = "notif_ann_${ann.id}",
+                    title = "$prefix${ann.title}",
+                    message = ann.message,
+                    timeLabel = formatRelativeNotificationTime(ts),
+                    iconName = "announcement",
+                    timestamp = ts
+                )
+            )
+        }
+
+        // 3. Substitution Requests
+        val substitutions = getCachedSubstitutions(code, preferences)
+        for (sub in substitutions) {
+            val ts = sub.updatedAt.takeIf { it > 0L } ?: sub.createdAt
+            items.add(
+                TeamNotificationItem(
+                    id = "notif_sub_${sub.id}",
+                    title = "Substitution ${sub.status}",
+                    message = "${sub.requesterName} requested ${sub.substituteName} for ${sub.role} (${sub.serviceTitle}).",
+                    timeLabel = formatRelativeNotificationTime(ts),
+                    iconName = "people",
+                    timestamp = ts
+                )
+            )
+        }
+
+        return items.sortedByDescending { it.timestamp }.take(15)
+    }
+
+    /**
+     * Submits a team issue report to Cloud Firestore (/teams/{teamCode}/reports/{reportId}) and caches it locally.
+     */
+    @Synchronized
+    fun submitTeamReport(
+        teamCode: String,
+        reporterUid: String,
+        reporterName: String,
+        reason: String,
+        preferences: android.content.SharedPreferences? = null,
+        onComplete: (Result<Map<String, Any>>) -> Unit = {}
+    ) {
+        val code = teamCode.trim().uppercase()
+        val cleanReason = reason.trim().take(1000)
+        if (code.isBlank() || cleanReason.isBlank()) {
+            onComplete(Result.failure(IllegalArgumentException("Team code and reason are required.")))
+            return
+        }
+
+        val reportId = "rep_${System.currentTimeMillis()}"
+        val effectiveUid = reporterUid.ifBlank {
+            com.example.syncedn.data.auth.AuthManager.currentUser?.uid.orEmpty().ifBlank { "anonymous" }
+        }
+        val effectiveName = reporterName.ifBlank { "Team Member" }.take(100)
+        val reportMap = mapOf<String, Any>(
+            "id" to reportId,
+            "teamCode" to code,
+            "reporterUid" to effectiveUid,
+            "reporterName" to effectiveName,
+            "reason" to cleanReason,
+            "createdAt" to System.currentTimeMillis()
+        )
+
+        val list = cachedReports.getOrPut(code) { mutableListOf() }
+        synchronized(list) {
+            list.add(0, reportMap)
+        }
+
+        preferences?.let { prefs ->
+            try {
+                val arr = org.json.JSONArray()
+                synchronized(list) {
+                    list.forEach { item -> arr.put(org.json.JSONObject(item)) }
+                }
+                prefs.edit {
+                    putString("teamReport", cleanReason)
+                    putString("$PREFS_KEY_REPORTS_PREFIX$code", arr.toString())
+                }
+            } catch (_: Throwable) {}
+        }
+
+        onComplete(Result.success(reportMap))
+
+        try {
+            db.collection(TEAMS_COLLECTION)
+                .document(code)
+                .collection(REPORTS_SUBCOLLECTION)
+                .document(reportId)
+                .set(reportMap)
+        } catch (_: Throwable) {}
+    }
+
+    /**
+     * Retrieves cached team reports for a team.
+     */
+    fun getCachedTeamReports(
+        teamCode: String,
+        preferences: android.content.SharedPreferences? = null
+    ): List<Map<String, Any>> {
+        val code = teamCode.trim().uppercase()
+        if (code.isBlank()) return emptyList()
+
+        val mem = cachedReports[code]
+        if (!mem.isNullOrEmpty()) {
+            synchronized(mem) { return mem.toList() }
+        }
+
+        val prefs = preferences ?: return emptyList()
+        val raw = prefs.getString("$PREFS_KEY_REPORTS_PREFIX$code", null) ?: return emptyList()
+        return try {
+            val arr = org.json.JSONArray(raw)
+            val parsed = (0 until arr.length()).mapNotNull { idx ->
+                val obj = arr.optJSONObject(idx) ?: return@mapNotNull null
+                val map = mutableMapOf<String, Any>()
+                val keys = obj.keys()
+                while (keys.hasNext()) {
+                    val k = keys.next()
+                    obj.opt(k)?.let { v -> map[k] = v }
+                }
+                map.toMap()
+            }
+            cachedReports[code] = parsed.toMutableList()
+            parsed
+        } catch (_: Throwable) {
+            emptyList()
+        }
+    }
+
+    /**
+     * Persists user notification and unmute preferences locally and syncs to Firestore /users/{uid}.
+     */
+    fun saveNotificationPreferences(
+        uid: String,
+        notificationsEnabled: Boolean,
+        teamUnmuted: Boolean,
+        preferences: android.content.SharedPreferences? = null,
+        onComplete: (Result<Unit>) -> Unit = {}
+    ) {
+        preferences?.edit {
+            putBoolean("notifications", notificationsEnabled)
+            putBoolean("teamUnmuted", teamUnmuted)
+            if (uid.isNotBlank()) {
+                putBoolean("user_notifications_$uid", notificationsEnabled)
+                putBoolean("user_unmuted_$uid", teamUnmuted)
+            }
+        }
+
+        onComplete(Result.success(Unit))
+
+        if (uid.isNotBlank()) {
+            try {
+                val payload = mapOf(
+                    "uid" to uid,
+                    "notificationsEnabled" to notificationsEnabled,
+                    "teamUnmuted" to teamUnmuted
+                )
+                db.collection(USERS_COLLECTION)
+                    .document(uid)
+                    .set(payload, com.google.firebase.firestore.SetOptions.merge())
+            } catch (_: Throwable) {}
         }
     }
 }
