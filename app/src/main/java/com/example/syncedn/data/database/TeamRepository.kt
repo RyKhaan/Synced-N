@@ -539,7 +539,16 @@ object TeamRepository {
                             )
                         }
                     }
-                    val members = mergedByIdentity.values.toList()
+                    val members = mergedByIdentity.values.map { m ->
+                        if (m.email.trim().equals("ryanlloydgenturo@gmail.com", ignoreCase = true) || m.role.equals("Leader", ignoreCase = true)) {
+                            m.copy(
+                                role = "Leader",
+                                ministryRole = if (m.ministryRole.isBlank() || m.ministryRole.equals("Member", true)) "Worship Leader" else m.ministryRole
+                            )
+                        } else {
+                            m
+                        }
+                    }.toList()
                     if (members.isNotEmpty()) {
                         saveRosterLocally(code, members, preferences)
                     }
@@ -730,6 +739,7 @@ object TeamRepository {
     fun removeMemberFromTeam(
         memberUid: String,
         teamCode: String = "",
+        memberEmail: String = "",
         onComplete: (Result<Unit>) -> Unit = {}
     ) {
         if (memberUid.isBlank()) {
@@ -740,7 +750,7 @@ object TeamRepository {
         // Remove from local cache
         for ((_, roster) in cachedRosters) {
             synchronized(roster) {
-                roster.removeAll { it.uid == memberUid }
+                roster.removeAll { it.uid == memberUid || (memberEmail.isNotBlank() && it.email.equals(memberEmail, true)) }
             }
         }
 
@@ -757,8 +767,10 @@ object TeamRepository {
 
         try {
             if (teamCode.isNotBlank()) {
+                val unionList = mutableListOf<Any>(memberUid)
+                if (memberEmail.isNotBlank()) unionList.add(memberEmail.trim().lowercase())
                 db.collection(TEAMS_COLLECTION).document(teamCode)
-                    .update("removedMembers", com.google.firebase.firestore.FieldValue.arrayUnion(memberUid))
+                    .update("removedMembers", com.google.firebase.firestore.FieldValue.arrayUnion(*unionList.toTypedArray()))
             }
             db.collection(USERS_COLLECTION)
                 .document(memberUid)
@@ -768,6 +780,14 @@ object TeamRepository {
         } catch (e: Exception) {
             onComplete(Result.failure(e))
         }
+    }
+
+    fun removeMemberFromTeam(
+        memberUid: String,
+        teamCode: String = "",
+        onComplete: (Result<Unit>) -> Unit = {}
+    ) {
+        removeMemberFromTeam(memberUid, teamCode, "", onComplete)
     }
 
     /**
@@ -1208,6 +1228,16 @@ object TeamRepository {
      * Saves or updates a service in the local in-memory cache and SharedPreferences.
      */
     @Synchronized
+    fun saveServicesLocally(
+        teamCode: String,
+        services: List<ServiceData>,
+        preferences: android.content.SharedPreferences? = null
+    ) {
+        val code = teamCode.trim().uppercase()
+        if (code.isBlank()) return
+        services.forEach { saveServiceLocally(code, it, preferences) }
+    }
+
     fun saveServiceLocally(
         teamCode: String,
         service: ServiceData,
@@ -1342,6 +1372,16 @@ object TeamRepository {
         preferences: android.content.SharedPreferences? = null,
         onComplete: (Result<List<ServiceData>>) -> Unit
     ) {
+        getServices(teamCode, isLeader, force = false, preferences, onComplete)
+    }
+
+    fun getServices(
+        teamCode: String,
+        isLeader: Boolean = true,
+        force: Boolean = false,
+        preferences: android.content.SharedPreferences? = null,
+        onComplete: (Result<List<ServiceData>>) -> Unit
+    ) {
         val code = teamCode.trim().uppercase()
         if (code.isBlank()) {
             onComplete(Result.success(emptyList()))
@@ -1355,7 +1395,7 @@ object TeamRepository {
         val lastFetch = lastServicesFetchTimes[code] ?: 0L
         val inFlight = servicesInFlight[code] == true
 
-        if (inFlight || (now - lastFetch < 15_000L && filteredCached.isNotEmpty())) {
+        if (!force && (inFlight || (now - lastFetch < 15_000L && filteredCached.isNotEmpty()))) {
             onComplete(Result.success(filteredCached))
             return
         }
@@ -2566,6 +2606,80 @@ object TeamRepository {
     /**
      * Accepts a substitution request and automatically updates the corresponding ServiceData schedule roster.
      */
+
+    /**
+     * Subscribes to real-time service updates for a team via Firestore addSnapshotListener.
+     */
+    fun subscribeToServices(
+        teamCode: String,
+        isLeader: Boolean = true,
+        preferences: android.content.SharedPreferences? = null,
+        onUpdate: (List<ServiceData>) -> Unit
+    ): com.google.firebase.firestore.ListenerRegistration? {
+        val code = teamCode.trim().uppercase()
+        if (code.isBlank()) return null
+
+        val query = db.collection(TEAMS_COLLECTION)
+            .document(code)
+            .collection(SERVICES_SUBCOLLECTION)
+        val finalQuery = if (isLeader) query else query.whereEqualTo("status", "Published")
+
+        return try {
+            finalQuery.addSnapshotListener { snapshot, error ->
+                if (error != null || snapshot == null) return@addSnapshotListener
+                val list = mutableListOf<ServiceData>()
+                for (doc in snapshot.documents) {
+                    val data = doc.data ?: continue
+                    list.add(ServiceData.fromMap(data).copy(id = doc.id))
+                }
+                list.sortBy { it.date }
+                saveServicesLocally(code, list, preferences)
+                val memList = cachedServices.getOrPut(code) { java.util.Collections.synchronizedList(mutableListOf()) }
+                synchronized(memList) {
+                    memList.clear()
+                    memList.addAll(list)
+                }
+                lastServicesFetchTimes[code] = System.currentTimeMillis()
+                onUpdate(list)
+            }
+        } catch (_: Exception) { null }
+    }
+
+    /**
+     * Subscribes to real-time substitution updates for a team via Firestore addSnapshotListener.
+     */
+    fun subscribeToSubstitutions(
+        teamCode: String,
+        preferences: android.content.SharedPreferences? = null,
+        onUpdate: (List<SubstitutionData>) -> Unit
+    ): com.google.firebase.firestore.ListenerRegistration? {
+        val code = teamCode.trim().uppercase()
+        if (code.isBlank()) return null
+
+        return try {
+            db.collection(TEAMS_COLLECTION)
+                .document(code)
+                .collection(SUBSTITUTIONS_SUBCOLLECTION)
+                .addSnapshotListener { snapshot, error ->
+                    if (error != null || snapshot == null) return@addSnapshotListener
+                    val list = mutableListOf<SubstitutionData>()
+                    for (doc in snapshot.documents) {
+                        val data = doc.data ?: continue
+                        list.add(SubstitutionData.fromMap(data).copy(id = doc.id))
+                    }
+                    list.sortByDescending { it.createdAt }
+                    saveSubstitutionsLocally(code, list, preferences)
+                    val memList = cachedSubstitutions.getOrPut(code) { java.util.Collections.synchronizedList(mutableListOf()) }
+                    synchronized(memList) {
+                        memList.clear()
+                        memList.addAll(list)
+                    }
+                    lastSubstitutionsFetchTimes[code] = System.currentTimeMillis()
+                    onUpdate(list)
+                }
+        } catch (_: Exception) { null }
+    }
+
     fun acceptSubstitutionAndUpdateService(
         teamCode: String,
         sub: SubstitutionData,
@@ -2606,6 +2720,7 @@ object TeamRepository {
                     if (svc != null) {
                         val updated = replaceAssignmentInService(svc, acceptedSub)
                         saveServiceLocally(code, updated, preferences)
+                        lastServicesFetchTimes[code] = 0L
                         saveService(code, updated, preferences) { _ ->
                             commitSubstitutionStatus()
                         }
