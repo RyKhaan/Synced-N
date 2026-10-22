@@ -727,7 +727,11 @@ object TeamRepository {
      * Removes a member from a team, resetting their team fields in Firestore and cache.
      */
     @Synchronized
-    fun removeMemberFromTeam(memberUid: String, onComplete: (Result<Unit>) -> Unit = {}) {
+    fun removeMemberFromTeam(
+        memberUid: String,
+        teamCode: String = "",
+        onComplete: (Result<Unit>) -> Unit = {}
+    ) {
         if (memberUid.isBlank()) {
             onComplete(Result.success(Unit))
             return
@@ -740,14 +744,22 @@ object TeamRepository {
             }
         }
 
-        val updates = mapOf(
+        val updates = mutableMapOf<String, Any>(
             "teamCode" to "",
             "teamName" to "",
             "ministryRole" to "",
-            "role" to "Member"
+            "role" to "Member",
+            "removedByLeader" to true
         )
+        if (teamCode.isNotBlank()) {
+            updates["removedTeamCode"] = teamCode
+        }
 
         try {
+            if (teamCode.isNotBlank()) {
+                db.collection(TEAMS_COLLECTION).document(teamCode)
+                    .update("removedMembers", com.google.firebase.firestore.FieldValue.arrayUnion(memberUid))
+            }
             db.collection(USERS_COLLECTION)
                 .document(memberUid)
                 .update(updates)
@@ -759,10 +771,98 @@ object TeamRepository {
     }
 
     /**
-     * Resets a user's team membership in Firestore.
+     * Resets a user's team membership in Firestore (voluntary leave).
+     * Does NOT mark as removedByLeader, allowing them to rejoin with a valid code.
      */
     fun leaveTeam(uid: String, onComplete: (Result<Unit>) -> Unit = {}) {
-        removeMemberFromTeam(uid, onComplete)
+        if (uid.isBlank()) {
+            onComplete(Result.success(Unit))
+            return
+        }
+
+        for ((_, roster) in cachedRosters) {
+            synchronized(roster) {
+                roster.removeAll { it.uid == uid }
+            }
+        }
+
+        val updates = mapOf<String, Any>(
+            "teamCode" to "",
+            "teamName" to "",
+            "ministryRole" to "",
+            "role" to "Member",
+            "removedByLeader" to false,
+            "removedTeamCode" to ""
+        )
+
+        try {
+            db.collection(USERS_COLLECTION)
+                .document(uid)
+                .update(updates)
+                .addOnSuccessListener { onComplete(Result.success(Unit)) }
+                .addOnFailureListener { onComplete(Result.failure(it)) }
+        } catch (e: Exception) {
+            onComplete(Result.failure(e))
+        }
+    }
+
+    /**
+     * Checks if a member was removed by the team leader from the specified team.
+     */
+    fun isMemberRemovedFromTeam(
+        teamCode: String,
+        uid: String,
+        email: String = "",
+        preferences: android.content.SharedPreferences? = null,
+        onResult: (Boolean) -> Unit
+    ) {
+        val code = teamCode.trim().uppercase()
+        if (code.isBlank() || (uid.isBlank() && email.isBlank())) {
+            onResult(false)
+            return
+        }
+
+        preferences?.getStringSet("removedMembers", null)?.let { set ->
+            if (set.contains(uid) || (email.isNotBlank() && set.contains(email.trim().lowercase()))) {
+                onResult(true)
+                return
+            }
+        }
+
+        if (uid.isNotBlank()) {
+            db.collection(USERS_COLLECTION).document(uid).get()
+                .addOnSuccessListener { snap ->
+                    val removed = snap.getBoolean("removedByLeader") ?: false
+                    val rTeamCode = snap.getString("removedTeamCode").orEmpty()
+                    if (removed && (rTeamCode.isBlank() || rTeamCode.equals(code, ignoreCase = true))) {
+                        onResult(true)
+                        return@addOnSuccessListener
+                    }
+
+                    db.collection(TEAMS_COLLECTION).document(code).get()
+                        .addOnSuccessListener { tSnap ->
+                            val list = (tSnap.get("removedMembers") as? List<*>)?.mapNotNull { it?.toString() }.orEmpty()
+                            val isRemoved = list.contains(uid) || (email.isNotBlank() && list.contains(email.trim().lowercase()))
+                            onResult(isRemoved)
+                        }
+                        .addOnFailureListener {
+                            onResult(false)
+                        }
+                }
+                .addOnFailureListener {
+                    onResult(false)
+                }
+        } else {
+            db.collection(TEAMS_COLLECTION).document(code).get()
+                .addOnSuccessListener { tSnap ->
+                    val list = (tSnap.get("removedMembers") as? List<*>)?.mapNotNull { it?.toString() }.orEmpty()
+                    val isRemoved = email.isNotBlank() && list.contains(email.trim().lowercase())
+                    onResult(isRemoved)
+                }
+                .addOnFailureListener {
+                    onResult(false)
+                }
+        }
     }
 
     private fun resolveMemberEmailAndAltUid(
@@ -3033,6 +3133,48 @@ object TeamRepository {
         } catch (_: Throwable) {
             emptyList()
         }
+    }
+
+    /**
+     * Fetches live team reports from Firestore (/teams/{teamCode}/reports) with local caching.
+     */
+    fun getTeamReports(
+        teamCode: String,
+        preferences: android.content.SharedPreferences? = null,
+        onResult: (List<Map<String, Any>>) -> Unit
+    ) {
+        val code = teamCode.trim().uppercase()
+        if (code.isBlank()) {
+            onResult(emptyList())
+            return
+        }
+
+        val cached = getCachedTeamReports(code, preferences)
+        if (cached.isNotEmpty()) {
+            onResult(cached)
+        }
+
+        db.collection(TEAMS_COLLECTION).document(code)
+            .collection(REPORTS_SUBCOLLECTION)
+            .get()
+            .addOnSuccessListener { query ->
+                val fetched = query.documents.mapNotNull { it.data }.sortedByDescending { doc ->
+                    (doc["createdAt"] as? Number)?.toLong() ?: 0L
+                }
+                if (fetched.isNotEmpty()) {
+                    cachedReports[code] = fetched.toMutableList()
+                    preferences?.edit()?.putString(
+                        "$PREFS_KEY_REPORTS_PREFIX$code",
+                        org.json.JSONArray(fetched).toString()
+                    )?.apply()
+                    onResult(fetched)
+                } else if (cached.isEmpty()) {
+                    onResult(emptyList())
+                }
+            }
+            .addOnFailureListener {
+                if (cached.isEmpty()) onResult(emptyList())
+            }
     }
 
     /**

@@ -23,6 +23,8 @@ rules_version = '2';
 //   - notificationsEnabled: bool (optional) - User's push/in-app notification preference
 //   - teamUnmuted: bool (optional) - Whether team chat/alerts are unmuted for this user
 //   - photoUri: string (optional, 0-500 chars) - Profile avatar URI or URL
+//   - removedByLeader: bool (optional) - Flag indicating user was removed from team by leader
+//   - removedTeamCode: string (optional, 0-128 chars) - Team code the user was removed from
 //   - createdAt: number | timestamp (optional, >= 0, immutable) - Account creation timestamp
 //   - joinedAt: number | timestamp (optional, >= 0) - Team join timestamp
 //
@@ -34,6 +36,7 @@ rules_version = '2';
 //   - leaderUid: string (required, 1-128 chars, matches creator auth.uid, immutable) - Leader's Firebase Auth UID
 //   - leaderName: string (required, 1-100 chars) - Full name or display name of the team leader
 //   - roles: list (optional, max 50 items) - Customized ministry roles list for the team
+//   - removedMembers: list (optional, max 200 items) - Member IDs or names removed by the leader
 //   - createdAt: number | timestamp (optional, >= 0, immutable) - Team creation timestamp
 //
 // Subcollection: teams/{teamCode}/announcements
@@ -256,7 +259,8 @@ service cloud.firestore {
         'uid', 'username', 'email', 'role', 'teamName', 'teamCode',
         'resetPassword', 'fullName', 'phone', 'country', 'language',
         'ministryRole', 'unavailableRanges', 'notificationsEnabled', 'teamUnmuted',
-        'fcmToken', 'photoUri', 'createdAt', 'joinedAt'
+        'fcmToken', 'photoUri', 'createdAt', 'joinedAt',
+        'removedByLeader', 'removedTeamCode'
       ]) &&
       hasRequiredFields(data, ['uid']) &&
       data.uid is string &&
@@ -279,6 +283,8 @@ service cloud.firestore {
       (!('teamUnmuted' in data) || data.teamUnmuted is bool) &&
       (!('fcmToken' in data) || (data.fcmToken is string && data.fcmToken.size() <= 500)) &&
       (!('photoUri' in data) || (data.photoUri is string && data.photoUri.size() <= 500)) &&
+      (!('removedByLeader' in data) || data.removedByLeader is bool) &&
+      (!('removedTeamCode' in data) || (data.removedTeamCode is string && data.removedTeamCode.size() <= 128)) &&
       (!('createdAt' in data) || (data.createdAt is number && data.createdAt >= 0) || (data.createdAt is timestamp)) &&
       (!('joinedAt' in data) || (data.joinedAt is number && data.joinedAt >= 0) || (data.joinedAt is timestamp));
     }
@@ -286,7 +292,7 @@ service cloud.firestore {
     // Strict validator for /teams/{teamCode} documents
     function isValidTeam(data, teamCode) {
       return hasOnlyAllowedFields(data, [
-        'teamCode', 'teamName', 'leaderUid', 'leaderName', 'roles', 'createdAt'
+        'teamCode', 'teamName', 'leaderUid', 'leaderName', 'roles', 'removedMembers', 'createdAt'
       ]) &&
       hasRequiredFields(data, ['teamCode', 'teamName', 'leaderUid', 'leaderName']) &&
       data.teamCode is string &&
@@ -302,6 +308,7 @@ service cloud.firestore {
       data.leaderName.size() > 0 &&
       data.leaderName.size() <= 100 &&
       (!('roles' in data) || (data.roles is list && data.roles.size() <= 50)) &&
+      (!('removedMembers' in data) || (data.removedMembers is list && data.removedMembers.size() <= 200)) &&
       (!('createdAt' in data) || (data.createdAt is number && data.createdAt >= 0) || (data.createdAt is timestamp));
     }
 
@@ -495,18 +502,19 @@ service cloud.firestore {
                          (
                            request.resource.data.diff(resource.data).affectedKeys().hasOnly(['unavailableRanges', 'notificationsEnabled', 'teamUnmuted', 'fcmToken', 'uid'])
                          ) ||
-                         // Context C: Team Leader updates a member's ministryRole or resets team membership
+                         // Context C: Team Leader updates a member's ministryRole or resets team membership / removal
                          (
                            'teamCode' in resource.data &&
                            isLeaderOfTeam(resource.data.teamCode) &&
                            (
                              request.resource.data.diff(resource.data).affectedKeys().hasOnly(['ministryRole']) ||
                              (
-                               request.resource.data.diff(resource.data).affectedKeys().hasOnly(['teamCode', 'teamName', 'ministryRole', 'role']) &&
+                               request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+                                 'teamCode', 'teamName', 'ministryRole', 'role',
+                                 'removedByLeader', 'removedTeamCode'
+                               ]) &&
                                request.resource.data.teamCode == '' &&
-                               request.resource.data.teamName == '' &&
-                               request.resource.data.ministryRole == '' &&
-                               request.resource.data.role == 'Member'
+                               (!('role' in request.resource.data) || request.resource.data.role == 'Member')
                              )
                            )
                          )
