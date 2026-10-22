@@ -100,6 +100,7 @@ class AdminActivity : AppCompatActivity() {
             com.example.syncedn.data.auth.SyncedFirebaseMessagingService.syncToken(this, preferences)
             if (code.isNotBlank()) {
                 com.example.syncedn.data.auth.SyncedFirebaseMessagingService.subscribeToTeam(code)
+                com.example.syncedn.data.auth.SyncedMessagingService.startRealtimeTeamWatchers(this, preferences)
             }
         }
     }
@@ -119,6 +120,7 @@ class AdminActivity : AppCompatActivity() {
         com.example.syncedn.data.auth.SyncedFirebaseMessagingService.syncToken(this, preferences)
         if (code.isNotBlank()) {
             com.example.syncedn.data.auth.SyncedFirebaseMessagingService.subscribeToTeam(code)
+                com.example.syncedn.data.auth.SyncedMessagingService.startRealtimeTeamWatchers(this, preferences)
         }
     }
 
@@ -238,6 +240,7 @@ class AdminActivity : AppCompatActivity() {
         FirestoreManager.cacheUserRoleAndTeam(uid, emailLower, role, team, code)
         if (code.isNotBlank()) {
             com.example.syncedn.data.auth.SyncedFirebaseMessagingService.subscribeToTeam(code)
+                com.example.syncedn.data.auth.SyncedMessagingService.startRealtimeTeamWatchers(this, preferences)
             com.example.syncedn.data.auth.SyncedFirebaseMessagingService.syncToken(this, preferences)
         }
         preferences.edit {
@@ -5589,6 +5592,7 @@ class AdminActivity : AppCompatActivity() {
                     val activeCode = preferences.getString("teamCode", "").orEmpty()
                     if (activeCode.isNotBlank()) {
                         com.example.syncedn.data.auth.SyncedFirebaseMessagingService.unsubscribeFromTeam(activeCode)
+                        com.example.syncedn.data.auth.SyncedMessagingService.stopRealtimeTeamWatchers()
                     }
                     if (uid.isNotBlank()) {
                         TeamRepository.leaveTeam(uid) {}
