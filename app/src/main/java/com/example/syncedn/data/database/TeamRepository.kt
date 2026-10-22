@@ -1484,6 +1484,51 @@ object TeamRepository {
     // Worship Services Management & Caching
     // ===============================================================
 
+    private fun resolveFallbackCoverImageUrl(
+        teamCode: String,
+        serviceId: String,
+        serviceTitle: String,
+        preferences: android.content.SharedPreferences?
+    ): String {
+        val code = teamCode.trim().uppercase()
+        cachedServices[code]?.let { mem ->
+            val found = synchronized(mem) {
+                mem.find { (serviceId.isNotBlank() && it.id == serviceId) || (serviceTitle.isNotBlank() && it.title.equals(serviceTitle, true)) }
+            }
+            if (found != null && found.coverImageUrl.isNotBlank()) return found.coverImageUrl
+        }
+        val prefs = preferences ?: return ""
+        try {
+            val draftStr = prefs.getString("leaderDraft", null)
+            if (!draftStr.isNullOrBlank()) {
+                val draftObj = org.json.JSONObject(draftStr)
+                val dId = draftObj.optString("id")
+                val dTitle = draftObj.optString("title")
+                val dCover = draftObj.optString("coverImageUrl")
+                if (dCover.isNotBlank() && ((serviceId.isNotBlank() && dId == serviceId) || (serviceTitle.isNotBlank() && dTitle.equals(serviceTitle, true)))) {
+                    return dCover
+                }
+            }
+        } catch (_: Throwable) {}
+        try {
+            val lStr = prefs.getString("leaderServices", null)
+            if (!lStr.isNullOrBlank()) {
+                val arr = org.json.JSONArray(lStr)
+                for (i in 0 until arr.length()) {
+                    val obj = arr.optJSONObject(i) ?: continue
+                    val oId = obj.optString("id")
+                    val oTitle = obj.optString("title")
+                    val oCover = obj.optString("coverImageUrl")
+                    if (oCover.isNotBlank() && ((serviceId.isNotBlank() && oId == serviceId) || (serviceTitle.isNotBlank() && oTitle.equals(serviceTitle, true)))) {
+                        return oCover
+                    }
+                }
+            }
+        } catch (_: Throwable) {}
+        return ""
+    }
+    // ===============================================================
+
     /**
      * Saves or updates a service in the local in-memory cache and SharedPreferences.
      */
@@ -1605,7 +1650,13 @@ object TeamRepository {
                             map[key] = value
                         }
                     }
-                    val srv = ServiceData.fromMap(map)
+                    var srv = ServiceData.fromMap(map)
+                    if (srv.coverImageUrl.isBlank()) {
+                        val fallbackCover = resolveFallbackCoverImageUrl(code, srv.id, srv.title, preferences)
+                        if (fallbackCover.isNotBlank()) {
+                            srv = srv.copy(coverImageUrl = fallbackCover)
+                        }
+                    }
                     if (srv.id.isNotBlank()) list.add(srv)
                 }
                 if (list.isNotEmpty()) {
@@ -1684,7 +1735,16 @@ object TeamRepository {
                     val remoteList = mutableListOf<ServiceData>()
                     for (doc in snapshot.documents) {
                         val data = doc.data ?: continue
-                        val srv = ServiceData.fromMap(data).copy(id = doc.id)
+                        var srv = ServiceData.fromMap(data).copy(id = doc.id)
+                        if (srv.coverImageUrl.isBlank()) {
+                            val fallbackCover = resolveFallbackCoverImageUrl(code, srv.id, srv.title, preferences)
+                            if (fallbackCover.isNotBlank()) {
+                                srv = srv.copy(coverImageUrl = fallbackCover)
+                                if (isLeader) {
+                                    try { doc.reference.set(mapOf("coverImageUrl" to fallbackCover), com.google.firebase.firestore.SetOptions.merge()) } catch (_: Throwable) {}
+                                }
+                            }
+                        }
                         remoteList.add(srv)
                     }
                     val memList = cachedServices.getOrPut(code) { java.util.Collections.synchronizedList(mutableListOf()) }
@@ -2890,7 +2950,17 @@ object TeamRepository {
                 val list = mutableListOf<ServiceData>()
                 for (doc in snapshot.documents) {
                     val data = doc.data ?: continue
-                    list.add(ServiceData.fromMap(data).copy(id = doc.id))
+                    var srv = ServiceData.fromMap(data).copy(id = doc.id)
+                    if (srv.coverImageUrl.isBlank()) {
+                        val fallbackCover = resolveFallbackCoverImageUrl(code, srv.id, srv.title, preferences)
+                        if (fallbackCover.isNotBlank()) {
+                            srv = srv.copy(coverImageUrl = fallbackCover)
+                            if (isLeader) {
+                                try { doc.reference.set(mapOf("coverImageUrl" to fallbackCover), com.google.firebase.firestore.SetOptions.merge()) } catch (_: Throwable) {}
+                            }
+                        }
+                    }
+                    list.add(srv)
                 }
                 list.sortBy { it.date }
                 saveServicesLocally(code, list, preferences)
