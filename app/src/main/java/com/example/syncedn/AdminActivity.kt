@@ -391,7 +391,21 @@ class AdminActivity : AppCompatActivity() {
             servicesListener = TeamRepository.subscribeToServices(activeCode, isLeader = true, preferences) { list ->
                 runOnUiThread {
                     localServices.clear()
-                    list.forEach { localServices.add(org.json.JSONObject(it.toMap())) }
+                    list.forEach { srv ->
+                        val obj = org.json.JSONObject()
+                        srv.toMap().forEach { (k, v) ->
+                            if (v is List<*>) {
+                                val arr = org.json.JSONArray()
+                                v.forEach { c -> if (c is Map<*, *>) arr.put(org.json.JSONObject(c)) else arr.put(c) }
+                                obj.put(k, arr)
+                            } else if (v is Map<*, *>) {
+                                obj.put(k, org.json.JSONObject(v))
+                            } else {
+                                obj.put(k, v)
+                            }
+                        }
+                        localServices.add(obj)
+                    }
                     if (page in listOf("home", "schedule")) {
                         navigate(page, triggerRefresh = false)
                     }
@@ -1489,7 +1503,11 @@ class AdminActivity : AppCompatActivity() {
         val published = localServices.filter { it.optString("status") == "Published" }
         val upcoming = published.filter { it.optString("date") >= today }.sortedWith(compareBy({ it.optString("date") }, { it.optString("start") }))
         if (upcoming.isNotEmpty()) {
-            return upcoming.first()
+            val first = upcoming.first()
+            if (first.optString("coverImageUrl").isBlank() && leaderDraft.optString("id") == first.optString("id") && leaderDraft.optString("coverImageUrl").isNotBlank()) {
+                first.put("coverImageUrl", leaderDraft.optString("coverImageUrl"))
+            }
+            return first
         }
         return published.maxByOrNull { it.optString("date") + it.optString("start") }
     }
@@ -1663,7 +1681,7 @@ class AdminActivity : AppCompatActivity() {
             val imgView = ImageView(this@AdminActivity).apply {
                 scaleType = ImageView.ScaleType.CENTER_CROP
                 if (coverUrl.isNotBlank()) {
-                    com.example.syncedn.data.storage.ImageLoader.loadProfilePhoto(this, coverUrl, circular = false, maxDimension = 800)
+                    com.example.syncedn.data.storage.ImageLoader.loadProfilePhoto(this, coverUrl, placeholderResId = R.drawable.worship_hero_bg, circular = false, maxDimension = 800)
                 } else {
                     setImageResource(R.drawable.worship_hero_bg)
                 }
@@ -2302,6 +2320,10 @@ class AdminActivity : AppCompatActivity() {
                     result.onSuccess { remoteUrl ->
                         leaderDraft.put("coverImageUrl", remoteUrl)
                         saveLeaderDraft()
+                        if (leaderDraft.optString("id").isNotBlank()) {
+                            storeService(leaderDraft.optString("status").ifBlank { "Published" }, navigateAfter = false)
+                        }
+                        saveLeaderDraft()
                         toast("Cover photo uploaded to Cloudinary!")
                         if (page == "createService" || page == "reviewService" || page == "service") {
                             navigate(page)
@@ -2560,7 +2582,7 @@ class AdminActivity : AppCompatActivity() {
                         localServices.clear()
                         localServices.addAll(newRecords)
                         if (changed) {
-                            if (page == "schedule") {
+                            if (page in listOf("home", "schedule")) {
                                 navigate(page, triggerRefresh = false)
                             }
                         }
@@ -2734,7 +2756,7 @@ class AdminActivity : AppCompatActivity() {
         col.space(24)
         col.add(dualButtons("Back", back, nextLabel, next))
     }
-    private fun createServiceView(): View = memberPage("New Service", "home") { col ->
+    private fun createServiceView(): View = memberPage("New Service", if (serviceWizard) "home" else "service") { col ->
         col.space(16)
         val title = plainInput("Service title").apply { setText(leaderDraft.optString("title")) }
         val date = dateField(leaderDraft.optString("date", "2026-10-11"))
@@ -2787,13 +2809,17 @@ class AdminActivity : AppCompatActivity() {
                         type = "image/*"
                         addCategory(Intent.CATEGORY_OPENABLE)
                     }
+                    leaderDraft.put("title", title.text.toString().trim()).put("date", date.text.toString())
+                        .put("start", start.text.toString()).put("end", end.text.toString())
+                        .put("venue", venue.text.toString().trim())
+                    saveLeaderDraft()
                     startActivityForResult(intent, 302)
                 }
             }
             add(pickBtn, -2, 36)
         }
         col.add(coverContainer, -1, -2)
-        stepActions(col, { navigate("home") }) {
+        stepActions(col, { navigate(if (serviceWizard) "home" else "service") }, if (serviceWizard) "Next" else "Save") {
             when {
                 title.text.isBlank() -> invalid(title, "Enter a service title.")
                 venue.text.isBlank() -> invalid(venue, "Enter a venue.")
@@ -2802,7 +2828,14 @@ class AdminActivity : AppCompatActivity() {
                     leaderDraft.put("title", title.text.toString().trim()).put("date", date.text.toString())
                         .put("start", start.text.toString()).put("end", end.text.toString())
                         .put("venue", venue.text.toString().trim())
-                    saveLeaderDraft(); navigate("memberAvailability")
+                    if (serviceWizard) {
+                        saveLeaderDraft(); navigate("memberAvailability")
+                    } else {
+                        saveLeaderDraft()
+                        storeService(leaderDraft.optString("status").ifBlank { "Published" }, navigateAfter = false)
+                        toast("Service details updated.")
+                        navigate("service")
+                    }
                 }
             }
         }
@@ -3046,7 +3079,7 @@ class AdminActivity : AppCompatActivity() {
                             }
                         }
                         toast("Service deleted.")
-                        navigate("schedule")
+                                navigate("schedule")
                     }
                     .setNegativeButton("Cancel", null)
                     .show()
@@ -3231,12 +3264,14 @@ class AdminActivity : AppCompatActivity() {
         }
         return conflicts
     }
-    private fun storeService(status: String) {
+    private fun storeService(status: String, navigateAfter: Boolean = true) {
         leaderDraft.put("status", status)
         val srvId = leaderDraft.optString("id").ifBlank { "srv_" + System.currentTimeMillis() }
         leaderDraft.put("id", srvId)
         val record = org.json.JSONObject(leaderDraft.toString())
-        if (activeServiceIndex in localServices.indices) localServices[activeServiceIndex] = record
+        val existingIdx = localServices.indexOfFirst { it.optString("id") == srvId }
+        if (existingIdx >= 0) { localServices[existingIdx] = record; activeServiceIndex = existingIdx }
+        else if (activeServiceIndex in localServices.indices) localServices[activeServiceIndex] = record
         else { localServices.add(record); activeServiceIndex = localServices.lastIndex }
         val records = org.json.JSONArray(); localServices.forEach { records.put(it) }
         preferences.edit().putString("leaderServices", records.toString()).apply()
@@ -3322,8 +3357,11 @@ class AdminActivity : AppCompatActivity() {
             }
         }
 
-        toast(if (status == "Published") "Schedule published." else "Draft saved.")
-        navigate("schedule")
+        if (navigateAfter) {
+            toast(if (status == "Published") "Schedule published." else "Draft saved.")
+            navigate("schedule")
+        }
+
     }
     private fun reviewServiceView(): View = memberPage("Review Service", "scheduleRehearsal") { col ->
         col.add(serviceSummary()); col.space(16)
@@ -3382,7 +3420,7 @@ class AdminActivity : AppCompatActivity() {
                             }
                         }
                         toast("Service deleted.")
-                        navigate("schedule")
+                                navigate("schedule")
                     }
                     .setNegativeButton("Cancel", null)
                     .show()
@@ -4615,7 +4653,7 @@ class AdminActivity : AppCompatActivity() {
                 refreshTeamServices(force = true)
                 postDelayed({
                     isRefreshing = false
-                    navigate("schedule")
+                            navigate("schedule")
                 }, 900)
             }
         }
@@ -5368,7 +5406,7 @@ class AdminActivity : AppCompatActivity() {
                     .show()
             }
         }
-        notifHeader.add(clearBtn)
+        notifHeader.add(clearBtn, -2, -2)
         col.add(notifHeader); col.space(12)
         recentNotificationsList(col)
 
@@ -5432,7 +5470,7 @@ class AdminActivity : AppCompatActivity() {
                         background = bg(Color.rgb(217, 119, 6), 6)
                         setPadding(dp(8), dp(4), dp(8), dp(4))
                     }
-                    headerRow.add(statusBadge)
+                    headerRow.add(statusBadge, -2, -2)
                     add(headerRow); space(10)
 
                     val reasonText = if (req.reason.isNotBlank()) req.reason else "Requesting to re-join the team."
@@ -5560,7 +5598,7 @@ class AdminActivity : AppCompatActivity() {
                         navigate("notifications")
                     }
                 }
-                row.add(delBtn)
+                row.add(delBtn, -2, -2)
                 add(row)
             }); col.space(12)
         }

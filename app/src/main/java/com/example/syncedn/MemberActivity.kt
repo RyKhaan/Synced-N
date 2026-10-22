@@ -1772,7 +1772,7 @@ open class MemberActivity : AppCompatActivity() {
             val imgView = ImageView(this@MemberActivity).apply {
                 scaleType = ImageView.ScaleType.CENTER_CROP
                 if (coverUrl.isNotBlank()) {
-                    com.example.syncedn.data.storage.ImageLoader.loadProfilePhoto(this, coverUrl, circular = false, maxDimension = 800)
+                    com.example.syncedn.data.storage.ImageLoader.loadProfilePhoto(this, coverUrl, placeholderResId = R.drawable.worship_hero_bg, circular = false, maxDimension = 800)
                 } else {
                     setImageResource(R.drawable.worship_hero_bg)
                 }
@@ -4226,7 +4226,7 @@ space(48)
                     .show()
             }
         }
-        notifHeader.add(clearBtn)
+        notifHeader.add(clearBtn, -2, -2)
         col.add(notifHeader); col.space(12)
         recentNotificationsList(col)
 
@@ -4282,7 +4282,7 @@ space(48)
                         navigate("notifications")
                     }
                 }
-                row.add(delBtn)
+                row.add(delBtn, -2, -2)
                 add(row)
             }); col.space(12)
         }
