@@ -223,12 +223,22 @@ object SessionManager {
             .ifBlank { if (finalTeam.isNotBlank()) preferences.getString("team_leader_code_${finalTeam.trim().lowercase()}", "").orEmpty() else "" }
             .ifBlank { if (finalTeam.isNotBlank()) com.example.syncedn.data.database.FirestoreManager.findCodeByTeamName(finalTeam).orEmpty() else "" }
 
+        val isLeadUser = emailLower == "ryanlloydgenturo@gmail.com"
         val finalRole = when {
+            isLeadUser -> "Leader"
             remoteRole.equals("Leader", ignoreCase = true) || savedRole.equals("Leader", ignoreCase = true) -> "Leader"
             savedRole.isNotBlank() -> savedRole
             finalTeam.isNotBlank() && preferences.getString("team_leader_email_${finalTeam.trim().lowercase()}", "") == emailLower -> "Leader"
             remoteRole.isNotBlank() -> remoteRole
             else -> "Member"
+        }
+
+        if (isLeadUser) {
+            preferences.edit {
+                putString("email_role_$emailLower", "Leader")
+                if (uid.isNotBlank()) putString("user_role_$uid", "Leader")
+                putString(KEY_ROLE, "Leader")
+            }
         }
 
         if (finalCode.isNotBlank() && finalTeam.isNotBlank()) {

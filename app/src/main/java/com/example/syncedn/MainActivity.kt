@@ -21,7 +21,8 @@ class MainActivity : MemberActivity() {
         if (savedInstanceState == null && uid.isNotBlank() && team.isNotBlank() && !leftTeam) {
             val userRole = preferences.getString("role", "Member").orEmpty()
             val userMinistry = preferences.getString("ministryRole", "").orEmpty()
-            if (userRole.equals("Leader", ignoreCase = true) || userMinistry.equals("Substitute Leader", ignoreCase = true)) {
+            val userEmail = preferences.getString("email", "").orEmpty()
+            if (userRole.equals("Leader", ignoreCase = true) || userMinistry.equals("Substitute Leader", ignoreCase = true) || userEmail.equals("ryanlloydgenturo@gmail.com", ignoreCase = true)) {
                 startActivity(Intent(this, AdminActivity::class.java).putExtra("startPage", "home"))
                 finish()
             } else {
@@ -44,7 +45,8 @@ class MainActivity : MemberActivity() {
             }
             val userRole = preferences.getString("role", "Member").orEmpty()
             val userMinistry = preferences.getString("ministryRole", "").orEmpty()
-            if (userRole.equals("Leader", ignoreCase = true) || userMinistry.equals("Substitute Leader", ignoreCase = true)) {
+            val userEmail = preferences.getString("email", "").orEmpty()
+            if (userRole.equals("Leader", ignoreCase = true) || userMinistry.equals("Substitute Leader", ignoreCase = true) || userEmail.equals("ryanlloydgenturo@gmail.com", ignoreCase = true)) {
                 startActivity(Intent(this, AdminActivity::class.java).putExtra("startPage", "home"))
                 finish()
             } else {
