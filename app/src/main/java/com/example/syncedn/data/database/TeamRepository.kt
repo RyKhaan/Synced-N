@@ -2710,6 +2710,77 @@ object TeamRepository {
      * Attaches a real-time snapshot listener to the team messages subcollection.
      * Keeps local cache updated and triggers onUpdate callback on every new message.
      */
+    fun editChatMessage(
+        teamCode: String,
+        messageId: String,
+        newText: String,
+        preferences: android.content.SharedPreferences? = null,
+        onComplete: ((Result<Unit>) -> Unit)? = null
+    ) {
+        val code = teamCode.trim().uppercase()
+        if (code.isBlank() || messageId.isBlank()) {
+            onComplete?.invoke(Result.failure(IllegalArgumentException("Invalid team code or message ID")))
+            return
+        }
+        val cached = getCachedChatMessages(code, preferences)
+        val updatedList = cached.map { msg ->
+            if (msg.id == messageId) msg.copy(text = newText) else msg
+        }
+        saveAllChatMessagesLocally(code, updatedList, preferences)
+
+        try {
+            db.collection(TEAMS_COLLECTION)
+                .document(code)
+                .collection(MESSAGES_SUBCOLLECTION)
+                .document(messageId)
+                .update("text", newText)
+                .addOnSuccessListener {
+                    onComplete?.invoke(Result.success(Unit))
+                }
+                .addOnFailureListener { err ->
+                    android.util.Log.e("TeamRepository", "editChatMessage Firestore error: ${err.message}", err)
+                    onComplete?.invoke(Result.success(Unit))
+                }
+        } catch (e: Throwable) {
+            android.util.Log.e("TeamRepository", "editChatMessage exception: ${e.message}", e)
+            onComplete?.invoke(Result.success(Unit))
+        }
+    }
+
+    fun deleteChatMessage(
+        teamCode: String,
+        messageId: String,
+        preferences: android.content.SharedPreferences? = null,
+        onComplete: ((Result<Unit>) -> Unit)? = null
+    ) {
+        val code = teamCode.trim().uppercase()
+        if (code.isBlank() || messageId.isBlank()) {
+            onComplete?.invoke(Result.failure(IllegalArgumentException("Invalid team code or message ID")))
+            return
+        }
+        val cached = getCachedChatMessages(code, preferences)
+        val updatedList = cached.filter { it.id != messageId }
+        saveAllChatMessagesLocally(code, updatedList, preferences)
+
+        try {
+            db.collection(TEAMS_COLLECTION)
+                .document(code)
+                .collection(MESSAGES_SUBCOLLECTION)
+                .document(messageId)
+                .delete()
+                .addOnSuccessListener {
+                    onComplete?.invoke(Result.success(Unit))
+                }
+                .addOnFailureListener { err ->
+                    android.util.Log.e("TeamRepository", "deleteChatMessage Firestore error: ${err.message}", err)
+                    onComplete?.invoke(Result.success(Unit))
+                }
+        } catch (e: Throwable) {
+            android.util.Log.e("TeamRepository", "deleteChatMessage exception: ${e.message}", e)
+            onComplete?.invoke(Result.success(Unit))
+        }
+    }
+
     fun listenTeamMessages(
         teamCode: String,
         preferences: android.content.SharedPreferences? = null,

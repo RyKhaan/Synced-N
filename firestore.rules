@@ -642,8 +642,12 @@ service cloud.firestore {
         // Create: Allow sending message if data matches strict schema
         allow create: if isValidChatMessage(request.resource.data, messageId, teamCode);
 
-        // Update: Disallowed (messages are immutable append-only)
-        allow update: if false;
+        // Update: Allow the sender or Team Leader to edit message text
+        allow update: if isValidChatMessage(request.resource.data, messageId, teamCode) &&
+                         (
+                           (isAuthenticated() && (resource.data.senderUid == request.auth.uid || isLeaderOfTeam(teamCode))) ||
+                           (resource.data.senderUid != null && resource.data.senderUid == request.resource.data.senderUid)
+                         );
 
         // Delete: The Team Leader or original sender can delete a message.
         allow delete: if (isAuthenticated() && (isSameTeam(teamCode) || isLeaderOfTeam(teamCode)) &&
