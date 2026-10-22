@@ -1,0 +1,78 @@
+name: Android CI/CD & APK Release
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    name: Build, Test & Publish Synced N APK
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 25 (Temurin / Foojay)
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '25'
+
+      - name: Setup Gradle Cache
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Grant Execute Permission for Gradlew
+        run: chmod +x gradlew
+
+      - name: Run Unit Tests
+        run: ./gradlew testDebugUnitTest --no-daemon
+
+      - name: Build Debug & Release APKs
+        run: ./gradlew assembleDebug assembleRelease --no-daemon
+
+      - name: Prepare Versioned APK Artifacts
+        run: |
+          mkdir -p dist
+          cp app/build/outputs/apk/debug/app-debug.apk dist/SyncedN-v1.0-debug.apk
+          cp app/build/outputs/apk/release/app-release.apk dist/SyncedN-v1.0-release.apk
+
+      - name: Upload APK Build Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: SyncedN-v1.0-APKs
+          path: |
+            dist/SyncedN-v1.0-release.apk
+            dist/SyncedN-v1.0-debug.apk
+          if-no-files-found: error
+
+      - name: Publish to GitHub Releases (Continuous Deployment)
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v1.0.0
+          name: "Synced N v1.0.0 — Latest Production & UAT APK Build"
+          body: |
+            ## Synced N — Church Music Ministry Scheduling & Song Management App
+            **Package ID:** `com.example.syncedn` | **Min SDK:** Android 7.0 (API 24) | **Target SDK:** API 37
+
+            ### Direct APK Downloads (For Group Testing & UAT)
+            - **Production Release APK (Recommended):** `SyncedN-v1.0-release.apk`
+            - **Debug APK:** `SyncedN-v1.0-debug.apk`
+
+            ### Cloud Backend & Production Services Connected
+            - **Authentication:** Firebase Authentication (Email/Password + Google OAuth 2.0)
+            - **Database:** Google Cloud Firestore (`/users`, `/teams`, `/services`, `/songs`, `/substitutions`, `/announcements`, `/messages`, `/reports`)
+            - **Media Storage CDN:** Cloudinary (`ffb3fdkm` / `synced_preset`)
+            - **Email OTP Relay:** Brevo Transactional SMTP REST API
+          files: |
+            dist/SyncedN-v1.0-release.apk
+            dist/SyncedN-v1.0-debug.apk
+          prerelease: false
+          make_latest: true
