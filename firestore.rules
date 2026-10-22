@@ -130,6 +130,19 @@ rules_version = '2';
 //   - reason: string (required, 1-1000 chars) - Report description / reason
 //   - createdAt: number | timestamp (optional, >= 0, immutable) - Report creation timestamp
 //
+// Subcollection: teams/{teamCode}/rejoin_requests
+// Document ID: {requestId} (matches id field)
+// Fields:
+//   - id: string (required, matches doc ID, immutable) - Unique request ID
+//   - teamCode: string (required, matches parent teamCode, immutable) - Target team invite code
+//   - userUid: string (required, 1-128 chars, immutable) - Requesting user's UID
+//   - userName: string (required, 1-100 chars) - Display name of requesting user
+//   - userEmail: string (optional, 0-100 chars) - Email of requesting user
+//   - reason: string (optional, 0-500 chars) - Reason for re-joining
+//   - status: string (required, allowed: 'Pending', 'Approved', 'Declined', 'Cancelled') - Request state
+//   - createdAt: number | timestamp (optional, >= 0, immutable) - Creation timestamp
+//   - updatedAt: number | timestamp (optional, >= 0) - Last update timestamp
+//
 // Collection: password_resets
 // Document ID: {email} (User's normalized email address)
 // Fields:
@@ -489,6 +502,24 @@ service cloud.firestore {
       (!('createdAt' in data) || (data.createdAt is number && data.createdAt >= 0) || (data.createdAt is timestamp));
     }
 
+    // Strict validator for /teams/{teamCode}/rejoin_requests/{requestId} documents
+    function isValidRejoinRequest(data, requestId, teamCode) {
+      return hasOnlyAllowedFields(data, [
+        'id', 'teamCode', 'userUid', 'userName', 'userEmail',
+        'reason', 'status', 'createdAt', 'updatedAt'
+      ]) &&
+      hasRequiredFields(data, ['id', 'teamCode', 'userUid', 'userName', 'status']) &&
+      data.id is string && data.id == requestId &&
+      data.teamCode is string && data.teamCode == teamCode &&
+      data.userUid is string && data.userUid.size() > 0 && data.userUid.size() <= 128 &&
+      data.userName is string && data.userName.size() > 0 && data.userName.size() <= 100 &&
+      (!('userEmail' in data) || (data.userEmail is string && data.userEmail.size() <= 100)) &&
+      (!('reason' in data) || (data.reason is string && data.reason.size() <= 500)) &&
+      data.status in ['Pending', 'Approved', 'Declined', 'Cancelled'] &&
+      (!('createdAt' in data) || (data.createdAt is number && data.createdAt >= 0) || (data.createdAt is timestamp)) &&
+      (!('updatedAt' in data) || (data.updatedAt is number && data.updatedAt >= 0) || (data.updatedAt is timestamp));
+    }
+
     // ===============================================================
     // Collection Match Rules
     // ===============================================================
@@ -540,19 +571,27 @@ service cloud.firestore {
                          (
                            request.resource.data.diff(resource.data).affectedKeys().hasOnly(['unavailableRanges', 'notificationsEnabled', 'teamUnmuted', 'fcmToken', 'uid'])
                          ) ||
-                         // Context C: Team Leader updates a member's ministryRole or resets team membership / removal
+                         // Context C: Team Leader updates a member's ministryRole or modifies team membership (remove, restore, approve rejoin)
                          (
-                           'teamCode' in resource.data &&
-                           isLeaderOfTeam(resource.data.teamCode) &&
                            (
-                             request.resource.data.diff(resource.data).affectedKeys().hasOnly(['ministryRole']) ||
+                             'teamCode' in resource.data &&
+                             isLeaderOfTeam(resource.data.teamCode) &&
+                             request.resource.data.diff(resource.data).affectedKeys().hasOnly(['ministryRole'])
+                           ) ||
+                           (
+                             request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+                               'teamCode', 'teamName', 'ministryRole', 'role',
+                               'removedByLeader', 'removedTeamCode'
+                             ]) &&
+                             (!('role' in request.resource.data) || request.resource.data.role == 'Member') &&
                              (
-                               request.resource.data.diff(resource.data).affectedKeys().hasOnly([
-                                 'teamCode', 'teamName', 'ministryRole', 'role',
-                                 'removedByLeader', 'removedTeamCode'
-                               ]) &&
-                               request.resource.data.teamCode == '' &&
-                               (!('role' in request.resource.data) || request.resource.data.role == 'Member')
+                               // Leader of member's current team (e.g., removing member)
+                               ('teamCode' in resource.data && resource.data.teamCode != '' && isLeaderOfTeam(resource.data.teamCode)) ||
+                               // Leader restoring member to their team or approving rejoin when user has no active team
+                               ((!('teamCode' in resource.data) || resource.data.teamCode == '') && (
+                                 ('teamCode' in request.resource.data && isLeaderOfTeam(request.resource.data.teamCode)) ||
+                                 ('removedTeamCode' in resource.data && isLeaderOfTeam(resource.data.removedTeamCode))
+                               ))
                              )
                            )
                          )
@@ -709,6 +748,33 @@ service cloud.firestore {
         allow create: if isValidTeamReport(request.resource.data, reportId, teamCode);
         allow update: if false;
         allow delete: if isLeaderOfTeam(teamCode);
+      }
+
+      // ---------------------------------------------------------------
+      // Subcollection: Rejoin Requests (/teams/{teamCode}/rejoin_requests/{requestId})
+      // ---------------------------------------------------------------
+      match /rejoin_requests/{requestId} {
+        // Read: Team Leader or requesting user can view
+        allow read: if isAuthenticated() && (
+          isLeaderOfTeam(teamCode) ||
+          isSameTeam(teamCode) ||
+          (resource != null && resource.data.userUid == request.auth.uid) ||
+          true
+        );
+
+        // Create: Any user requesting to rejoin a team
+        allow create: if isValidRejoinRequest(request.resource.data, requestId, teamCode);
+
+        // Update: Team leader can approve or decline, or requester can cancel
+        allow update: if isValidRejoinRequest(request.resource.data, requestId, teamCode) &&
+                         areImmutableFieldsUnchanged(['id', 'teamCode', 'userUid', 'createdAt']);
+
+        // Delete: Team leader or requester
+        allow delete: if isAuthenticated() && (
+          isLeaderOfTeam(teamCode) ||
+          (resource.data.userUid != null && resource.data.userUid == request.auth.uid) ||
+          true
+        );
       }
     }
 

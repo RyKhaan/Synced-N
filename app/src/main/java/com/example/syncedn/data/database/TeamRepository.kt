@@ -7,6 +7,7 @@ import com.example.syncedn.data.model.SongData
 import com.example.syncedn.data.model.SubstitutionData
 import com.example.syncedn.data.model.TeamData
 import com.example.syncedn.data.model.TeamMember
+import com.example.syncedn.data.model.RejoinRequestData
 import com.example.syncedn.data.model.UnavailableRange
 import com.example.syncedn.data.model.UserProfile
 import com.google.firebase.firestore.FirebaseFirestore
@@ -28,6 +29,7 @@ object TeamRepository {
     private const val SUBSTITUTIONS_SUBCOLLECTION = "substitutions"
     private const val MESSAGES_SUBCOLLECTION = "messages"
     private const val REPORTS_SUBCOLLECTION = "reports"
+    private const val REJOIN_REQUESTS_SUBCOLLECTION = "rejoin_requests"
     private const val PREFS_KEY_MESSAGES_PREFIX = "cached_messages_"
     private const val PREFS_KEY_ROSTER_PREFIX = "cached_roster_"
     private const val PREFS_KEY_REPORTS_PREFIX = "cached_reports_"
@@ -57,6 +59,7 @@ object TeamRepository {
 
     private val cachedChatMessages = java.util.concurrent.ConcurrentHashMap<String, MutableList<ChatMessage>>()
     private val cachedReports = java.util.concurrent.ConcurrentHashMap<String, MutableList<Map<String, Any>>>()
+    private val cachedRejoinRequests = java.util.concurrent.ConcurrentHashMap<String, MutableList<RejoinRequestData>>()
 
     data class TeamNotificationItem(
         val id: String,
@@ -91,6 +94,7 @@ object TeamRepository {
         substitutionsInFlight.clear()
         cachedChatMessages.clear()
         cachedReports.clear()
+        cachedRejoinRequests.clear()
     }
 
     fun serializeRangesJson(ranges: List<UnavailableRange>): String {
@@ -285,9 +289,26 @@ object TeamRepository {
     fun getCachedRoster(teamCode: String, preferences: android.content.SharedPreferences?): List<TeamMember> {
         val code = teamCode.trim().uppercase()
         if (code.isBlank()) return emptyList()
+
+        val removedSet = mutableSetOf<String>()
+        if (preferences != null) {
+            preferences.getStringSet("team_removed_members_$code", null)?.let { s ->
+                removedSet.addAll(s.map { it.trim().lowercase() })
+            }
+            preferences.getStringSet("removedMembers", null)?.let { s ->
+                removedSet.addAll(s.map { it.trim().lowercase() })
+            }
+        }
+
         val list = cachedRosters[code]
         if (!list.isNullOrEmpty()) {
-            return synchronized(list) { list.toList() }
+            return synchronized(list) {
+                if (removedSet.isEmpty()) list.toList()
+                else list.filter { m ->
+                    m.uid.trim().lowercase() !in removedSet &&
+                    (m.email.isBlank() || m.email.trim().lowercase() !in removedSet)
+                }.toList()
+            }
         }
         if (preferences != null) {
             val json = preferences.getString("$PREFS_KEY_ROSTER_PREFIX$code", null)
@@ -304,13 +325,17 @@ object TeamRepository {
                             map[k] = obj.opt(k)
                         }
                         val parsedMember = TeamMember.fromMap(map)
+                        val mUid = parsedMember.uid.trim().lowercase()
+                        val mEmail = parsedMember.email.trim().lowercase()
+                        if (removedSet.isNotEmpty() && (mUid in removedSet || (mEmail.isNotBlank() && mEmail in removedSet))) {
+                            continue
+                        }
                         if (parsedMember.unavailableRanges.isNotEmpty()) {
                             if (parsedMember.uid.isNotBlank()) {
                                 cachedUserRanges[parsedMember.uid] = java.util.Collections.synchronizedList(parsedMember.unavailableRanges.toMutableList())
                             }
-                            val emailLower = parsedMember.email.trim().lowercase()
-                            if (emailLower.isNotBlank()) {
-                                cachedUserRanges["email_$emailLower"] = java.util.Collections.synchronizedList(parsedMember.unavailableRanges.toMutableList())
+                            if (mEmail.isNotBlank()) {
+                                cachedUserRanges["email_$mEmail"] = java.util.Collections.synchronizedList(parsedMember.unavailableRanges.toMutableList())
                             }
                         }
                         result.add(parsedMember)
@@ -503,59 +528,82 @@ object TeamRepository {
         } catch (_: Exception) {}
 
         try {
-            db.collection(USERS_COLLECTION)
-                .whereEqualTo("teamCode", code)
-                .get()
-                .addOnSuccessListener { snapshot ->
-                    val rawMembers = mutableListOf<TeamMember>()
-                    if (snapshot != null) {
-                        for (doc in snapshot.documents) {
-                            val data = doc.data ?: continue
-                            val mapWithId = data.toMutableMap()
-                            val uidFromDoc = (mapWithId["uid"] as? String)?.ifBlank { doc.id } ?: doc.id
-                            mapWithId["uid"] = uidFromDoc
-                            rawMembers.add(TeamMember.fromMap(mapWithId))
+            db.collection(TEAMS_COLLECTION).document(code).get()
+                .addOnCompleteListener { tTask ->
+                    val teamRemovedSet = mutableSetOf<String>()
+                    if (tTask.isSuccessful && tTask.result != null) {
+                        val list = (tTask.result.get("removedMembers") as? List<*>)?.mapNotNull { it?.toString()?.trim()?.lowercase() }.orEmpty()
+                        teamRemovedSet.addAll(list)
+                    }
+                    if (preferences != null) {
+                        preferences.getStringSet("team_removed_members_$code", null)?.let { s ->
+                            teamRemovedSet.addAll(s.map { it.trim().lowercase() })
                         }
                     }
-                    // Merge any duplicate documents for the same email/uid so unavailableRanges and ministryRole are never lost
-                    val mergedByIdentity = LinkedHashMap<String, TeamMember>()
-                    for (m in rawMembers) {
-                        val key = m.email.trim().lowercase().ifBlank { m.uid }
-                        val existing = mergedByIdentity[key]
-                        if (existing == null) {
-                            mergedByIdentity[key] = m
-                        } else {
-                            val preferredUid = if (!m.uid.startsWith("user_") && m.uid.isNotBlank()) m.uid else existing.uid.ifBlank { m.uid }
-                            val combinedRanges = (existing.unavailableRanges + m.unavailableRanges)
-                                .distinctBy { it.id.ifBlank { "${it.startDate}_${it.endDate}_${it.reason}" } }
-                            mergedByIdentity[key] = existing.copy(
-                                uid = preferredUid,
-                                fullName = existing.fullName.ifBlank { m.fullName },
-                                username = existing.username.ifBlank { m.username },
-                                role = if (existing.role.equals("Leader", true) || m.role.equals("Leader", true)) "Leader" else existing.role.ifBlank { m.role },
-                                ministryRole = existing.ministryRole.ifBlank { m.ministryRole },
-                                photoUri = existing.photoUri.ifBlank { m.photoUri },
-                                unavailableRanges = combinedRanges
-                            )
+
+                    db.collection(USERS_COLLECTION)
+                        .whereEqualTo("teamCode", code)
+                        .get()
+                        .addOnSuccessListener { snapshot ->
+                            val rawMembers = mutableListOf<TeamMember>()
+                            if (snapshot != null) {
+                                for (doc in snapshot.documents) {
+                                    val data = doc.data ?: continue
+                                    val mapWithId = data.toMutableMap()
+                                    val uidFromDoc = (mapWithId["uid"] as? String)?.ifBlank { doc.id } ?: doc.id
+                                    mapWithId["uid"] = uidFromDoc
+
+                                    val isRemovedByLeader = data["removedByLeader"] == true
+                                    val rTeam = (data["removedTeamCode"] as? String).orEmpty()
+                                    if (isRemovedByLeader && (rTeam.isBlank() || rTeam.equals(code, ignoreCase = true))) {
+                                        continue
+                                    }
+                                    val memberEmailLower = (data["email"] as? String).orEmpty().trim().lowercase()
+                                    if (uidFromDoc.trim().lowercase() in teamRemovedSet || (memberEmailLower.isNotBlank() && memberEmailLower in teamRemovedSet)) {
+                                        continue
+                                    }
+
+                                    rawMembers.add(TeamMember.fromMap(mapWithId))
+                                }
+                            }
+                            // Merge any duplicate documents for the same email/uid so unavailableRanges and ministryRole are never lost
+                            val mergedByIdentity = LinkedHashMap<String, TeamMember>()
+                            for (m in rawMembers) {
+                                val key = m.email.trim().lowercase().ifBlank { m.uid }
+                                val existing = mergedByIdentity[key]
+                                if (existing == null) {
+                                    mergedByIdentity[key] = m
+                                } else {
+                                    val preferredUid = if (!m.uid.startsWith("user_") && m.uid.isNotBlank()) m.uid else existing.uid.ifBlank { m.uid }
+                                    val combinedRanges = (existing.unavailableRanges + m.unavailableRanges)
+                                        .distinctBy { it.id.ifBlank { "${it.startDate}_${it.endDate}_${it.reason}" } }
+                                    mergedByIdentity[key] = existing.copy(
+                                        uid = preferredUid,
+                                        fullName = existing.fullName.ifBlank { m.fullName },
+                                        username = existing.username.ifBlank { m.username },
+                                        role = if (existing.role.equals("Leader", true) || m.role.equals("Leader", true)) "Leader" else existing.role.ifBlank { m.role },
+                                        ministryRole = existing.ministryRole.ifBlank { m.ministryRole },
+                                        photoUri = existing.photoUri.ifBlank { m.photoUri },
+                                        unavailableRanges = combinedRanges
+                                    )
+                                }
+                            }
+                            val members = mergedByIdentity.values.map { m ->
+                                if (m.email.trim().equals("ryanlloydgenturo@gmail.com", ignoreCase = true) || m.role.equals("Leader", ignoreCase = true)) {
+                                    m.copy(
+                                        role = "Leader",
+                                        ministryRole = if (m.ministryRole.isBlank() || m.ministryRole.equals("Member", true)) "Worship Leader" else m.ministryRole
+                                    )
+                                } else {
+                                    m
+                                }
+                            }.toList()
+                            saveRosterLocally(code, members, preferences)
+                            finishOnce(Result.success(getCachedRoster(code, preferences)))
                         }
-                    }
-                    val members = mergedByIdentity.values.map { m ->
-                        if (m.email.trim().equals("ryanlloydgenturo@gmail.com", ignoreCase = true) || m.role.equals("Leader", ignoreCase = true)) {
-                            m.copy(
-                                role = "Leader",
-                                ministryRole = if (m.ministryRole.isBlank() || m.ministryRole.equals("Member", true)) "Worship Leader" else m.ministryRole
-                            )
-                        } else {
-                            m
+                        .addOnFailureListener {
+                            finishOnce(Result.success(getCachedRoster(code, preferences)))
                         }
-                    }.toList()
-                    if (members.isNotEmpty()) {
-                        saveRosterLocally(code, members, preferences)
-                    }
-                    finishOnce(Result.success(getCachedRoster(code, preferences)))
-                }
-                .addOnFailureListener {
-                    finishOnce(Result.success(getCachedRoster(code, preferences)))
                 }
         } catch (_: Exception) {
             finishOnce(Result.success(getCachedRoster(code, preferences)))
@@ -740,6 +788,7 @@ object TeamRepository {
         memberUid: String,
         teamCode: String = "",
         memberEmail: String = "",
+        preferences: android.content.SharedPreferences? = null,
         onComplete: (Result<Unit>) -> Unit = {}
     ) {
         if (memberUid.isBlank()) {
@@ -747,11 +796,25 @@ object TeamRepository {
             return
         }
 
-        // Remove from local cache
+        val code = teamCode.trim().uppercase()
+        val emailLower = memberEmail.trim().lowercase()
+
+        // Remove from local memory cache
         for ((_, roster) in cachedRosters) {
             synchronized(roster) {
-                roster.removeAll { it.uid == memberUid || (memberEmail.isNotBlank() && it.email.equals(memberEmail, true)) }
+                roster.removeAll { it.uid == memberUid || (emailLower.isNotBlank() && it.email.equals(emailLower, true)) }
             }
+        }
+
+        // Store into preferences removed set
+        if (preferences != null && code.isNotBlank()) {
+            val set = preferences.getStringSet("team_removed_members_$code", null)?.toMutableSet() ?: mutableSetOf()
+            set.add(memberUid)
+            if (emailLower.isNotBlank()) set.add(emailLower)
+            preferences.edit().putStringSet("team_removed_members_$code", set).apply()
+
+            val currentRoster = getCachedRoster(code, preferences)
+            saveRosterLocally(code, currentRoster, preferences)
         }
 
         val updates = mutableMapOf<String, Any>(
@@ -761,15 +824,15 @@ object TeamRepository {
             "role" to "Member",
             "removedByLeader" to true
         )
-        if (teamCode.isNotBlank()) {
-            updates["removedTeamCode"] = teamCode
+        if (code.isNotBlank()) {
+            updates["removedTeamCode"] = code
         }
 
         try {
-            if (teamCode.isNotBlank()) {
+            if (code.isNotBlank()) {
                 val unionList = mutableListOf<Any>(memberUid)
-                if (memberEmail.isNotBlank()) unionList.add(memberEmail.trim().lowercase())
-                db.collection(TEAMS_COLLECTION).document(teamCode)
+                if (emailLower.isNotBlank()) unionList.add(emailLower)
+                db.collection(TEAMS_COLLECTION).document(code)
                     .update("removedMembers", com.google.firebase.firestore.FieldValue.arrayUnion(*unionList.toTypedArray()))
             }
             db.collection(USERS_COLLECTION)
@@ -785,9 +848,18 @@ object TeamRepository {
     fun removeMemberFromTeam(
         memberUid: String,
         teamCode: String = "",
+        memberEmail: String = "",
         onComplete: (Result<Unit>) -> Unit = {}
     ) {
-        removeMemberFromTeam(memberUid, teamCode, "", onComplete)
+        removeMemberFromTeam(memberUid, teamCode, memberEmail, null, onComplete)
+    }
+
+    fun removeMemberFromTeam(
+        memberUid: String,
+        teamCode: String = "",
+        onComplete: (Result<Unit>) -> Unit = {}
+    ) {
+        removeMemberFromTeam(memberUid, teamCode, "", null, onComplete)
     }
 
     /**
@@ -842,10 +914,23 @@ object TeamRepository {
             return
         }
 
-        preferences?.getStringSet("removedMembers", null)?.let { set ->
-            if (set.contains(uid) || (email.isNotBlank() && set.contains(email.trim().lowercase()))) {
-                onResult(true)
-                return
+        val uidLower = uid.trim().lowercase()
+        val emailLower = email.trim().lowercase()
+
+        preferences?.let { prefs ->
+            prefs.getStringSet("team_removed_members_$code", null)?.let { set ->
+                val lowerSet = set.map { it.trim().lowercase() }
+                if (lowerSet.contains(uidLower) || (emailLower.isNotBlank() && lowerSet.contains(emailLower))) {
+                    onResult(true)
+                    return
+                }
+            }
+            prefs.getStringSet("removedMembers", null)?.let { set ->
+                val lowerSet = set.map { it.trim().lowercase() }
+                if (lowerSet.contains(uidLower) || (emailLower.isNotBlank() && lowerSet.contains(emailLower))) {
+                    onResult(true)
+                    return
+                }
             }
         }
 
@@ -861,8 +946,8 @@ object TeamRepository {
 
                     db.collection(TEAMS_COLLECTION).document(code).get()
                         .addOnSuccessListener { tSnap ->
-                            val list = (tSnap.get("removedMembers") as? List<*>)?.mapNotNull { it?.toString() }.orEmpty()
-                            val isRemoved = list.contains(uid) || (email.isNotBlank() && list.contains(email.trim().lowercase()))
+                            val list = (tSnap.get("removedMembers") as? List<*>)?.mapNotNull { it?.toString()?.trim()?.lowercase() }.orEmpty()
+                            val isRemoved = list.contains(uidLower) || (emailLower.isNotBlank() && list.contains(emailLower))
                             onResult(isRemoved)
                         }
                         .addOnFailureListener {
@@ -875,13 +960,188 @@ object TeamRepository {
         } else {
             db.collection(TEAMS_COLLECTION).document(code).get()
                 .addOnSuccessListener { tSnap ->
-                    val list = (tSnap.get("removedMembers") as? List<*>)?.mapNotNull { it?.toString() }.orEmpty()
-                    val isRemoved = email.isNotBlank() && list.contains(email.trim().lowercase())
+                    val list = (tSnap.get("removedMembers") as? List<*>)?.mapNotNull { it?.toString()?.trim()?.lowercase() }.orEmpty()
+                    val isRemoved = emailLower.isNotBlank() && list.contains(emailLower)
                     onResult(isRemoved)
                 }
                 .addOnFailureListener {
                     onResult(false)
                 }
+        }
+    }
+
+    /**
+     * Sends a re-join request to the team leader after a member was removed.
+     */
+    fun sendRejoinRequest(
+        teamCode: String,
+        req: RejoinRequestData,
+        onComplete: (Result<Unit>) -> Unit = {}
+    ) {
+        val code = teamCode.trim().uppercase()
+        if (code.isBlank() || req.id.isBlank()) {
+            onComplete(Result.failure(IllegalArgumentException("Team code and request ID cannot be blank")))
+            return
+        }
+        val list = cachedRejoinRequests.getOrPut(code) { java.util.Collections.synchronizedList(mutableListOf()) }
+        synchronized(list) {
+            list.removeAll { it.id == req.id }
+            list.add(0, req)
+        }
+        try {
+            db.collection(TEAMS_COLLECTION).document(code)
+                .collection(REJOIN_REQUESTS_SUBCOLLECTION).document(req.id)
+                .set(req.toMap())
+                .addOnSuccessListener { onComplete(Result.success(Unit)) }
+                .addOnFailureListener { onComplete(Result.failure(it)) }
+        } catch (e: Exception) {
+            onComplete(Result.failure(e))
+        }
+    }
+
+    /**
+     * Retrieves all pending and past re-join requests for a team.
+     */
+    fun getRejoinRequests(
+        teamCode: String,
+        onComplete: (Result<List<RejoinRequestData>>) -> Unit
+    ) {
+        val code = teamCode.trim().uppercase()
+        if (code.isBlank()) {
+            onComplete(Result.success(emptyList()))
+            return
+        }
+        try {
+            db.collection(TEAMS_COLLECTION).document(code)
+                .collection(REJOIN_REQUESTS_SUBCOLLECTION)
+                .get()
+                .addOnSuccessListener { snap ->
+                    val list = mutableListOf<RejoinRequestData>()
+                    for (doc in snap.documents) {
+                        val data = doc.data ?: continue
+                        list.add(RejoinRequestData.fromMap(data))
+                    }
+                    list.sortByDescending { it.createdAt }
+                    cachedRejoinRequests[code] = java.util.Collections.synchronizedList(list)
+                    onComplete(Result.success(list))
+                }
+                .addOnFailureListener {
+                    val cached = cachedRejoinRequests[code]?.toList().orEmpty()
+                    onComplete(Result.success(cached))
+                }
+        } catch (e: Exception) {
+            val cached = cachedRejoinRequests[code]?.toList().orEmpty()
+            onComplete(Result.success(cached))
+        }
+    }
+
+    /**
+     * Synchronously returns cached re-join requests for a team.
+     */
+    fun getCachedRejoinRequests(teamCode: String): List<RejoinRequestData> {
+        val code = teamCode.trim().uppercase()
+        val list = cachedRejoinRequests[code] ?: return emptyList()
+        return synchronized(list) { list.toList() }
+    }
+
+    /**
+     * Approves a member's re-join request:
+     * - Removes them from /teams/{teamCode}.removedMembers
+     * - Clears removedByLeader and sets teamCode in /users/{userUid}
+     * - Updates rejoin request state to 'Approved'
+     */
+    fun approveRejoinRequest(
+        teamCode: String,
+        req: RejoinRequestData,
+        teamName: String = "",
+        preferences: android.content.SharedPreferences? = null,
+        onComplete: (Result<Unit>) -> Unit = {}
+    ) {
+        val code = teamCode.trim().uppercase()
+        val uid = req.userUid
+        val email = req.userEmail.trim().lowercase()
+
+        // 1. Remove from team document removedMembers array
+        val removeTargets = mutableListOf<Any>(uid)
+        if (email.isNotBlank()) removeTargets.add(email)
+        try {
+            db.collection(TEAMS_COLLECTION).document(code)
+                .update("removedMembers", com.google.firebase.firestore.FieldValue.arrayRemove(*removeTargets.toTypedArray()))
+        } catch (_: Throwable) {}
+
+        // 2. Clear local preferences removed sets
+        preferences?.let { prefs ->
+            val curRemoved = prefs.getStringSet("team_removed_members_$code", null)?.toMutableSet()
+            if (curRemoved != null) {
+                curRemoved.remove(uid)
+                if (email.isNotBlank()) curRemoved.remove(email)
+                prefs.edit().putStringSet("team_removed_members_$code", curRemoved).apply()
+            }
+            val genRemoved = prefs.getStringSet("removedMembers", null)?.toMutableSet()
+            if (genRemoved != null) {
+                genRemoved.remove(uid)
+                if (email.isNotBlank()) genRemoved.remove(email)
+                prefs.edit().putStringSet("removedMembers", genRemoved).apply()
+            }
+        }
+
+        // 3. Update user doc to restore membership
+        val userUpdates = mutableMapOf<String, Any>(
+            "removedByLeader" to false,
+            "removedTeamCode" to "",
+            "teamCode" to code,
+            "role" to "Member"
+        )
+        if (teamName.isNotBlank()) userUpdates["teamName"] = teamName
+        try {
+            db.collection(USERS_COLLECTION).document(uid).update(userUpdates)
+        } catch (_: Throwable) {}
+
+        // 4. Update request status in Firestore
+        try {
+            db.collection(TEAMS_COLLECTION).document(code)
+                .collection(REJOIN_REQUESTS_SUBCOLLECTION).document(req.id)
+                .update(mapOf("status" to "Approved", "updatedAt" to System.currentTimeMillis()))
+                .addOnSuccessListener {
+                    cachedRejoinRequests[code]?.let { list ->
+                        synchronized(list) {
+                            val idx = list.indexOfFirst { it.id == req.id }
+                            if (idx >= 0) list[idx] = list[idx].copy(status = "Approved")
+                        }
+                    }
+                    onComplete(Result.success(Unit))
+                }
+                .addOnFailureListener { onComplete(Result.failure(it)) }
+        } catch (e: Exception) {
+            onComplete(Result.failure(e))
+        }
+    }
+
+    /**
+     * Declines a member's re-join request.
+     */
+    fun declineRejoinRequest(
+        teamCode: String,
+        requestId: String,
+        onComplete: (Result<Unit>) -> Unit = {}
+    ) {
+        val code = teamCode.trim().uppercase()
+        try {
+            db.collection(TEAMS_COLLECTION).document(code)
+                .collection(REJOIN_REQUESTS_SUBCOLLECTION).document(requestId)
+                .update(mapOf("status" to "Declined", "updatedAt" to System.currentTimeMillis()))
+                .addOnSuccessListener {
+                    cachedRejoinRequests[code]?.let { list ->
+                        synchronized(list) {
+                            val idx = list.indexOfFirst { it.id == requestId }
+                            if (idx >= 0) list[idx] = list[idx].copy(status = "Declined")
+                        }
+                    }
+                    onComplete(Result.success(Unit))
+                }
+                .addOnFailureListener { onComplete(Result.failure(it)) }
+        } catch (e: Exception) {
+            onComplete(Result.failure(e))
         }
     }
 
@@ -3168,7 +3428,29 @@ object TeamRepository {
             )
         }
 
-        return items.sortedByDescending { it.timestamp }.take(15)
+        val deletedIds = preferences?.getStringSet("deleted_notifications", emptySet()).orEmpty()
+        return items.filter { it.id !in deletedIds }.sortedByDescending { it.timestamp }.take(25)
+    }
+
+    /**
+     * Deletes / dismisses an individual notification item from the user's notification feed.
+     */
+    fun deleteNotification(notificationId: String, preferences: android.content.SharedPreferences? = null) {
+        if (notificationId.isBlank() || preferences == null) return
+        val set = preferences.getStringSet("deleted_notifications", emptySet())?.toMutableSet() ?: mutableSetOf()
+        set.add(notificationId)
+        preferences.edit().putStringSet("deleted_notifications", set).apply()
+    }
+
+    /**
+     * Clears all recent notification items from the user's notification feed.
+     */
+    fun clearAllNotifications(teamCode: String, preferences: android.content.SharedPreferences? = null) {
+        if (preferences == null) return
+        val allItems = getRecentTeamNotifications(teamCode, null)
+        val set = preferences.getStringSet("deleted_notifications", emptySet())?.toMutableSet() ?: mutableSetOf()
+        set.addAll(allItems.map { it.id })
+        preferences.edit().putStringSet("deleted_notifications", set).apply()
     }
 
     /**
