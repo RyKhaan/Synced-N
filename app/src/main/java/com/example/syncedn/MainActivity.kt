@@ -10,21 +10,36 @@ class MainActivity : MemberActivity() {
         super.onCreate(savedInstanceState)
         val uid = preferences.getString("userId", "").orEmpty()
         val team = preferences.getString("teamName", "").orEmpty()
-        if (savedInstanceState == null && uid.isNotBlank() && team.isNotBlank()) {
-            navigate("home")
+        val leftTeam = preferences.getBoolean("leftTeam", false)
+
+        if (savedInstanceState == null && uid.isNotBlank() && team.isNotBlank() && !leftTeam) {
+            val userRole = preferences.getString("role", "Member").orEmpty()
+            val userMinistry = preferences.getString("ministryRole", "").orEmpty()
+            if (userRole.equals("Leader", ignoreCase = true) || userMinistry.equals("Substitute Leader", ignoreCase = true)) {
+                startActivity(Intent(this, AdminActivity::class.java).putExtra("startPage", "home"))
+                finish()
+            } else {
+                startActivity(Intent(this, MemberActivity::class.java).putExtra("startPage", "home"))
+                finish()
+            }
+            return
+        } else if (savedInstanceState == null && uid.isNotBlank() && (team.isBlank() || leftTeam)) {
+            navigate("teamChoice")
             return
         }
     }
 
     override fun navigate(next: String) {
         if (next == "home") {
+            val leftTeam = preferences.getBoolean("leftTeam", false)
             val userTeam = preferences.getString("teamName", "").orEmpty()
-            if (userTeam.isBlank()) {
+            if (userTeam.isBlank() || leftTeam) {
                 super.navigate("teamChoice")
                 return
             }
             val userRole = preferences.getString("role", "Member").orEmpty()
-            if (userRole.equals("Leader", ignoreCase = true)) {
+            val userMinistry = preferences.getString("ministryRole", "").orEmpty()
+            if (userRole.equals("Leader", ignoreCase = true) || userMinistry.equals("Substitute Leader", ignoreCase = true)) {
                 startActivity(Intent(this, AdminActivity::class.java).putExtra("startPage", "home"))
                 finish()
             } else {

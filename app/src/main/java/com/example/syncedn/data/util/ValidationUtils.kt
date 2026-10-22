@@ -1,7 +1,12 @@
 package com.example.syncedn.data.util
 
+import android.content.Context
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
+import android.os.Build
+
 /**
- * Utility functions for input validation and character constraints across Synced N.
+ * Utility functions for input validation, network connectivity, and character constraints across Synced N.
  */
 object ValidationUtils {
     // Standard Philippine Mobile Number format:
@@ -41,5 +46,27 @@ object ValidationUtils {
     fun isValidUsername(username: String): Boolean {
         val clean = username.trim()
         return clean.isNotBlank() && clean.length <= MAX_USERNAME_LENGTH
+    }
+
+    /**
+     * Verifies if the device has an active internet connection.
+     */
+    fun isNetworkAvailable(context: Context): Boolean {
+        return try {
+            val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+            if (cm != null) {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                    val network = cm.activeNetwork ?: return false
+                    val caps = cm.getNetworkCapabilities(network) ?: return false
+                    caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                } else {
+                    @Suppress("DEPRECATION")
+                    val info = cm.activeNetworkInfo
+                    info != null && info.isConnected
+                }
+            } else false
+        } catch (_: Throwable) {
+            true
+        }
     }
 }
