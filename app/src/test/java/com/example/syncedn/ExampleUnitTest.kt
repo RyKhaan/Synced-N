@@ -2364,4 +2364,105 @@ class ExampleUnitTest {
         val emptyRestored = com.example.syncedn.data.model.UserProfile.fromMap(emptyMap())
         assertEquals("", emptyRestored.fcmToken)
     }
+
+    @Test
+    fun testServiceDataCoverImageUrlSerialization() {
+        val srv = com.example.syncedn.data.model.ServiceData(
+            id = "srv_cover_test",
+            teamCode = "TEST01",
+            title = "Sunday Celebration",
+            date = "2026-10-25",
+            start = "09:00",
+            end = "11:00",
+            venue = "Main Hall",
+            coverImageUrl = "https://res.cloudinary.com/ffb3fdkm/image/upload/v1234/cover.jpg"
+        )
+        val map = srv.toMap()
+        assertEquals("https://res.cloudinary.com/ffb3fdkm/image/upload/v1234/cover.jpg", map["coverImageUrl"])
+
+        val restored = com.example.syncedn.data.model.ServiceData.fromMap(map)
+        assertEquals("srv_cover_test", restored.id)
+        assertEquals("https://res.cloudinary.com/ffb3fdkm/image/upload/v1234/cover.jpg", restored.coverImageUrl)
+
+        // Absent fallback defaults to empty string
+        val absentRestored = com.example.syncedn.data.model.ServiceData.fromMap(emptyMap())
+        assertEquals("", absentRestored.coverImageUrl)
+    }
+
+    @Test
+    fun testSubstitutionDataMultiLayerAndTypeSerialization() {
+        val sub = com.example.syncedn.data.model.SubstitutionData(
+            id = "sub_inclusion_test",
+            teamCode = "TEST01",
+            serviceTitle = "Youth Night",
+            requesterUid = "req_1",
+            requesterName = "Member A",
+            role = "Drummer",
+            substituteUid = "sub_1",
+            substituteName = "Member B",
+            reason = "[Inclusion] Available to serve",
+            type = "Inclusion",
+            status = "Substitute Accepted"
+        )
+        val map = sub.toMap()
+        assertEquals("Inclusion", map["type"])
+        assertEquals("Substitute Accepted", map["status"])
+
+        val restored = com.example.syncedn.data.model.SubstitutionData.fromMap(map)
+        assertEquals("Inclusion", restored.type)
+        assertEquals("Substitute Accepted", restored.status)
+
+        // Default type fallback
+        val defaultRestored = com.example.syncedn.data.model.SubstitutionData.fromMap(emptyMap())
+        assertEquals("Exclusion", defaultRestored.type)
+    }
+
+    @Test
+    fun testReplaceAssignmentInServiceExclusionAndInclusion() {
+        val initialAssignments = listOf(
+            com.example.syncedn.data.model.ServiceAssignment(uid = "user_assigned", name = "Assigned Member", role = "Guitarist")
+        )
+        val service = com.example.syncedn.data.model.ServiceData(
+            id = "srv_swap_test",
+            teamCode = "TEST01",
+            title = "Sunday Service",
+            assignments = initialAssignments
+        )
+
+        // 1. Exclusion: requester (user_assigned) cannot attend -> replaced by substitute (user_relief)
+        val exclusionSub = com.example.syncedn.data.model.SubstitutionData(
+            id = "sub_ex",
+            teamCode = "TEST01",
+            serviceId = "srv_swap_test",
+            requesterUid = "user_assigned",
+            requesterName = "Assigned Member",
+            role = "Guitarist",
+            substituteUid = "user_relief",
+            substituteName = "Relief Player",
+            type = "Exclusion"
+        )
+        val postExclusion = com.example.syncedn.data.database.TeamRepository.replaceAssignmentInService(service, exclusionSub)
+        assertEquals(1, postExclusion.assignments.size)
+        assertEquals("user_relief", postExclusion.assignments[0].uid)
+        assertEquals("Relief Player", postExclusion.assignments[0].name)
+        assertEquals("Guitarist", postExclusion.assignments[0].role)
+
+        // 2. Inclusion: requester (user_step_in) volunteers to replace assigned substitute (user_relief)
+        val inclusionSub = com.example.syncedn.data.model.SubstitutionData(
+            id = "sub_inc",
+            teamCode = "TEST01",
+            serviceId = "srv_swap_test",
+            requesterUid = "user_step_in",
+            requesterName = "Volunteer Member",
+            role = "Guitarist",
+            substituteUid = "user_relief",
+            substituteName = "Relief Player",
+            type = "Inclusion"
+        )
+        val postInclusion = com.example.syncedn.data.database.TeamRepository.replaceAssignmentInService(postExclusion, inclusionSub)
+        assertEquals(1, postInclusion.assignments.size)
+        assertEquals("user_step_in", postInclusion.assignments[0].uid)
+        assertEquals("Volunteer Member", postInclusion.assignments[0].name)
+        assertEquals("Guitarist", postInclusion.assignments[0].role)
+    }
 }

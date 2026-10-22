@@ -892,7 +892,7 @@ class AdminActivity : AppCompatActivity() {
         click(UI.announcementsButton) { navigate("announcements") }
         click(UI.calendarButton) { navigate("calendar") }
         click(UI.songsButton) { songsReturnPage = "home"; navigate("songs") }
-        click(UI.scheduleCard) { openHomeUpcoming() }
+        click(UI.scheduleCard) { openHomeSecondUpcoming() }
         click(UI.homeTab) { toast("You are on Home.") }
         click(UI.scheduleTab) { schedule() }
         click(UI.teamsTab) { navigate("teams") }
@@ -1465,16 +1465,34 @@ class AdminActivity : AppCompatActivity() {
         }
     }
     private fun homeUpcomingRecord(): org.json.JSONObject? {
-        val today = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).format(java.util.Date())
+        val phtZone = java.util.TimeZone.getTimeZone("Asia/Manila")
+        val today = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).apply { timeZone = phtZone }.format(java.util.Date())
         val published = localServices.filter { it.optString("status") == "Published" }
-        val upcoming = published.filter { it.optString("date") >= today }
+        val upcoming = published.filter { it.optString("date") >= today }.sortedWith(compareBy({ it.optString("date") }, { it.optString("start") }))
         if (upcoming.isNotEmpty()) {
-            return upcoming.minByOrNull { it.optString("date") + it.optString("start") }
+            return upcoming.first()
         }
         return published.maxByOrNull { it.optString("date") + it.optString("start") }
     }
+    private fun homeUpcomingSecondRecord(): org.json.JSONObject? {
+        val phtZone = java.util.TimeZone.getTimeZone("Asia/Manila")
+        val today = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).apply { timeZone = phtZone }.format(java.util.Date())
+        val published = localServices.filter { it.optString("status") == "Published" }
+        val upcoming = published.filter { it.optString("date") >= today }.sortedWith(compareBy({ it.optString("date") }, { it.optString("start") }))
+        if (upcoming.size > 1) {
+            return upcoming[1]
+        }
+        return null
+    }
     private fun openHomeUpcoming() {
         val record = homeUpcomingRecord()
+        openSpecificService(record)
+    }
+    private fun openHomeSecondUpcoming() {
+        val record = homeUpcomingSecondRecord() ?: homeUpcomingRecord()
+        openSpecificService(record)
+    }
+    private fun openSpecificService(record: org.json.JSONObject?) {
         serviceReturnPage = "home"
         if (record != null) {
             selectedService = record.optString("title")
@@ -1589,19 +1607,9 @@ class AdminActivity : AppCompatActivity() {
         top.add(row);top.space(18);top.add(text("Together, in Worship, in Sync",14,Color.rgb(183,209,255)))
         hero.addView(top,FrameLayout.LayoutParams(-1,-2))
         // Use the earlier supplied artwork without its baked-in outer shadow.
-        val card = image("hero_container").apply {
-            val artwork = (drawable as android.graphics.drawable.BitmapDrawable).bitmap
-            val scaleX = artwork.width.toFloat() / 360f
-            val scaleY = artwork.height.toFloat() / 247f
-            setImageBitmap(bitmaps.getOrPut("hero_card_clean") {
-                Bitmap.createBitmap(artwork, (24 * scaleX).toInt(), (16 * scaleY).toInt(), (312 * scaleX).toInt(), (200 * scaleY).toInt())
-            })
+        val upcomingRec = homeUpcomingRecord()
+        val card = FrameLayout(this).apply {
             id = UI.worshipCard
-            scaleType = ImageView.ScaleType.FIT_CENTER
-            (drawable as? android.graphics.drawable.BitmapDrawable)?.apply {
-                isFilterBitmap = true
-                paint.isAntiAlias = true
-            }
             background = bg(Color.rgb(10, 13, 27), 24)
             outlineProvider = ViewOutlineProvider.BACKGROUND
             clipToOutline = true
@@ -1613,7 +1621,78 @@ class AdminActivity : AppCompatActivity() {
             isClickable = true
             isFocusable = true
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES
-            val upcomingRec = homeUpcomingRecord()
+
+            val coverUrl = upcomingRec?.optString("coverImageUrl").orEmpty()
+            val imgView = ImageView(this@AdminActivity).apply {
+                scaleType = ImageView.ScaleType.CENTER_CROP
+                if (coverUrl.isNotBlank()) {
+                    com.example.syncedn.data.storage.ImageLoader.loadProfilePhoto(this, coverUrl, circular = false, maxDimension = 800)
+                } else {
+                    val artwork = (image("hero_container").drawable as? android.graphics.drawable.BitmapDrawable)?.bitmap
+                    if (artwork != null) {
+                        val scaleX = artwork.width.toFloat() / 360f
+                        val scaleY = artwork.height.toFloat() / 247f
+                        setImageBitmap(bitmaps.getOrPut("hero_card_clean") {
+                            Bitmap.createBitmap(artwork, (24 * scaleX).toInt(), (16 * scaleY).toInt(), (312 * scaleX).toInt(), (200 * scaleY).toInt())
+                        })
+                    }
+                }
+            }
+            addView(imgView, FrameLayout.LayoutParams(-1, -1))
+
+            val overlay = View(this@AdminActivity).apply {
+                background = GradientDrawable(
+                    GradientDrawable.Orientation.TOP_BOTTOM,
+                    intArrayOf(Color.argb(30, 0, 0, 0), Color.argb(215, 10, 13, 27))
+                )
+            }
+            addView(overlay, FrameLayout.LayoutParams(-1, -1))
+
+            val textCol = vertical().apply {
+                setPadding(dp(16), dp(16), dp(16), dp(16))
+                val title = upcomingRec?.optString("title")?.ifBlank { "Sunday Worship Service" } ?: "Sunday Worship Service"
+                val date = upcomingRec?.optString("date")?.ifBlank { "Upcoming Service" } ?: "Upcoming Service"
+                val start = upcomingRec?.optString("start").orEmpty()
+                val end = upcomingRec?.optString("end").orEmpty()
+                val timeStr = if (start.isNotBlank() && end.isNotBlank()) "${leaderTime(start)} – ${leaderTime(end)}" else if (start.isNotBlank()) leaderTime(start) else ""
+                val venue = upcomingRec?.optString("venue")?.ifBlank { "Main Sanctuary" } ?: "Main Sanctuary"
+
+                val badge = TextView(this@AdminActivity).apply {
+                    text = "NEXT WORSHIP SERVICE"
+                    setTextColor(Color.rgb(244, 243, 227))
+                    textSize = 10f
+                    typeface = Typeface.DEFAULT_BOLD
+                    background = bg(Color.argb(130, 0, 0, 0), 6)
+                    setPadding(dp(8), dp(3), dp(8), dp(3))
+                }
+                addView(badge, LinearLayout.LayoutParams(-2, -2))
+                space(6)
+                val titleTv = TextView(this@AdminActivity).apply {
+                    this.text = title
+                    setTextColor(Color.WHITE)
+                    textSize = 17f
+                    typeface = Typeface.DEFAULT_BOLD
+                    maxLines = 1
+                    ellipsize = android.text.TextUtils.TruncateAt.END
+                }
+                addView(titleTv, LinearLayout.LayoutParams(-1, -2))
+                space(4)
+                val metaTv = TextView(this@AdminActivity).apply {
+                    val parts = listOfNotNull(
+                        if (date.isNotBlank()) "📅 $date" else null,
+                        if (timeStr.isNotBlank()) "⏰ $timeStr" else null,
+                        if (venue.isNotBlank()) "📍 $venue" else null
+                    )
+                    this.text = parts.joinToString("  •  ")
+                    setTextColor(Color.rgb(220, 225, 240))
+                    textSize = 11f
+                    maxLines = 1
+                    ellipsize = android.text.TextUtils.TruncateAt.END
+                }
+                addView(metaTv, LinearLayout.LayoutParams(-1, -2))
+            }
+            addView(textCol, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM))
+
             contentDescription = if (upcomingRec != null) {
                 "Next Worship Session. ${upcomingRec.optString("title")}, ${upcomingRec.optString("date")}. ${upcomingRec.optString("venue", "Main Sanctuary")}. Open details."
             } else {
@@ -1682,14 +1761,21 @@ class AdminActivity : AppCompatActivity() {
                 id=UI.scheduleCard;background=bg(Color.WHITE,24,Color.rgb(211,211,211))
                 elevation=dp(4).toFloat();setPadding(dp(10),dp(16),dp(10),dp(10))
                 isClickable=true;isFocusable=true;minimumHeight=dp(104)
-                val record = homeUpcomingRecord()
-                val dateLabel = record?.optString("date") ?: "18 MAY • Sample"
-                val serviceTitle = record?.optString("title") ?: "Sunday Worship Service"
-                val timeLabel = if(record != null) leaderTime(record.optString("start")) + " – " + leaderTime(record.optString("end")) else "6:00AM – 11:00AM"
-                contentDescription = "$dateLabel, $serviceTitle, $timeLabel. Open service details."
-                add(text(dateLabel,13,navy,true));space(8)
-                add(text(serviceTitle,13,Color.rgb(66,82,114),true));space(5)
-                add(text(timeLabel,11,Color.rgb(66,82,114)))
+                val secondRec = homeUpcomingSecondRecord()
+                if (secondRec != null) {
+                    val dateLabel = secondRec.optString("date").ifBlank { "Upcoming Service" }
+                    val serviceTitle = secondRec.optString("title").ifBlank { "Sunday Worship Service" }
+                    val start = secondRec.optString("start")
+                    val end = secondRec.optString("end")
+                    val timeLabel = if(start.isNotBlank() && end.isNotBlank()) leaderTime(start) + " – " + leaderTime(end) else if (start.isNotBlank()) leaderTime(start) else ""
+                    contentDescription = "$dateLabel, $serviceTitle, $timeLabel. Open service details."
+                    add(text(dateLabel,13,navy,true));space(8)
+                    add(text(serviceTitle,13,Color.rgb(66,82,114),true));space(5)
+                    add(text(timeLabel,11,Color.rgb(66,82,114)))
+                } else {
+                    add(text("No upcoming services",13,navy,true));space(8)
+                    add(text("Check back soon for next scheduled lineup.",11,Color.rgb(66,82,114)))
+                }
             }
             upcoming.add(service,0,-2,if(isLeader) 1f else 0.63f)
             if (!isLeader) {
@@ -2111,6 +2197,32 @@ class AdminActivity : AppCompatActivity() {
                     TeamRepository.sendChatMessage(currentCode, remoteMsg, preferences)
                 }.onFailure { err ->
                     toast("Cloud upload failed: ${err.message ?: "Offline"}. Kept locally.")
+                }
+            }
+            return
+        }
+        if (requestCode == 302 && resultCode == RESULT_OK) {
+            val uri = data?.data ?: return
+            try {
+                contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            } catch (_: Exception) {}
+            val localUriStr = uri.toString()
+            leaderDraft.put("coverImageUrl", localUriStr)
+            saveLeaderDraft()
+            toast("Attaching cover photo...")
+            CloudinaryUploader.uploadProfileImage(this, uri, maxDimension = 1024) { result ->
+                result.onSuccess { remoteUrl ->
+                    leaderDraft.put("coverImageUrl", remoteUrl)
+                    saveLeaderDraft()
+                    toast("Cover photo uploaded!")
+                    if (page == "createService" || page == "reviewService" || page == "service") {
+                        navigate(page)
+                    }
+                }.onFailure {
+                    toast("Saved cover photo locally.")
+                    if (page == "createService" || page == "reviewService" || page == "service") {
+                        navigate(page)
+                    }
                 }
             }
             return
@@ -2549,6 +2661,50 @@ class AdminActivity : AppCompatActivity() {
             add(vertical().apply { add(text("End Time*", 12, navy)); space(8); add(end, -1, 48) }, 0, -2, 1f)
         }); col.space(20)
         col.add(text("Venue*", 12, navy)); col.space(8); col.add(venue, -1, 48)
+        col.space(20)
+        col.add(text("Cover Photo (Optional)", 12, navy)); col.space(8)
+        val coverContainer = horizontal().apply {
+            gravity = Gravity.CENTER_VERTICAL
+            background = bg(Color.WHITE, 12, Color.rgb(226, 232, 240))
+            setPadding(dp(12), dp(10), dp(12), dp(10))
+            val currentCover = leaderDraft.optString("coverImageUrl").orEmpty()
+            val previewImg = ImageView(this@AdminActivity).apply {
+                scaleType = ImageView.ScaleType.CENTER_CROP
+                background = bg(Color.rgb(240, 240, 245), 8)
+                clipToOutline = true
+                outlineProvider = ViewOutlineProvider.BACKGROUND
+                if (currentCover.isNotBlank()) {
+                    ImageLoader.loadProfilePhoto(this, currentCover, circular = false, maxDimension = 200)
+                } else {
+                    val fallback = (image("hero_container").drawable as? android.graphics.drawable.BitmapDrawable)?.bitmap
+                    if (fallback != null) setImageBitmap(fallback)
+                }
+            }
+            add(previewImg, 48, 48)
+            space(12)
+            val labelCol = vertical().apply {
+                add(text(if (currentCover.isNotBlank()) "Cover Photo Attached" else "No Cover Photo Selected", 13, navy, bold = true))
+                space(2)
+                add(text("Tap to choose image from gallery", 11, Color.rgb(100, 116, 139)))
+            }
+            add(labelCol, 0, -2, 1f)
+            val pickBtn = Button(this@AdminActivity).apply {
+                text = if (currentCover.isNotBlank()) "Change" else "Choose"
+                textSize = 12f
+                isAllCaps = false
+                setTextColor(Color.WHITE)
+                background = bg(purple, 8)
+                setOnClickListener {
+                    val intent = Intent(Intent.ACTION_GET_CONTENT).apply {
+                        type = "image/*"
+                        addCategory(Intent.CATEGORY_OPENABLE)
+                    }
+                    startActivityForResult(intent, 302)
+                }
+            }
+            add(pickBtn, -2, 36)
+        }
+        col.add(coverContainer, -1, -2)
         stepActions(col, { navigate("home") }) {
             when {
                 title.text.isBlank() -> invalid(title, "Enter a service title.")
@@ -2774,8 +2930,8 @@ class AdminActivity : AppCompatActivity() {
                 m.fullName.equals(name, ignoreCase = true) ||
                 m.username.equals(name, ignoreCase = true)
             }
-            val isAdminBadge = rosterMatch?.role.equals("Leader", ignoreCase = true) || name.equals("Joshua Lagare", ignoreCase = true)
-            col.add(memberRow(name, role, if (isAdminBadge) "Admin" else "Member", photoUri = photoUri, uid = uid))
+            val isLeaderBadge = rosterMatch?.role.equals("Leader", ignoreCase = true) || name.equals("Ryan Lloyd Genturo", ignoreCase = true)
+            col.add(memberRow(name, role, if (isLeaderBadge) "Leader" else "Member", photoUri = photoUri, uid = uid))
         }
         col.space(20)
         col.add(memberButton("Schedule Rehearsal", navy) { navigate("scheduleRehearsal") }, -1, 48); col.space(12)
@@ -3058,6 +3214,7 @@ class AdminActivity : AppCompatActivity() {
                 start = leaderDraft.optString("start"),
                 end = leaderDraft.optString("end"),
                 venue = leaderDraft.optString("venue"),
+                coverImageUrl = leaderDraft.optString("coverImageUrl"),
                 status = status,
                 assignments = assignmentsList,
                 rehearsal = rehearsalData,
@@ -4073,8 +4230,8 @@ class AdminActivity : AppCompatActivity() {
     private var chatEmptyView: View? = null
     private val lineupSongs = mutableListOf("Amazing Grace", "Way Maker", "Goodness of God", "Build My Life")
     private val ministryMembers = listOf(
-        Triple("Joshua Lagare", "Worship Leader", "Admin"),
-        Triple("Ryan Lloyd Genturo", "Keyboardist", "Member"),
+        Triple("Joshua Lagare", "Worship Leader", "Member"),
+        Triple("Ryan Lloyd Genturo", "Keyboardist", "Leader"),
         Triple("Ramirez John Micheal", "Vocalist", "Member"),
         Triple("Jessa Mae Dizon", "Vocalist", "Member"),
         Triple("Justine Dalay Pendre", "Bassist", "Member"),
@@ -4279,7 +4436,7 @@ class AdminActivity : AppCompatActivity() {
 
         if (badge != null) {
             val badgeView = text(badge, 11, navy, bold = true, centered = true).apply {
-                if (badge == "Admin") background = bg(Color.rgb(225, 225, 228), 14)
+                if (badge == "Leader" || badge == "Admin") background = bg(Color.rgb(225, 225, 228), 14)
                 if (onRoleClick != null) {
                     isClickable = true
                     isFocusable = true
@@ -4877,23 +5034,29 @@ class AdminActivity : AppCompatActivity() {
                     headerRow.add(text(sub.serviceTitle.ifBlank { "Sunday Worship Service" }, 15, Color.rgb(80, 5, 104), bold = true), 0, -2, 1f)
 
                     val isPending = sub.status.equals("Pending", ignoreCase = true)
-                    val isAccepted = sub.status.equals("Accepted", ignoreCase = true)
+                    val isSubAccepted = sub.status.equals("Substitute Accepted", ignoreCase = true)
+                    val isAccepted = sub.status.equals("Accepted", ignoreCase = true) || sub.status.equals("Approved", ignoreCase = true)
                     val isDeclined = sub.status.equals("Declined", ignoreCase = true)
+                    val isCancelled = sub.status.equals("Cancelled", ignoreCase = true)
 
                     val statusBadge = text(
                         if (isPending) "WAITING FOR SUBSTITUTE"
+                        else if (isSubAccepted) "SUBSTITUTE ACCEPTED"
                         else if (isAccepted) "APPROVED"
                         else if (isDeclined) "DECLINED"
+                        else if (isCancelled) "CANCELLED"
                         else sub.status.uppercase(),
                         9,
                         if (isAccepted) Color.rgb(46, 125, 50)
-                        else if (isDeclined) Color.rgb(198, 40, 40)
+                        else if (isDeclined || isCancelled) Color.rgb(198, 40, 40)
+                        else if (isSubAccepted) Color.rgb(14, 116, 144)
                         else Color.rgb(192, 38, 211),
                         bold = true
                     ).apply {
                         background = bg(
                             if (isAccepted) Color.rgb(232, 245, 233)
-                            else if (isDeclined) Color.rgb(255, 235, 238)
+                            else if (isDeclined || isCancelled) Color.rgb(255, 235, 238)
+                            else if (isSubAccepted) Color.rgb(224, 242, 254)
                             else Color.rgb(245, 208, 254),
                             8
                         )
@@ -4961,34 +5124,35 @@ class AdminActivity : AppCompatActivity() {
                     add(text("Proposed Substitute: ${sub.substituteName}", 12, Color.BLACK, bold = true)); space(4)
                     add(text("Reason: ${sub.reason}", 12, Color.rgb(30, 41, 59)))
 
-                    if (isPending) {
+                    if (isSubAccepted && isLeader) {
                         space(16)
                         val actions = horizontal()
-                        val acceptBtn = Button(this@AdminActivity).apply {
-                            text = "Accept Substitution"
+                        val approveBtn = Button(this@AdminActivity).apply {
+                            text = "Approve & Update Lineup"
                             isAllCaps = false
-                            background = bg(Color.rgb(80, 5, 104), 8)
+                            background = bg(Color.rgb(46, 125, 50), 8)
                             setTextColor(Color.WHITE)
                             minimumHeight = dp(38)
                             textSize = 12f
                             setTypeface(typeface, Typeface.BOLD)
                             setOnClickListener {
-                                AlertDialog.Builder(this@AdminActivity).setTitle("Accept substitution?")
-                                    .setMessage("As Team Leader, do you want to accept this substitution for ${sub.role} (${sub.substituteName} replacing ${sub.requesterName})?")
+                                AlertDialog.Builder(this@AdminActivity).setTitle("Approve substitution?")
+                                    .setMessage("As Team Leader, do you approve this substitution for ${sub.role} (${sub.substituteName} replacing ${sub.requesterName})? The service lineup will be updated immediately.")
                                     .setNegativeButton("Cancel", null)
-                                    .setPositiveButton("Accept") { _, _ ->
+                                    .setPositiveButton("Approve") { _, _ ->
                                         TeamRepository.acceptSubstitutionAndUpdateService(activeCode, sub, preferences) { res ->
                                             runOnUiThread {
                                                 if (res.isSuccess) {
-                                                    toast("Substitution accepted and service roster updated!")
+                                                    toast("Substitution approved and lineup updated!")
                                                     com.example.syncedn.data.auth.SyncedMessagingService.dispatchSystemNotification(
                                                         this@AdminActivity,
                                                         preferences,
-                                                        "Substitution Accepted",
-                                                        "${sub.substituteName} replacing ${sub.requesterName} for ${sub.role} in ${sub.serviceTitle}."
+                                                        "Substitution Approved",
+                                                        "Leader approved substitution for ${sub.role} in ${sub.serviceTitle}."
                                                     )
+                                                    refreshTeamServices(force = true)
                                                 }
-                                                else toast("Failed to accept substitution: ${res.exceptionOrNull()?.message ?: "Unknown error"}")
+                                                else toast("Failed to approve substitution: ${res.exceptionOrNull()?.message ?: "Unknown error"}")
                                                 populateSubstitutions()
                                             }
                                         }
@@ -4998,8 +5162,8 @@ class AdminActivity : AppCompatActivity() {
                         val declineBtn = Button(this@AdminActivity).apply {
                             text = "Decline"
                             isAllCaps = false
-                            background = bg(Color.WHITE, 8, Color.rgb(217, 70, 239))
-                            setTextColor(Color.rgb(217, 70, 239))
+                            background = bg(Color.WHITE, 8, Color.rgb(220, 38, 38))
+                            setTextColor(Color.rgb(220, 38, 38))
                             minimumHeight = dp(38)
                             textSize = 12f
                             setTypeface(typeface, Typeface.BOLD)
@@ -5026,10 +5190,13 @@ class AdminActivity : AppCompatActivity() {
                                     }.show()
                             }
                         }
-                        actions.add(acceptBtn, 0, 38, 1.25f)
+                        actions.add(approveBtn, 0, 38, 1.35f)
                         actions.add(View(this@AdminActivity), 10, 1)
-                        actions.add(declineBtn, 0, 38, 0.75f)
+                        actions.add(declineBtn, 0, 38, 0.65f)
                         add(actions)
+                    } else if (isPending && isLeader) {
+                        space(12)
+                        add(text("⏳ Waiting for ${sub.substituteName} to accept before Leader approval", 11, Color.rgb(100, 116, 139)))
                     }
                 }); subCol.space(16)
             }
@@ -5077,16 +5244,30 @@ class AdminActivity : AppCompatActivity() {
     }
 
     private fun notificationsView(): View = memberPage("Notification", "home") { col ->
-        val activeCode = preferences.getString("teamCode", "").orEmpty()
+        val activeCode = preferences.getString(SessionManager.KEY_TEAM_CODE, "").orEmpty()
+            .ifBlank { preferences.getString("teamCode", "").orEmpty() }
+            .ifBlank { FirestoreManager.findCodeByTeamName(teamName).orEmpty() }
         col.add(text("Substitution Request", 15, purple, bold = true)); col.space(12)
         substitutionFeed(col)
         col.space(16)
         col.add(text("Recent Notifications", 15, purple, bold = true)); col.space(12)
         recentNotificationsList(col)
+
+        if (activeCode.isNotBlank()) {
+            TeamRepository.getSubstitutions(activeCode, true, preferences) { res ->
+                runOnUiThread {
+                    if (res.isSuccess && page == "notifications") {
+                        // Fresh notifications and substitutions fetched
+                    }
+                }
+            }
+        }
     }
 
     private fun recentNotificationsList(col: LinearLayout) {
-        val activeCode = preferences.getString("teamCode", "").orEmpty()
+        val activeCode = preferences.getString(SessionManager.KEY_TEAM_CODE, "").orEmpty()
+            .ifBlank { preferences.getString("teamCode", "").orEmpty() }
+            .ifBlank { FirestoreManager.findCodeByTeamName(teamName).orEmpty() }
             .ifBlank { FirestoreManager.findCodeByTeamName(teamName).orEmpty() }
         val dynamicItems = TeamRepository.getRecentTeamNotifications(activeCode, preferences)
         if (dynamicItems.isEmpty()) {
@@ -5780,7 +5961,7 @@ class AdminActivity : AppCompatActivity() {
                 roster.forEach { member ->
                     val name = member.fullName.ifBlank { member.username.ifBlank { "Member" } }
                     val role = member.ministryRole.ifBlank { if (member.role.equals("Leader", true)) "Worship Leader" else "Member" }
-                    val badge = if (member.role.equals("Leader", true)) "Admin" else "Member"
+                    val badge = if (member.role.equals("Leader", true)) "Leader" else "Member"
                     col.add(memberRow(name, role, badge, if (isLeader) ({
                         roleMember = name
                         roleMemberUid = member.uid

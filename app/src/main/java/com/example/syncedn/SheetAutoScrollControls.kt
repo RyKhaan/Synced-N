@@ -53,9 +53,10 @@ internal class SheetAutoScrollControls(
             if (!running || closed || !isAttachedToWindow || scroll == null) return
             val now = SystemClock.uptimeMillis()
             val maximum = maximumOffset(scroll)
-            scroll.scrollTo(0, clock.advance(now - lastFrame, speed, resources.displayMetrics.density, maximum))
+            val nextY = clock.advance(now - lastFrame, speed, resources.displayMetrics.density, maximum)
+            scroll.scrollTo(0, nextY)
             lastFrame = now
-            if (scroll.scrollY >= maximum) pause("End of sheet")
+            if (nextY >= maximum) pause("End of sheet")
             else postOnAnimation(this)
         }
     }
@@ -79,6 +80,7 @@ internal class SheetAutoScrollControls(
                     override fun onProgressChanged(bar: SeekBar?, value: Int, fromUser: Boolean) {
                         speed = value + 1
                         speedLabel.text = "Speed $speed"
+                        if (running) status.text = "Scrolling (Speed $speed)"
                     }
                     override fun onStartTrackingTouch(bar: SeekBar?) {}
                     override fun onStopTrackingTouch(bar: SeekBar?) {
@@ -146,7 +148,7 @@ internal class SheetAutoScrollControls(
     private fun maximumOffset(scroll: StableScrollView): Int {
         val visibleHeight = (scroll.height - scroll.paddingBottom).coerceAtLeast(1)
         val contentBottom = scroll.getChildAt(0)?.bottom ?: 0
-        return minOf(contentBottom - visibleHeight, sheetTop(scroll) + sheet.height - visibleHeight).coerceAtLeast(0)
+        return (contentBottom - visibleHeight).coerceAtLeast(0)
     }
 
     private fun start() {
@@ -156,9 +158,9 @@ internal class SheetAutoScrollControls(
         scroll.fling(0)
         val top = sheetTop(scroll)
         val maximum = maximumOffset(scroll)
-        val start = if (scroll.scrollY < top || scroll.scrollY >= maximum) minOf(top, maximum) else scroll.scrollY
+        val start = if (scroll.scrollY >= maximum - dp(8)) 0 else scroll.scrollY
         scroll.scrollTo(0, start)
-        if (start >= maximum) { pause("Entire sheet is visible"); return }
+        if (maximum <= 0) { pause("Entire sheet is visible"); return }
         clock.reset(start); lastFrame = SystemClock.uptimeMillis()
         running = true; keepScreenOn = true
         toggle.text = "Pause"; status.text = "Scrolling"
