@@ -17,8 +17,9 @@ class MainActivity : MemberActivity() {
         val uid = preferences.getString("userId", "").orEmpty()
         val team = preferences.getString("teamName", "").orEmpty()
         val leftTeam = preferences.getBoolean("leftTeam", false)
+        val removed = preferences.getBoolean("removedByLeader", false)
 
-        if (savedInstanceState == null && uid.isNotBlank() && team.isNotBlank() && !leftTeam) {
+        if (savedInstanceState == null && uid.isNotBlank() && team.isNotBlank() && !leftTeam && !removed) {
             val userRole = preferences.getString("role", "Member").orEmpty()
             val userMinistry = preferences.getString("ministryRole", "").orEmpty()
             val userEmail = preferences.getString("email", "").orEmpty()
