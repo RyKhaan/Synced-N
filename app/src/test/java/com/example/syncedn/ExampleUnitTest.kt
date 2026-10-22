@@ -2465,4 +2465,77 @@ class ExampleUnitTest {
         assertEquals("Volunteer Member", postInclusion.assignments[0].name)
         assertEquals("Guitarist", postInclusion.assignments[0].role)
     }
+
+    @Test
+    fun testRejoinRequestDataSerializationAndDeserialization() {
+        val now = System.currentTimeMillis()
+        val request = com.example.syncedn.data.model.RejoinRequestData(
+            id = "rejoin_101",
+            teamCode = "ALPHA7",
+            userUid = "uid_member_99",
+            userName = "Removed Teammate",
+            userEmail = "teammate@example.com",
+            reason = "Would like to serve again on Sunday",
+            status = "Pending",
+            createdAt = now,
+            updatedAt = now
+        )
+
+        val map = request.toMap()
+        assertEquals("rejoin_101", map["id"])
+        assertEquals("ALPHA7", map["teamCode"])
+        assertEquals("uid_member_99", map["userUid"])
+        assertEquals("Removed Teammate", map["userName"])
+        assertEquals("teammate@example.com", map["userEmail"])
+        assertEquals("Would like to serve again on Sunday", map["reason"])
+        assertEquals("Pending", map["status"])
+        assertEquals(now, map["createdAt"])
+        assertEquals(now, map["updatedAt"])
+
+        val deserialized = com.example.syncedn.data.model.RejoinRequestData.fromMap(map)
+        assertEquals(request.id, deserialized.id)
+        assertEquals(request.teamCode, deserialized.teamCode)
+        assertEquals(request.userUid, deserialized.userUid)
+        assertEquals(request.userName, deserialized.userName)
+        assertEquals(request.userEmail, deserialized.userEmail)
+        assertEquals(request.reason, deserialized.reason)
+        assertEquals(request.status, deserialized.status)
+        assertEquals(request.createdAt, deserialized.createdAt)
+        assertEquals(request.updatedAt, deserialized.updatedAt)
+
+        // Test with Firestore Timestamp
+        val ts = com.google.firebase.Timestamp(java.util.Date(now))
+        val mapWithTimestamp = map.toMutableMap()
+        mapWithTimestamp["createdAt"] = ts
+        mapWithTimestamp["updatedAt"] = ts
+        val deserializedTs = com.example.syncedn.data.model.RejoinRequestData.fromMap(mapWithTimestamp)
+        assertEquals(now, deserializedTs.createdAt)
+        assertEquals(now, deserializedTs.updatedAt)
+    }
+
+    @Test
+    fun testTeamNotificationItemFiltering() {
+        val n1 = com.example.syncedn.data.database.TeamRepository.TeamNotificationItem(
+            id = "notif_1",
+            title = "Service Updated",
+            message = "New song added",
+            timeLabel = "Just now",
+            iconName = "music",
+            timestamp = 1000L
+        )
+        val n2 = com.example.syncedn.data.database.TeamRepository.TeamNotificationItem(
+            id = "notif_2",
+            title = "Announcement",
+            message = "Practice at 6pm",
+            timeLabel = "5m ago",
+            iconName = "announce",
+            timestamp = 2000L
+        )
+        val allNotifs = listOf(n1, n2)
+        val deletedIds = setOf("notif_1")
+        val activeNotifs = allNotifs.filter { it.id !in deletedIds }
+
+        assertEquals(1, activeNotifs.size)
+        assertEquals("notif_2", activeNotifs[0].id)
+    }
 }
