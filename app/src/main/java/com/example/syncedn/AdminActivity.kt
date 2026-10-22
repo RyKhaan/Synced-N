@@ -84,6 +84,66 @@ import androidx.core.view.WindowInsetsCompat
  * Admin publishing, assignments and team management operate only on this phone.
  */
 class AdminActivity : AppCompatActivity() {
+    private fun showMemberProfileDialog(uid: String?, name: String, role: String, photoUri: String?) {
+        val roster = getActiveRoster()
+        val m = roster.find { (uid != null && uid.isNotBlank() && it.uid == uid) || it.fullName.equals(name, true) || it.username.equals(name, true) }
+        val dialog = AlertDialog.Builder(this)
+        val pUri = photoUri?.takeIf { it.isNotBlank() } ?: m?.photoUri.orEmpty()
+        val view = vertical().apply {
+            setPadding(dp(24), dp(24), dp(24), dp(24))
+            gravity = Gravity.CENTER_HORIZONTAL
+            add(memberAvatarView(pUri, 72), 72, 72)
+            space(12)
+            add(text(m?.fullName?.ifBlank { name } ?: name, 16, navy, bold = true, centered = true))
+            space(4)
+            add(text("@${m?.username?.ifBlank { name } ?: name}", 12, Color.GRAY, centered = true))
+            space(8)
+            add(text(m?.ministryRole?.ifBlank { role } ?: role, 13, purple, bold = true, centered = true).apply {
+                background = bg(Color.rgb(245, 208, 254), 12)
+                setPadding(dp(12), dp(4), dp(12), dp(4))
+            })
+            if (m?.email?.isNotBlank() == true) {
+                space(12)
+                add(text("✉ ${m.email}", 12, navy, centered = true))
+            }
+        }
+        dialog.setView(view).setPositiveButton("Close", null).show()
+    }
+
+    private fun extractYouTubeVideoId(url: String): String? {
+        if (url.isBlank()) return null
+        val pattern = "(?<=watch\\?v=|/videos/|embed/|youtu\\.be/|/v/|/e/|watch\\?feature=player_embedded&v=)[^#&?\\n]*"
+        val compiledPattern = java.util.regex.Pattern.compile(pattern)
+        val matcher = compiledPattern.matcher(url)
+        return if (matcher.find()) matcher.group() else null
+    }
+
+    private fun showChatImageViewer(imageUrl: String) {
+        if (imageUrl.isBlank()) return
+        val dialog = android.app.Dialog(this, android.R.style.Theme_Black_NoTitleBar_Fullscreen)
+        val container = FrameLayout(this).apply {
+            setBackgroundColor(Color.argb(235, 0, 0, 0))
+        }
+        val iv = ImageView(this).apply {
+            scaleType = ImageView.ScaleType.FIT_CENTER
+        }
+        ImageLoader.loadProfilePhoto(iv, imageUrl, circular = false)
+        container.addView(iv, FrameLayout.LayoutParams(-1, -1, Gravity.CENTER))
+
+        val closeBtn = text("✕ Close", 14, Color.WHITE, bold = true, centered = true).apply {
+            background = bg(Color.argb(120, 50, 50, 50), 16)
+            setPadding(dp(16), dp(8), dp(16), dp(8))
+            isClickable = true
+            isFocusable = true
+            setOnClickListener { dialog.dismiss() }
+        }
+        container.addView(closeBtn, FrameLayout.LayoutParams(-2, -2, Gravity.TOP or Gravity.END).apply {
+            topMargin = dp(40); rightMargin = dp(20)
+        })
+        dialog.setContentView(container)
+        dialog.show()
+    }
+
     private var page = "start"
     private var displayName = ""
     private var fullName = ""
@@ -340,6 +400,15 @@ class AdminActivity : AppCompatActivity() {
                     navigate("teamDetails")
                     return
                 }
+                if (page == "home") {
+                    AlertDialog.Builder(this@AdminActivity)
+                        .setTitle("Exit Synced N")
+                        .setMessage("Are you sure you want to quit the app?")
+                        .setPositiveButton("Exit") { _, _ -> finishAffinity() }
+                        .setNegativeButton("Cancel", null)
+                        .show()
+                    return
+                }
                 val previous = when (page) {
                     "login" -> "start"
                     "register", "reset" -> "login"
@@ -347,7 +416,7 @@ class AdminActivity : AppCompatActivity() {
                     "success" -> "login"
                     "teamChoice" -> "login"
                     "createTeam", "joinTeam" -> "teamChoice"
-                    "home" -> "login"
+                    "home" -> null
                     "settings" -> "home"
                     "profile" -> profileReturnPage
                     "schedule", "calendar", "announcements", "notifications", "teams" -> "home"
@@ -1701,7 +1770,7 @@ class AdminActivity : AppCompatActivity() {
 
     private fun settingsView(): View {
         val root=vertical().apply {setBackgroundColor(Color.WHITE)}
-        root.add(settingsHeader("Settings",false))
+        root.add(settingsHeader("Settings",true))
         val scroll=StableScrollView(this).apply {isFillViewport=true; clipToPadding=true}
         val col=vertical();scroll.addView(col,FrameLayout.LayoutParams(-1,-2));root.add(scroll,-1,0,1f)
         col.space(24)
@@ -1759,13 +1828,20 @@ class AdminActivity : AppCompatActivity() {
         applyProfilePhoto(UI.settingsAvatar)
         click(UI.pageBack) {navigate("home")}
         click(UI.openProfileButton) {openProfile("settings")}
-        click(UI.settingsTeam) {navigate("teams")}
+        click(UI.settingsTeam) { teamTab = "Members"; navigate("teams") }
         findViewById<Switch>(UI.notificationSwitch).apply {
             isChecked=preferences.getBoolean("notifications",true)
             setOnCheckedChangeListener { _, checked ->
+                preferences.edit().putBoolean("notifications", checked).apply()
                 val unmuted = preferences.getBoolean("teamUnmuted", true)
                 TeamRepository.saveNotificationPreferences(currentUserId(), checked, unmuted, preferences)
-                toast(if(checked) "Notifications enabled" else "Notifications disabled")
+                val curCode = preferences.getString("teamCode", "").orEmpty()
+                if (checked && curCode.isNotBlank()) {
+                    com.example.syncedn.data.auth.SyncedFirebaseMessagingService.subscribeToTeam(curCode)
+                } else if (!checked && curCode.isNotBlank()) {
+                    com.example.syncedn.data.auth.SyncedFirebaseMessagingService.unsubscribeFromTeam(curCode)
+                }
+                toast(if(checked) "FCM Notifications enabled" else "FCM Notifications disabled")
             }
         }
         click(UI.logoutButton) {
@@ -1784,8 +1860,39 @@ class AdminActivity : AppCompatActivity() {
                 }
                 .setNegativeButton("Cancel", null).show()
         }
-        click(UI.aboutButton) {detail("About Synced N", "Church Ministry Management\nCloud-synced worship scheduling, team roster, chord sheets, substitutions, and real-time ministry chat.")}
-        click(UI.helpButton) {detail("Help", "Tap Profile to update your details and avatar. Manage schedules, availability, song lineups, and team chat from the bottom navigation bar.")}
+        click(UI.aboutButton) {
+            AlertDialog.Builder(this)
+                .setTitle("About Synced N")
+                .setMessage(
+                    "Synced N — Church Ministry Management Platform\n\n" +
+                    "Version 1.0.0 (Production Release)\n\n" +
+                    "A comprehensive collaborative ministry workflow system designed to synchronize worship leaders, vocalists, instrumentalists, and technical teams.\n\n" +
+                    "Key Capabilities:\n" +
+                    "• Worship Service Scheduling & Role Assignments\n" +
+                    "• Dynamic Member Availability & Conflict Detection\n" +
+                    "• Song Catalog, Transposition & Rehearsal Lineups\n" +
+                    "• Service Substitution & Cover Requests (Inclusion/Exclusion)\n" +
+                    "• Real-time Encrypted Team Communication & Media Sharing\n" +
+                    "• Cloud Firestore Synchronization & Cloud Messaging (FCM)\n\n" +
+                    "Developed with care for church ministry excellence."
+                )
+                .setPositiveButton("OK", null)
+                .show()
+        }
+        click(UI.helpButton) {
+            AlertDialog.Builder(this)
+                .setTitle("Help & User Guide")
+                .setMessage(
+                    "How to use Synced N:\n\n" +
+                    "1. Schedule & Lineups: Leaders can create services, assign team members, and build song lineups. Click any song to view lyrics, chords, transpose keys, and watch rehearsal videos.\n\n" +
+                    "2. Availability: Set your unavailable dates in Calendar to help leaders schedule around your conflicts.\n\n" +
+                    "3. Substitutions: If unable to serve or if you want to join a service, tap Request Substitution (Exclusion/Inclusion) on the service card.\n\n" +
+                    "4. Team Chat: Tap Teams to chat with your ministry teammates, share rehearsal pictures, and manage roles.\n\n" +
+                    "5. Notifications: Turn on Push Notifications in Settings to receive instant alerts on service changes and announcements."
+                )
+                .setPositiveButton("Close", null)
+                .show()
+        }
         click(UI.homeTab) {navigate("home")};click(UI.scheduleTab) {schedule()}
         click(UI.teamsTab) {navigate("teams")};click(UI.settingsTab) {toast("You are on Settings.")}
     }
@@ -1859,9 +1966,7 @@ class AdminActivity : AppCompatActivity() {
             add(profileField(UI.profileUsername,"Username",displayName,hint="Add your username",maxLength=ValidationUtils.MAX_USERNAME_LENGTH));space(8)
             add(profileField(UI.profilePhone,"Phone Number",preferences.getString(SessionManager.KEY_PHONE,"").orEmpty(),"Add your phone number",InputType.TYPE_CLASS_PHONE,maxLength=ValidationUtils.MAX_PHONE_LENGTH));space(8)
             add(profileField(UI.profileEmail,"Email",preferences.getString(SessionManager.KEY_EMAIL,"").orEmpty(),kind=InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS,maxLength=ValidationUtils.MAX_EMAIL_LENGTH));space(16)
-            add(text("Preference",15,Color.BLACK,true));space(12)
-            add(preferenceRow(UI.countrySpinner,"Country",listOf("Philippines","Singapore","United States"),preferences.getString(SessionManager.KEY_COUNTRY,"Philippines").orEmpty()));space(8)
-            add(preferenceRow(UI.languageSpinner,"Language",listOf("English","Filipino"),preferences.getString(SessionManager.KEY_LANGUAGE,"English").orEmpty()));space(48)
+            space(32)
             action(UI.saveProfileButton,"Save Profile Changes");space(32)
         }
         root.add(bottomNavigation("Settings"),-1,64)
@@ -1891,8 +1996,8 @@ class AdminActivity : AppCompatActivity() {
                 emailStr.isNotBlank() && !Patterns.EMAIL_ADDRESS.matcher(emailStr).matches()->invalid(email,"Enter a valid email.")
                 else->{
                     fullName=name.text.toString().trim();displayName=username.text.toString().trim()
-                    val countryStr = findViewById<Spinner>(UI.countrySpinner).selectedItem.toString()
-                    val langStr = findViewById<Spinner>(UI.languageSpinner).selectedItem.toString()
+                    val countryStr = findViewById<Spinner>(UI.countrySpinner)?.selectedItem?.toString() ?: preferences.getString(SessionManager.KEY_COUNTRY, "Philippines").orEmpty()
+                    val langStr = findViewById<Spinner>(UI.languageSpinner)?.selectedItem?.toString() ?: preferences.getString(SessionManager.KEY_LANGUAGE, "English").orEmpty()
                     val uid = preferences.getString(SessionManager.KEY_USER_ID, "").orEmpty()
                     val activeCode = preferences.getString(SessionManager.KEY_TEAM_CODE, "").orEmpty()
                     val activeMinistry = preferences.getString(SessionManager.KEY_MINISTRY_ROLE, "Worship Leader").orEmpty().ifBlank { "Worship Leader" }
@@ -2383,11 +2488,28 @@ class AdminActivity : AppCompatActivity() {
             }, parts[0].toInt(), parts[1].toInt(), false).show()
         }
     }
-    private fun serviceSummary(): View = panel().apply {
-        add(text(leaderDraft.optString("title", "Sunday Worship Service").ifBlank { "New Service" }, 15, navy, true))
-        space(6); add(text(leaderDraft.optString("date"), 12, navy))
-        space(4); add(text(leaderTime(leaderDraft.optString("start")) + " – " + leaderTime(leaderDraft.optString("end")), 12, navy))
-        space(4); add(text(leaderDraft.optString("venue"), 12, navy))
+    private fun serviceSummary(canEdit: Boolean = true): View = panel().apply {
+        add(horizontal().apply {
+            add(vertical().apply {
+                add(text(leaderDraft.optString("title", "Sunday Worship Service").ifBlank { "New Service" }, 15, navy, true))
+                space(6); add(text(leaderDraft.optString("date"), 12, navy))
+                space(4); add(text(leaderTime(leaderDraft.optString("start")) + " – " + leaderTime(leaderDraft.optString("end")), 12, navy))
+                space(4); add(text(leaderDraft.optString("venue"), 12, navy))
+            }, 0, -2, 1f)
+            if (canEdit) {
+                add(text("Edit Details", 12, purple, bold = true, centered = true).apply {
+                    background = bg(Color.rgb(243, 232, 255), 8)
+                    setPadding(dp(10), dp(6), dp(10), dp(6))
+                    isClickable = true
+                    isFocusable = true
+                    setOnClickListener {
+                        serviceWizard = false
+                        saveLeaderDraft()
+                        navigate("createService")
+                    }
+                }, -2, -2)
+            }
+        })
     }
     private fun stepActions(col: LinearLayout, back: () -> Unit, nextLabel: String = "Next", next: () -> Unit) {
         col.space(24)
@@ -2638,7 +2760,35 @@ class AdminActivity : AppCompatActivity() {
         }
         col.space(20)
         col.add(memberButton("Schedule Rehearsal", navy) { navigate("scheduleRehearsal") }, -1, 48); col.space(12)
-        col.add(memberButton("Review / Save Changes") { navigate("reviewService") }, -1, 48)
+        col.add(memberButton("Review / Save Changes") { navigate("reviewService") }, -1, 48); col.space(12)
+        col.add(text("Delete Service", 13, Color.rgb(220, 38, 38), bold = true, centered = true).apply {
+            background = bg(Color.rgb(254, 242, 242), 12, Color.rgb(252, 165, 165))
+            setPadding(dp(16), dp(10), dp(16), dp(10))
+            isClickable = true
+            isFocusable = true
+            setOnClickListener {
+                AlertDialog.Builder(this@AdminActivity)
+                    .setTitle("Delete Service")
+                    .setMessage("Are you sure you want to delete this service schedule? This cannot be undone.")
+                    .setPositiveButton("Delete") { _, _ ->
+                        val activeCode = preferences.getString("teamCode", "").orEmpty()
+                        val sid = leaderDraft.optString("id", "")
+                        if (sid.isNotBlank()) {
+                            TeamRepository.deleteService(activeCode, sid, preferences) {
+                                runOnUiThread { refreshTeamServices(force = true) }
+                            }
+                            val iter = localServices.iterator()
+                            while (iter.hasNext()) {
+                                if (iter.next().optString("id") == sid) iter.remove()
+                            }
+                        }
+                        toast("Service deleted.")
+                        navigate("schedule")
+                    }
+                    .setNegativeButton("Cancel", null)
+                    .show()
+            }
+        }, -1, 44)
     }
     private fun addLineupSong() {
         val available = (songCatalog().map { it.first } + listOf("Amazing Grace", "Goodness of God", "Build My Life")).distinct()
@@ -2717,20 +2867,54 @@ class AdminActivity : AppCompatActivity() {
                     add(text("⋮", 24, navy, centered = true).apply {
                         contentDescription = "Edit $songTitle"
                         setOnClickListener {
-                            AlertDialog.Builder(this@AdminActivity).setTitle(songTitle)
-                                .setItems(arrayOf("Move Up", "Move Down", "Remove")) { _, choice ->
-                                    if (choice == 2) songs.remove(index)
-                                    else {
-                                        val target = if (choice == 0) index - 1 else index + 1
-                                        if (target in 0 until songs.length()) {
-                                            val currentItem = songs.get(index)
-                                            val otherItem = songs.get(target)
-                                            songs.put(target, currentItem)
-                                            songs.put(index, otherItem)
-                                        }
-                                    }
-                                    saveLeaderDraft(); navigate("adminLineup")
-                                }.show()
+                            val menuOptions = arrayOf("Move to Position...", "Move Up", "Move Down", "Remove")
+                                    AlertDialog.Builder(this@AdminActivity).setTitle(songTitle)
+                                        .setItems(menuOptions) { _, choice ->
+                                            when (choice) {
+                                                0 -> {
+                                                    val positions = (1..songs.length()).map { "Position #$it" }.toTypedArray()
+                                                    AlertDialog.Builder(this@AdminActivity)
+                                                        .setTitle("Move '$songTitle' to:")
+                                                        .setItems(positions) { _, posIdx ->
+                                                            if (posIdx != index) {
+                                                                val item = songs.get(index)
+                                                                songs.remove(index)
+                                                                val newArray = org.json.JSONArray()
+                                                                for (p in 0 until songs.length()) {
+                                                                    if (p == posIdx) newArray.put(item)
+                                                                    newArray.put(songs.get(p))
+                                                                }
+                                                                if (posIdx >= songs.length()) newArray.put(item)
+                                                                leaderDraft.put("songs", newArray)
+                                                                saveLeaderDraft()
+                                                                navigate("adminLineup")
+                                                            }
+                                                        }.show()
+                                                }
+                                                1 -> {
+                                                    if (index > 0) {
+                                                        val currentItem = songs.get(index)
+                                                        val otherItem = songs.get(index - 1)
+                                                        songs.put(index - 1, currentItem)
+                                                        songs.put(index, otherItem)
+                                                        saveLeaderDraft(); navigate("adminLineup")
+                                                    }
+                                                }
+                                                2 -> {
+                                                    if (index < songs.length() - 1) {
+                                                        val currentItem = songs.get(index)
+                                                        val otherItem = songs.get(index + 1)
+                                                        songs.put(index + 1, currentItem)
+                                                        songs.put(index, otherItem)
+                                                        saveLeaderDraft(); navigate("adminLineup")
+                                                    }
+                                                }
+                                                3 -> {
+                                                    songs.remove(index)
+                                                    saveLeaderDraft(); navigate("adminLineup")
+                                                }
+                                            }
+                                        }.show()
                         }
                     }, 48, 48)
                 })
@@ -2911,6 +3095,35 @@ class AdminActivity : AppCompatActivity() {
                 else -> storeService("Published")
             }
         }))
+        col.space(12)
+        col.add(text("Delete Service", 13, Color.rgb(220, 38, 38), bold = true, centered = true).apply {
+            background = bg(Color.rgb(254, 242, 242), 12, Color.rgb(252, 165, 165))
+            setPadding(dp(16), dp(10), dp(16), dp(10))
+            isClickable = true
+            isFocusable = true
+            setOnClickListener {
+                AlertDialog.Builder(this@AdminActivity)
+                    .setTitle("Delete Service")
+                    .setMessage("Are you sure you want to delete this service schedule? This cannot be undone.")
+                    .setPositiveButton("Delete") { _, _ ->
+                        val activeCode = preferences.getString("teamCode", "").orEmpty()
+                        val sid = leaderDraft.optString("id", "")
+                        if (sid.isNotBlank()) {
+                            TeamRepository.deleteService(activeCode, sid, preferences) {
+                                runOnUiThread { refreshTeamServices(force = true) }
+                            }
+                            val iter = localServices.iterator()
+                            while (iter.hasNext()) {
+                                if (iter.next().optString("id") == sid) iter.remove()
+                            }
+                        }
+                        toast("Service deleted.")
+                        navigate("schedule")
+                    }
+                    .setNegativeButton("Cancel", null)
+                    .show()
+            }
+        }, -1, 44)
     }
     private fun formatBadgeDate(rawDate: String): String = try {
         if (rawDate.contains("\n")) rawDate
@@ -3373,13 +3586,24 @@ class AdminActivity : AppCompatActivity() {
             background = bg(Color.rgb(217, 217, 217), 12)
             filters = arrayOf(InputFilter.LengthFilter(120))
         }
+        val charCounter = text("${editingAnnouncement?.message?.length ?: 0} / 500 characters", 11, Color.GRAY)
         val message = plainInput("", true).apply {
             editingAnnouncement?.let { setText(it.message) }
             background = bg(Color.rgb(217, 217, 217), 14)
-            filters = arrayOf(InputFilter.LengthFilter(2000))
+            filters = arrayOf(InputFilter.LengthFilter(500))
+            addTextChangedListener(object : android.text.TextWatcher {
+                override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+                override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
+                    charCounter.text = "${s?.length ?: 0} / 500 characters"
+                }
+                override fun afterTextChanged(s: android.text.Editable?) {}
+            })
         }
         col.add(text("Announcement Title*", 12, navy, bold = true)); col.space(8); col.add(title, -1, 52); col.space(20)
-        col.add(text("Message*", 12, navy, bold = true)); col.space(8); col.add(message, -1, 240); col.space(24)
+        col.add(horizontal().apply {
+            add(text("Message*", 12, navy, bold = true), 0, -2, 1f)
+            add(charCounter, -2, -2)
+        }); col.space(8); col.add(message, -1, 220); col.space(24)
         val urgent = android.widget.CheckBox(this).apply {
             text = "Mark as Urgent Alert"
             textSize = 13f
@@ -3412,7 +3636,7 @@ class AdminActivity : AppCompatActivity() {
                         title.text.isBlank() -> invalid(title, "Enter a title.")
                         title.text.length > 120 -> invalid(title, "Title cannot exceed 120 characters.")
                         message.text.isBlank() -> invalid(message, "Enter a message.")
-                        message.text.length > 2000 -> invalid(message, "Message cannot exceed 2,000 characters.")
+                        message.text.length > 500 -> invalid(message, "Message cannot exceed 500 characters.")
                         else -> {
                             val activeCode = preferences.getString("teamCode", "").orEmpty()
                             val uid = preferences.getString("userId", "").orEmpty()
@@ -3685,9 +3909,18 @@ class AdminActivity : AppCompatActivity() {
         val rolesContainer = vertical()
         col.addView(rolesContainer)
 
+        val myMinistryRole = preferences.getString(SessionManager.KEY_MINISTRY_ROLE, "").orEmpty()
+            .ifBlank { preferences.getString("ministryRole", "").orEmpty() }
+        val isSubLeader = myMinistryRole.equals("Substitute Leader", ignoreCase = true)
+        val assignableRoles = if (isSubLeader) {
+            leaderRoles.filter { !it.equals("Substitute Leader", ignoreCase = true) && !it.equals("Leader", ignoreCase = true) }
+        } else {
+            leaderRoles
+        }
+
         fun renderRoles() {
             rolesContainer.removeAllViews()
-            leaderRoles.forEach { role ->
+            assignableRoles.forEach { role ->
                 val isSelected = role.equals(selectedRole, ignoreCase = true)
                 val item = horizontal().apply {
                     gravity = Gravity.CENTER_VERTICAL
@@ -3768,6 +4001,7 @@ class AdminActivity : AppCompatActivity() {
                 ) {
                     runOnUiThread { refreshTeamRoster(force = true) }
                 }
+                teamTab = "Members"
                 toast("Member role updated to $selectedRole")
                 navigate("teams")
             }
@@ -3802,6 +4036,7 @@ class AdminActivity : AppCompatActivity() {
     private val chatMessages = mutableListOf<ChatMessage>()
     private var chatListener: ListenerRegistration? = null
     private var chatScrollView: StableScrollView? = null
+    private val chatScrollRunnable = Runnable { chatScrollView?.fullScroll(View.FOCUS_DOWN) }
     private var chatMessagesCol: LinearLayout? = null
     private var chatEmptyView: View? = null
     private val lineupSongs = mutableListOf("Amazing Grace", "Way Maker", "Goodness of God", "Build My Life")
@@ -3851,7 +4086,25 @@ class AdminActivity : AppCompatActivity() {
         val col = vertical().apply { setPadding(dp(20), dp(24), dp(20), dp(24)) }
         scroll.addView(col, FrameLayout.LayoutParams(-1, -2))
         body(col)
-        root.add(scroll, -1, 0, 1f)
+        val swipeRefresh = androidx.swiperefreshlayout.widget.SwipeRefreshLayout(this).apply {
+            setColorSchemeColors(purple, navy)
+            addView(scroll, ViewGroup.LayoutParams(-1, -1))
+            setOnRefreshListener {
+                val currentCode = preferences.getString("teamCode", "").orEmpty()
+                if (currentCode.isNotBlank()) {
+                    refreshTeamRoster(force = true)
+                    refreshTeamServices(force = true)
+                    TeamRepository.getSongs(currentCode, true, preferences) {}
+                    TeamRepository.getAnnouncements(currentCode, true, preferences) {}
+                    TeamRepository.getSubstitutions(currentCode, true, preferences) {}
+                }
+                postDelayed({
+                    isRefreshing = false
+                    navigate(page)
+                }, 800)
+            }
+        }
+        root.add(swipeRefresh, -1, 0, 1f)
         footer?.invoke()?.let { root.add(it) }
         if (tab != null) root.add(memberNavigation(tab), -1, 64)
         return root
@@ -3955,22 +4208,53 @@ class AdminActivity : AppCompatActivity() {
         }
         return memberAvatar()
     }
-    private fun memberRow(name: String, role: String, badge: String? = null,
-                          onClick: (() -> Unit)? = null, photoUri: String? = null, uid: String? = null): View = horizontal().apply {
+    private fun memberRow(
+        name: String,
+        role: String,
+        badge: String? = null,
+        onRoleClick: (() -> Unit)? = null,
+        photoUri: String? = null,
+        uid: String? = null
+    ): View = horizontal().apply {
         setPadding(0, dp(8), 0, dp(8))
         val resolvedPhoto = photoUri?.takeIf { it.isNotBlank() } ?: findMemberPhotoUri(uid, name)
-        add(memberAvatarView(resolvedPhoto, 48), 48, 48)
+        val avatar = memberAvatarView(resolvedPhoto, 48).apply {
+            isClickable = true
+            isFocusable = true
+            setOnClickListener { showMemberProfileDialog(uid, name, role, resolvedPhoto) }
+        }
+        add(avatar, 48, 48)
+
         val info = vertical().apply {
             setPadding(dp(12), 0, dp(8), 0)
-            add(text(name, 13, navy, true)); space(3); add(text(role, 12, Color.DKGRAY))
+            val nameView = text(name, 13, navy, true).apply {
+                isClickable = true
+                isFocusable = true
+                setOnClickListener { showMemberProfileDialog(uid, name, role, resolvedPhoto) }
+            }
+            add(nameView)
+            space(3)
+            val roleView = text(role, 12, if (onRoleClick != null) purple else Color.DKGRAY, bold = (onRoleClick != null)).apply {
+                if (onRoleClick != null) {
+                    isClickable = true
+                    isFocusable = true
+                    setOnClickListener { onRoleClick() }
+                }
+            }
+            add(roleView)
         }
         add(info, 0, -2, 1f)
-        if (badge != null) add(text(badge, 11, navy, bold = true, centered = true).apply {
-            if (badge == "Admin") background = bg(Color.rgb(225, 225, 228), 14)
-        }, 64, 30)
-        onClick?.let { action ->
-            isClickable = true; isFocusable = true
-            setOnClickListener { action() }
+
+        if (badge != null) {
+            val badgeView = text(badge, 11, navy, bold = true, centered = true).apply {
+                if (badge == "Admin") background = bg(Color.rgb(225, 225, 228), 14)
+                if (onRoleClick != null) {
+                    isClickable = true
+                    isFocusable = true
+                    setOnClickListener { onRoleClick() }
+                }
+            }
+            add(badgeView, 64, 30)
         }
     }
     private fun scheduleView(): View {
@@ -4573,6 +4857,24 @@ class AdminActivity : AppCompatActivity() {
                         setPadding(dp(8), dp(4), dp(8), dp(4))
                     }
                     headerRow.add(statusBadge, -2, -2)
+                    val isInclusion = sub.reason.startsWith("[Inclusion]")
+                    val isExclusion = sub.reason.startsWith("[Exclusion]")
+                    if (isInclusion || isExclusion) {
+                        val typeBadge = text(
+                            if (isInclusion) "INCLUSION" else "EXCLUSION",
+                            9,
+                            if (isInclusion) Color.rgb(13, 148, 136) else Color.rgb(234, 88, 12),
+                            bold = true
+                        ).apply {
+                            background = bg(
+                                if (isInclusion) Color.rgb(204, 251, 241) else Color.rgb(255, 237, 213),
+                                8
+                            )
+                            setPadding(dp(6), dp(4), dp(6), dp(4))
+                        }
+                        headerRow.add(View(this@AdminActivity), 6, 1)
+                        headerRow.add(typeBadge, -2, -2)
+                    }
 
                     if (isLeader) {
                         val delBtn = text("✕", 14, Color.GRAY, bold = true, centered = true).apply {
@@ -4595,7 +4897,22 @@ class AdminActivity : AppCompatActivity() {
                         }
                         headerRow.add(delBtn, -2, -2)
                     }
-                    add(headerRow); space(10)
+                    add(headerRow); space(6)
+                    val matchedSvc = localServices.find { it.optString("id") == sub.serviceId }
+                    val dStr = sub.serviceDate.ifBlank { matchedSvc?.optString("date").orEmpty() }
+                    val tStr = matchedSvc?.let {
+                        val s = it.optString("start"); val e = it.optString("end")
+                        if (s.isNotBlank() && e.isNotBlank()) "${leaderTime(s)} – ${leaderTime(e)}" else if (s.isNotBlank()) leaderTime(s) else ""
+                    }.orEmpty()
+                    val vStr = matchedSvc?.optString("venue").orEmpty()
+                    val metaList = mutableListOf<String>()
+                    if (dStr.isNotBlank()) metaList.add("📅 $dStr")
+                    if (tStr.isNotBlank()) metaList.add("⏰ $tStr")
+                    if (vStr.isNotBlank()) metaList.add("📍 $vStr")
+                    if (metaList.isNotEmpty()) {
+                        add(text(metaList.joinToString("  •  "), 11, Color.rgb(100, 116, 139)))
+                        space(6)
+                    }
 
                     add(text("Requesting: ${sub.requesterName} (${sub.role})", 12, Color.rgb(30, 41, 59))); space(4)
                     add(text("Proposed Substitute: ${sub.substituteName}", 12, Color.BLACK, bold = true)); space(4)
@@ -4716,7 +5033,15 @@ class AdminActivity : AppCompatActivity() {
         leaderPosts(col)
     }
 
-    private fun notificationsView(): View = memberPage("Announcement", "home") { col ->
+    private fun notificationsView(): View = memberPage("Notification", "home") { col ->
+        val activeCode = preferences.getString("teamCode", "").orEmpty()
+        if (activeCode.isNotBlank()) {
+            TeamRepository.getSubstitutions(activeCode, true, preferences) {
+                runOnUiThread {
+                    if (page == "notifications") navigate("notifications")
+                }
+            }
+        }
         col.add(text("Substitution Request", 15, purple, bold = true)); col.space(12)
         substitutionFeed(col)
         col.space(16)
@@ -4757,12 +5082,10 @@ class AdminActivity : AppCompatActivity() {
     private val youtubeThumbnailCache = java.util.concurrent.ConcurrentHashMap<String, Bitmap>()
 
     private fun songCover(title: String, referenceUrl: String = ""): View {
-        val img = image("song_covers_source", "$title cover").apply {
-            scaleType = ImageView.ScaleType.CENTER_CROP
-            background = bg(navy, 6); outlineProvider = ViewOutlineProvider.BACKGROUND; clipToOutline = true
-            (drawable as? android.graphics.drawable.BitmapDrawable)?.setFilterBitmap(true)
-        }
-        val source = (img.drawable as? android.graphics.drawable.BitmapDrawable)?.bitmap
+        val videoId = com.example.syncedn.data.model.SongData.extractYoutubeVideoId(referenceUrl)
+        val cached = if (videoId != null) youtubeThumbnailCache[videoId] else null
+
+        val source = (image("song_covers_source", "$title cover").drawable as? android.graphics.drawable.BitmapDrawable)?.bitmap
         val defaultBitmap = if (source != null && !source.isRecycled) {
             val coverY = when (title) { "Praise" -> 210; "Trust in God" -> 320; "Way Maker" -> 430; else -> 540 }
             bitmaps.getOrPut("song_cover_$title") {
@@ -4770,46 +5093,48 @@ class AdminActivity : AppCompatActivity() {
             }
         } else null
 
-        val videoId = com.example.syncedn.data.model.SongData.extractYoutubeVideoId(referenceUrl)
-        if (videoId != null) {
-            val cached = youtubeThumbnailCache[videoId]
+        val img = ImageView(this).apply {
+            contentDescription = "$title cover"
+            scaleType = ImageView.ScaleType.CENTER_CROP
+            background = bg(navy, 6)
+            outlineProvider = ViewOutlineProvider.BACKGROUND
+            clipToOutline = true
             if (cached != null && !cached.isRecycled) {
-                img.setImageBitmap(cached)
-            } else {
-                if (defaultBitmap != null) img.setImageBitmap(defaultBitmap)
-                img.tag = videoId
-                Thread {
-                    try {
-                        val thumbUrl = com.example.syncedn.data.model.SongData.getYoutubeThumbnailUrl(referenceUrl)
-                        if (thumbUrl != null) {
-                            val url = java.net.URL(thumbUrl)
-                            val conn = url.openConnection() as java.net.HttpURLConnection
-                            conn.connectTimeout = 4000
-                            conn.readTimeout = 4000
-                            conn.instanceFollowRedirects = true
-                            conn.connect()
-                            if (conn.responseCode == 200) {
-                                val stream = conn.inputStream
-                                val downloaded = BitmapFactory.decodeStream(stream)
-                                stream.close()
-                                if (downloaded != null) {
-                                    youtubeThumbnailCache[videoId] = downloaded
-                                    runOnUiThread {
-                                        if (img.tag == videoId) {
-                                            img.setImageBitmap(downloaded)
-                                        }
+                setImageBitmap(cached)
+            } else if (defaultBitmap != null && !defaultBitmap.isRecycled) {
+                setImageBitmap(defaultBitmap)
+            }
+        }
+
+        if (videoId != null && (cached == null || cached.isRecycled)) {
+            img.tag = videoId
+            Thread {
+                try {
+                    val thumbUrl = com.example.syncedn.data.model.SongData.getYoutubeThumbnailUrl(referenceUrl)
+                    if (thumbUrl != null) {
+                        val url = java.net.URL(thumbUrl)
+                        val conn = url.openConnection() as java.net.HttpURLConnection
+                        conn.connectTimeout = 4000
+                        conn.readTimeout = 4000
+                        conn.instanceFollowRedirects = true
+                        conn.connect()
+                        if (conn.responseCode == 200) {
+                            val stream = conn.inputStream
+                            val downloaded = BitmapFactory.decodeStream(stream)
+                            stream.close()
+                            if (downloaded != null) {
+                                youtubeThumbnailCache[videoId] = downloaded
+                                runOnUiThread {
+                                    if (img.tag == videoId) {
+                                        img.setImageBitmap(downloaded)
                                     }
                                 }
                             }
-                            conn.disconnect()
                         }
-                    } catch (_: Exception) {}
-                }.start()
-            }
-        } else {
-            if (defaultBitmap != null) {
-                img.setImageBitmap(defaultBitmap)
-            }
+                        conn.disconnect()
+                    }
+                } catch (_: Exception) {}
+            }.start()
         }
         return img
     }
@@ -4979,14 +5304,46 @@ class AdminActivity : AppCompatActivity() {
             songMetronome = metronome
             add(metronome)
         }); col.space(24)
+        val refLink = currentSong?.referenceUrl.orEmpty().ifBlank { savedSong.optString("link") }
+        val ytVidId = extractYouTubeVideoId(refLink)
+        if (ytVidId != null) {
+            col.add(text("Rehearsal Video", 13, navy, true)); col.space(8)
+            val webView = android.webkit.WebView(this@AdminActivity).apply {
+                settings.javaScriptEnabled = true
+                settings.domStorageEnabled = true
+                settings.mediaPlaybackRequiresUserGesture = false
+                webChromeClient = android.webkit.WebChromeClient()
+                val html = """
+                    <!DOCTYPE html>
+                    <html>
+                    <head>
+                        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                        <style>
+                            body { margin: 0; background-color: #000; display: flex; align-items: center; justify-content: center; height: 100vh; }
+                            iframe { width: 100%; height: 100%; border: 0; }
+                        </style>
+                    </head>
+                    <body>
+                        <iframe src="https://www.youtube-nocookie.com/embed/$ytVidId?playsinline=1&rel=0" allowfullscreen></iframe>
+                    </body>
+                    </html>
+                """.trimIndent()
+                loadDataWithBaseURL("https://www.youtube.com", html, "text/html", "UTF-8", null)
+            }
+            col.add(panel().apply {
+                setPadding(dp(4), dp(4), dp(4), dp(4))
+                add(webView, -1, 200)
+            }); col.space(16)
+        }
+
         col.add(text(if(showChords) "Lyrics & Chords Sheet" else "Lyrics", 13, navy, true)); col.space(10)
         col.add(panel().apply {
             add(sheetText, -1, -2)
         }); col.space(24)
         renderTarget((basePitch + offset) % 12)
         col.add(text("Reference Link", 13, navy, true)); col.space(10)
-        col.add(memberButton("Find song on YouTube", navy) {
-            val reference = currentSong?.referenceUrl ?: savedSong.optString("link")
+        col.add(memberButton("Open in YouTube App", navy) {
+            val reference = currentSong?.referenceUrl.orEmpty().ifBlank { savedSong.optString("link") }
             val url = if (reference.startsWith("https://") || reference.startsWith("http://")) reference
                 else "https://www.youtube.com/results?search_query=" + Uri.encode("$selectedSong worship")
             try { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }
@@ -5110,6 +5467,9 @@ class AdminActivity : AppCompatActivity() {
                     }
                     add(iv, 220, 180)
                     ImageLoader.loadProfilePhoto(iv, msg.mediaUrl, circular = false)
+                    iv.isClickable = true
+                    iv.isFocusable = true
+                    iv.setOnClickListener { showChatImageViewer(msg.mediaUrl) }
                     if (msg.text.isNotBlank()) space(6)
                 }
                 if (msg.text.isNotBlank()) {
@@ -5123,8 +5483,64 @@ class AdminActivity : AppCompatActivity() {
                 ViewGroup.LayoutParams.WRAP_CONTENT
             ).apply { gravity = Gravity.END })
 
+            bubble.isClickable = true
+            bubble.isFocusable = true
+            bubble.setOnLongClickListener {
+                val options = if (msg.text.isNotBlank()) arrayOf("Edit Message", "Delete Message") else arrayOf("Delete Message")
+                AlertDialog.Builder(this@AdminActivity)
+                    .setTitle("Message Options")
+                    .setItems(options) { _, which ->
+                        val action = options[which]
+                        val curCode = preferences.getString("teamCode", "").orEmpty()
+                        if (action == "Edit Message") {
+                            val input = EditText(this@AdminActivity).apply {
+                                setText(msg.text)
+                                setSelection(msg.text.length)
+                                setPadding(dp(16), dp(12), dp(16), dp(12))
+                            }
+                            AlertDialog.Builder(this@AdminActivity)
+                                .setTitle("Edit Message")
+                                .setView(input)
+                                .setPositiveButton("Save") { _, _ ->
+                                    val newTxt = input.text.toString().trim()
+                                    if (newTxt.isNotBlank()) {
+                                        TeamRepository.editChatMessage(curCode, msg.id, newTxt, preferences) { res ->
+                                            runOnUiThread {
+                                                if (res.isSuccess) {
+                                                    val idx = chatMessages.indexOfFirst { it.id == msg.id }
+                                                    if (idx != -1) chatMessages[idx] = chatMessages[idx].copy(text = newTxt)
+                                                    navigate("teams")
+                                                } else toast("Failed to edit message")
+                                            }
+                                        }
+                                    }
+                                }
+                                .setNegativeButton("Cancel", null)
+                                .show()
+                        } else if (action == "Delete Message") {
+                            AlertDialog.Builder(this@AdminActivity)
+                                .setTitle("Delete Message?")
+                                .setMessage("Are you sure you want to delete this message?")
+                                .setPositiveButton("Delete") { _, _ ->
+                                    TeamRepository.deleteChatMessage(curCode, msg.id, preferences) { res ->
+                                        runOnUiThread {
+                                            if (res.isSuccess) {
+                                                chatMessages.removeAll { it.id == msg.id }
+                                                navigate("teams")
+                                            } else toast("Failed to delete message")
+                                        }
+                                    }
+                                }
+                                .setNegativeButton("Cancel", null)
+                                .show()
+                        }
+                    }
+                    .show()
+                true
+            }
+
             val timeStr = timeFormat.format(java.util.Date(msg.timestamp))
-            val caption = text(timeStr, 10, Color.rgb(148, 163, 184)).apply {
+            val caption = text("$timeStr  ✓✓ Delivered", 10, Color.rgb(148, 163, 184)).apply {
                 setPadding(0, dp(2), dp(4), 0)
             }
             bubbleContainer.addView(caption, LinearLayout.LayoutParams(
@@ -5179,12 +5595,42 @@ class AdminActivity : AppCompatActivity() {
                     }
                     add(iv, 220, 180)
                     ImageLoader.loadProfilePhoto(iv, msg.mediaUrl, circular = false)
+                    iv.isClickable = true
+                    iv.isFocusable = true
+                    iv.setOnClickListener { showChatImageViewer(msg.mediaUrl) }
                     if (msg.text.isNotBlank()) space(6)
                 }
                 if (msg.text.isNotBlank()) {
                     add(text(msg.text, 14, Color.rgb(21, 28, 50)).apply {
                         maxWidth = maxBubbleWidth - dp(28)
                     })
+                }
+            }
+            if (isLeader) {
+                bubble.isClickable = true
+                bubble.isFocusable = true
+                bubble.setOnLongClickListener {
+                    val curCode = preferences.getString("teamCode", "").orEmpty()
+                    AlertDialog.Builder(this@AdminActivity)
+                        .setTitle("Admin Actions")
+                        .setItems(arrayOf("Delete Message")) { _, _ ->
+                            AlertDialog.Builder(this@AdminActivity)
+                                .setTitle("Delete Message?")
+                                .setMessage("As Leader, delete this message for everyone?")
+                                .setPositiveButton("Delete") { _, _ ->
+                                    TeamRepository.deleteChatMessage(curCode, msg.id, preferences) { res ->
+                                        runOnUiThread {
+                                            if (res.isSuccess) {
+                                                chatMessages.removeAll { it.id == msg.id }
+                                                navigate("teams")
+                                            } else toast("Failed to delete message")
+                                        }
+                                    }
+                                }
+                                .setNegativeButton("Cancel", null)
+                                .show()
+                        }.show()
+                    true
                 }
             }
             bubbleContainer.addView(bubble, LinearLayout.LayoutParams(
@@ -5216,7 +5662,8 @@ class AdminActivity : AppCompatActivity() {
             chatEmptyView = null
         }
         col.addView(buildChatMessageBubble(msg, currentUid))
-        chatScrollView?.post { chatScrollView?.fullScroll(View.FOCUS_DOWN) }
+        chatScrollView?.removeCallbacks(chatScrollRunnable)
+        chatScrollView?.postDelayed(chatScrollRunnable, 50)
     }
 
     private fun teamsView(): View {

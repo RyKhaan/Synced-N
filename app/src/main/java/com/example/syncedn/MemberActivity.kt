@@ -84,6 +84,69 @@ import androidx.core.view.WindowInsetsCompat
  * Requests, reports and availability are local demo data; messages are not sent.
  */
 open class MemberActivity : AppCompatActivity() {
+    private fun showMemberProfileDialog(uid: String?, name: String, role: String, photoUri: String?) {
+        val roster = getActiveRoster()
+        val m = roster.find { (uid != null && uid.isNotBlank() && it.uid == uid) || it.fullName.equals(name, true) || it.username.equals(name, true) }
+        val dialog = AlertDialog.Builder(this)
+        val pUri = photoUri?.takeIf { it.isNotBlank() } ?: m?.photoUri.orEmpty()
+        val view = vertical().apply {
+            setPadding(dp(24), dp(24), dp(24), dp(24))
+            gravity = Gravity.CENTER_HORIZONTAL
+            add(memberAvatarView(pUri, 72), 72, 72)
+            space(12)
+            add(text(m?.fullName?.ifBlank { name } ?: name, 16, navy, bold = true, centered = true))
+            space(4)
+            add(text("@${m?.username?.ifBlank { name } ?: name}", 12, Color.GRAY, centered = true))
+            space(8)
+            add(text(m?.ministryRole?.ifBlank { role } ?: role, 13, purple, bold = true, centered = true).apply {
+                background = bg(Color.rgb(245, 208, 254), 12)
+                setPadding(dp(12), dp(4), dp(12), dp(4))
+            })
+            if (m?.email?.isNotBlank() == true) {
+                space(12)
+                add(text("✉ ${m.email}", 12, navy, centered = true))
+            }
+        }
+        dialog.setView(view).setPositiveButton("Close", null).show()
+    }
+
+    private fun extractYouTubeVideoId(url: String): String? {
+        if (url.isBlank()) return null
+        val pattern = "(?<=watch\\?v=|/videos/|embed/|youtu\\.be/|/v/|/e/|watch\\?feature=player_embedded&v=)[^#&?\\n]*"
+        val compiledPattern = java.util.regex.Pattern.compile(pattern)
+        val matcher = compiledPattern.matcher(url)
+        return if (matcher.find()) matcher.group() else null
+    }
+
+    private fun showChatImageViewer(imageUrl: String) {
+        if (imageUrl.isBlank()) return
+        val dialog = android.app.Dialog(this, android.R.style.Theme_Black_NoTitleBar_Fullscreen)
+        val container = FrameLayout(this).apply {
+            setBackgroundColor(Color.argb(235, 0, 0, 0))
+        }
+        val iv = ImageView(this).apply {
+            scaleType = ImageView.ScaleType.FIT_CENTER
+        }
+        ImageLoader.loadProfilePhoto(iv, imageUrl, circular = false)
+        container.addView(iv, FrameLayout.LayoutParams(-1, -1, Gravity.CENTER))
+
+        val closeBtn = text("✕ Close", 14, Color.WHITE, bold = true, centered = true).apply {
+            background = bg(Color.argb(120, 50, 50, 50), 16)
+            setPadding(dp(16), dp(8), dp(16), dp(8))
+            isClickable = true
+            isFocusable = true
+            setOnClickListener { dialog.dismiss() }
+        }
+        container.addView(closeBtn, FrameLayout.LayoutParams(-2, -2, Gravity.TOP or Gravity.END).apply {
+            topMargin = dp(40); rightMargin = dp(20)
+        })
+        dialog.setContentView(container)
+        dialog.show()
+    }
+
+    private var substitutionType = "Exclusion"
+    private var userMembershipListener: com.google.firebase.firestore.ListenerRegistration? = null
+    private val chatScrollRunnable = Runnable { chatScrollView?.fullScroll(View.FOCUS_DOWN) }
     protected open val initialPage: String = "home"
     private var page = "start"
     private var displayName = ""
@@ -277,6 +340,29 @@ open class MemberActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        val myCurrentUid = preferences.getString(SessionManager.KEY_USER_ID, "").orEmpty()
+        if (myCurrentUid.isNotBlank()) {
+            userMembershipListener = com.google.firebase.firestore.FirebaseFirestore.getInstance()
+                .collection("users").document(myCurrentUid)
+                .addSnapshotListener { snapshot, error ->
+                    if (error != null || snapshot == null || !snapshot.exists()) return@addSnapshotListener
+                    val tCode = snapshot.getString("teamCode").orEmpty()
+                    val curTeam = preferences.getString("teamCode", "").orEmpty()
+                    if (curTeam.isNotBlank() && tCode.isBlank() && !preferences.getBoolean("leftTeam", false)) {
+                        preferences.edit()
+                            .putString("role", "")
+                            .remove("teamName")
+                            .remove("teamCode")
+                            .remove("ministryRole")
+                            .putBoolean("leftTeam", true)
+                            .apply()
+                        runOnUiThread {
+                            toast("You have been removed from the team by the Leader.")
+                            navigate("teamChoice")
+                        }
+                    }
+                }
+        }
         WindowCompat.setDecorFitsSystemWindows(window, false)
         syncLocalTeamsToMemory()
         checkAndRequestNotificationPermission()
@@ -306,6 +392,15 @@ open class MemberActivity : AppCompatActivity() {
         navigate(savedInstanceState?.getString("page") ?: intent.getStringExtra("startPage") ?: initialPage)
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
+                if (page == "home") {
+                    AlertDialog.Builder(this@MemberActivity)
+                        .setTitle("Exit Synced N")
+                        .setMessage("Are you sure you want to quit the app?")
+                        .setPositiveButton("Exit") { _, _ -> finishAffinity() }
+                        .setNegativeButton("Cancel", null)
+                        .show()
+                    return
+                }
                 val previous = when (page) {
                     "login" -> "start"
                     "register", "reset" -> "login"
@@ -313,7 +408,7 @@ open class MemberActivity : AppCompatActivity() {
                     "success" -> "login"
                     "teamChoice" -> "login"
                     "createTeam", "joinTeam" -> "teamChoice"
-                    "home" -> "login"
+                    "home" -> null
                     "settings" -> "home"
                     "profile" -> profileReturnPage
                     "schedule", "calendar", "announcements", "notifications", "teams" -> "home"
@@ -329,6 +424,14 @@ open class MemberActivity : AppCompatActivity() {
                 else { isEnabled = false; onBackPressedDispatcher.onBackPressed() }
             }
         })
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        chatListener?.remove()
+        chatListener = null
+        userMembershipListener?.remove()
+        userMembershipListener = null
     }
 
     override fun onSaveInstanceState(outState: Bundle) {
@@ -404,6 +507,14 @@ open class MemberActivity : AppCompatActivity() {
                 click(UI.joinTeamChoiceButton) { navigate("joinTeam") }
             }
             "createTeam" -> click(UI.createTeamButton) {
+                if (!com.example.syncedn.data.util.ValidationUtils.isNetworkAvailable(this)) {
+                    AlertDialog.Builder(this)
+                        .setTitle("No Internet Connection")
+                        .setMessage("You appear to be offline. Creating a team requires an active internet connection to generate and sync team records.")
+                        .setPositiveButton("OK", null)
+                        .show()
+                    return@click
+                }
                 val name = input(UI.teamName)
                 if (name.text.isBlank()) invalid(name, "Enter a team name.")
                 else {
@@ -460,6 +571,14 @@ open class MemberActivity : AppCompatActivity() {
                 }
             }
             "joinTeam" -> click(UI.joinTeamButton) {
+                if (!com.example.syncedn.data.util.ValidationUtils.isNetworkAvailable(this)) {
+                    AlertDialog.Builder(this)
+                        .setTitle("No Internet Connection")
+                        .setMessage("You appear to be offline. Joining a team requires an active internet connection to verify team invite codes.")
+                        .setPositiveButton("OK", null)
+                        .show()
+                    return@click
+                }
                 val code = input(UI.teamCode)
                 val enteredCode = code.text.toString().trim().uppercase()
                 if (enteredCode.isBlank()) {
@@ -1672,7 +1791,7 @@ open class MemberActivity : AppCompatActivity() {
 
     private fun settingsView(): View {
         val root=vertical().apply {setBackgroundColor(Color.WHITE)}
-        root.add(settingsHeader("Settings",false))
+        root.add(settingsHeader("Settings",true))
         val scroll=StableScrollView(this).apply {isFillViewport=true; clipToPadding=true}
         val col=vertical();scroll.addView(col,FrameLayout.LayoutParams(-1,-2));root.add(scroll,-1,0,1f)
         col.space(24)
@@ -1730,13 +1849,20 @@ open class MemberActivity : AppCompatActivity() {
         applyProfilePhoto(UI.settingsAvatar)
         click(UI.pageBack) {navigate("home")}
         click(UI.openProfileButton) {openProfile("settings")}
-        click(UI.settingsTeam) {navigate("teams")}
+        click(UI.settingsTeam) { teamTab = "Members"; navigate("teams") }
         findViewById<Switch>(UI.notificationSwitch).apply {
             isChecked=preferences.getBoolean("notifications",true)
             setOnCheckedChangeListener { _, checked ->
+                preferences.edit().putBoolean("notifications", checked).apply()
                 val unmuted = preferences.getBoolean("teamUnmuted", true)
                 TeamRepository.saveNotificationPreferences(currentUserId(), checked, unmuted, preferences)
-                toast(if(checked) "Notifications enabled" else "Notifications disabled")
+                val curCode = preferences.getString("teamCode", "").orEmpty()
+                if (checked && curCode.isNotBlank()) {
+                    com.example.syncedn.data.auth.SyncedFirebaseMessagingService.subscribeToTeam(curCode)
+                } else if (!checked && curCode.isNotBlank()) {
+                    com.example.syncedn.data.auth.SyncedFirebaseMessagingService.unsubscribeFromTeam(curCode)
+                }
+                toast(if(checked) "FCM Notifications enabled" else "FCM Notifications disabled")
             }
         }
         click(UI.logoutButton) {
@@ -1755,8 +1881,39 @@ open class MemberActivity : AppCompatActivity() {
                 }
                 .setNegativeButton("Cancel", null).show()
         }
-        click(UI.aboutButton) {detail("About Synced N", "Church Ministry Management\nCloud-synced worship scheduling, team roster, chord sheets, substitutions, and real-time ministry chat.")}
-        click(UI.helpButton) {detail("Help", "Tap Profile to update your details and avatar. Manage schedules, availability, song lineups, and team chat from the bottom navigation bar.")}
+        click(UI.aboutButton) {
+            AlertDialog.Builder(this)
+                .setTitle("About Synced N")
+                .setMessage(
+                    "Synced N — Church Ministry Management Platform\n\n" +
+                    "Version 1.0.0 (Production Release)\n\n" +
+                    "A comprehensive collaborative ministry workflow system designed to synchronize worship leaders, vocalists, instrumentalists, and technical teams.\n\n" +
+                    "Key Capabilities:\n" +
+                    "• Worship Service Scheduling & Role Assignments\n" +
+                    "• Dynamic Member Availability & Conflict Detection\n" +
+                    "• Song Catalog, Transposition & Rehearsal Lineups\n" +
+                    "• Service Substitution & Cover Requests (Inclusion/Exclusion)\n" +
+                    "• Real-time Encrypted Team Communication & Media Sharing\n" +
+                    "• Cloud Firestore Synchronization & Cloud Messaging (FCM)\n\n" +
+                    "Developed with care for church ministry excellence."
+                )
+                .setPositiveButton("OK", null)
+                .show()
+        }
+        click(UI.helpButton) {
+            AlertDialog.Builder(this)
+                .setTitle("Help & User Guide")
+                .setMessage(
+                    "How to use Synced N:\n\n" +
+                    "1. Schedule & Lineups: View worship services, assigned roles, and song lineups. Tap any song to view lyrics, chords, transpose keys, and watch rehearsal videos.\n\n" +
+                    "2. Availability: Set your unavailable dates in Calendar to help leaders schedule around your conflicts.\n\n" +
+                    "3. Substitutions: If unable to serve or if you want to join a service, tap Request Substitution (Exclusion/Inclusion) on the service card.\n\n" +
+                    "4. Team Chat: Tap Teams to chat with your ministry teammates and share rehearsal photos.\n\n" +
+                    "5. Notifications: Turn on Push Notifications in Settings to receive instant alerts on service changes and announcements."
+                )
+                .setPositiveButton("Close", null)
+                .show()
+        }
         click(UI.homeTab) {navigate("home")};click(UI.scheduleTab) {schedule()}
         click(UI.teamsTab) {navigate("teams")};click(UI.settingsTab) {toast("You are on Settings.")}
     }
@@ -1831,8 +1988,7 @@ open class MemberActivity : AppCompatActivity() {
             add(profileField(UI.profilePhone,"Phone Number",preferences.getString(SessionManager.KEY_PHONE,"").orEmpty(),"Add your phone number",InputType.TYPE_CLASS_PHONE,maxLength=ValidationUtils.MAX_PHONE_LENGTH));space(8)
             add(profileField(UI.profileEmail,"Email",preferences.getString(SessionManager.KEY_EMAIL,"").orEmpty(),kind=InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS,maxLength=ValidationUtils.MAX_EMAIL_LENGTH));space(16)
             add(text("Preference",15,Color.BLACK,true));space(12)
-            add(preferenceRow(UI.countrySpinner,"Country",listOf("Philippines","Singapore","United States"),preferences.getString(SessionManager.KEY_COUNTRY,"Philippines").orEmpty()));space(8)
-            add(preferenceRow(UI.languageSpinner,"Language",listOf("English","Filipino"),preferences.getString(SessionManager.KEY_LANGUAGE,"English").orEmpty()));space(48)
+space(48)
             action(UI.saveProfileButton,"Save Profile Changes");space(32)
         }
         root.add(bottomNavigation("Settings"),-1,64)
@@ -1862,8 +2018,8 @@ open class MemberActivity : AppCompatActivity() {
                 emailStr.isNotBlank() && !Patterns.EMAIL_ADDRESS.matcher(emailStr).matches()->invalid(email,"Enter a valid email.")
                 else->{
                     fullName=name.text.toString().trim();displayName=username.text.toString().trim()
-                    val countryStr = findViewById<Spinner>(UI.countrySpinner).selectedItem.toString()
-                    val langStr = findViewById<Spinner>(UI.languageSpinner).selectedItem.toString()
+                    val countryStr = findViewById<Spinner>(UI.countrySpinner)?.selectedItem?.toString() ?: preferences.getString(SessionManager.KEY_COUNTRY, "Philippines").orEmpty()
+                    val langStr = findViewById<Spinner>(UI.languageSpinner)?.selectedItem?.toString() ?: preferences.getString(SessionManager.KEY_LANGUAGE, "English").orEmpty()
                     val uid = preferences.getString(SessionManager.KEY_USER_ID, "").orEmpty()
                     val activeCode = preferences.getString(SessionManager.KEY_TEAM_CODE, "").orEmpty()
                     val activeRole = preferences.getString(SessionManager.KEY_ROLE, "Member").orEmpty()
@@ -2256,7 +2412,25 @@ open class MemberActivity : AppCompatActivity() {
         val col = vertical().apply { setPadding(dp(20), dp(24), dp(20), dp(24)) }
         scroll.addView(col, FrameLayout.LayoutParams(-1, -2))
         body(col)
-        root.add(scroll, -1, 0, 1f)
+        val swipeRefresh = androidx.swiperefreshlayout.widget.SwipeRefreshLayout(this).apply {
+            setColorSchemeColors(purple, navy)
+            addView(scroll, ViewGroup.LayoutParams(-1, -1))
+            setOnRefreshListener {
+                val currentCode = preferences.getString("teamCode", "").orEmpty()
+                if (currentCode.isNotBlank()) {
+                    refreshTeamRoster(force = true)
+                    refreshTeamServices(force = true)
+                    TeamRepository.getSongs(currentCode, true, preferences) {}
+                    TeamRepository.getAnnouncements(currentCode, true, preferences) {}
+                    TeamRepository.getSubstitutions(currentCode, true, preferences) {}
+                }
+                postDelayed({
+                    isRefreshing = false
+                    navigate(page)
+                }, 800)
+            }
+        }
+        root.add(swipeRefresh, -1, 0, 1f)
         footer?.invoke()?.let { root.add(it) }
         if (tab != null) root.add(memberNavigation(tab), -1, 64)
         return root
@@ -2360,19 +2534,43 @@ open class MemberActivity : AppCompatActivity() {
         }
         return memberAvatar()
     }
-    private fun memberRow(name: String, role: String, badge: String? = null,
-                          onClick: (() -> Unit)? = null, photoUri: String? = null, uid: String? = null): View = horizontal().apply {
+    private fun memberRow(
+        name: String,
+        role: String,
+        badge: String? = null,
+        onClick: (() -> Unit)? = null,
+        photoUri: String? = null,
+        uid: String? = null
+    ): View = horizontal().apply {
         setPadding(0, dp(8), 0, dp(8))
         val resolvedPhoto = photoUri?.takeIf { it.isNotBlank() } ?: findMemberPhotoUri(uid, name)
-        add(memberAvatarView(resolvedPhoto, 48), 48, 48)
+        val avatar = memberAvatarView(resolvedPhoto, 48).apply {
+            isClickable = true
+            isFocusable = true
+            setOnClickListener { showMemberProfileDialog(uid, name, role, resolvedPhoto) }
+        }
+        add(avatar, 48, 48)
+
         val info = vertical().apply {
             setPadding(dp(12), 0, dp(8), 0)
-            add(text(name, 13, navy, true)); space(3); add(text(role, 12, Color.DKGRAY))
+            val nameView = text(name, 13, navy, true).apply {
+                isClickable = true
+                isFocusable = true
+                setOnClickListener { showMemberProfileDialog(uid, name, role, resolvedPhoto) }
+            }
+            add(nameView)
+            space(3)
+            val roleView = text(role, 12, Color.DKGRAY)
+            add(roleView)
         }
         add(info, 0, -2, 1f)
-        if (badge != null) add(text(badge, 11, navy, true, true).apply {
-            if (badge == "Admin") background = bg(Color.rgb(225, 225, 228), 14)
-        }, 64, 30)
+
+        if (badge != null) {
+            val badgeView = text(badge, 11, navy, true, true).apply {
+                if (badge == "Admin") background = bg(Color.rgb(225, 225, 228), 14)
+            }
+            add(badgeView, 64, 30)
+        }
         onClick?.let { action ->
             isClickable = true; isFocusable = true
             setOnClickListener { action() }
@@ -2981,10 +3179,41 @@ open class MemberActivity : AppCompatActivity() {
                 col.add(memberRow(name, role, badge, photoUri = photoUri))
             }
         }
+        val sDate = selectedSheetService?.optString("date")?.ifBlank {
+            preferences.getString("serviceDate", "")
+        } ?: preferences.getString("serviceDate", "").orEmpty()
+        val todayDate = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).format(java.util.Date())
+        val isServicePast = sDate.isNotBlank() && sDate < todayDate
+
+        var isUserAssigned = false
+        val currentUid = com.example.syncedn.data.auth.AuthManager.currentUser?.uid?.takeIf { it.isNotBlank() }
+            ?: preferences.getString("userId", "").orEmpty()
+        val currentName = fullName.ifBlank { displayName }
+        if (assignments != null) {
+            for (i in 0 until assignments.length()) {
+                val a = assignments.getJSONObject(i)
+                val aUid = a.optString("uid").ifBlank { a.optString("userId") }
+                val aName = a.optString("name")
+                if ((currentUid.isNotBlank() && aUid == currentUid) ||
+                    (currentName.isNotBlank() && aName.equals(currentName, ignoreCase = true))) {
+                    isUserAssigned = true
+                    break
+                }
+            }
+        }
+
         col.space(28)
-        col.add(memberButton("Request Substitution") { navigate("substitution") }, -1, 48)
+        if (isServicePast) {
+            col.add(text("Service date has passed. Substitution requests are closed.", 12, Color.GRAY, centered = true))
+        } else {
+            val label = if (isUserAssigned) "Request Exclusion (Swap/Cover)" else "Request Inclusion (Join Service)"
+            col.add(memberButton(label) {
+                substitutionType = if (isUserAssigned) "Exclusion" else "Inclusion"
+                navigate("substitution")
+            }, -1, 48)
+        }
     }
-    private fun substitutionView(): View = memberPage("Request Substitution", "service") { col ->
+    private fun substitutionView(): View = memberPage(if (substitutionType == "Inclusion") "Request Inclusion" else "Request Exclusion", "service") { col ->
         val activeCode = preferences.getString(SessionManager.KEY_TEAM_CODE, "").orEmpty().ifBlank { preferences.getString("teamCode", "").orEmpty() }
         val currentUid = com.example.syncedn.data.auth.AuthManager.currentUser?.uid?.takeIf { it.isNotBlank() }
             ?: preferences.getString(SessionManager.KEY_USER_ID, "").orEmpty().ifBlank {
@@ -3150,6 +3379,8 @@ open class MemberActivity : AppCompatActivity() {
                     return@setOnClickListener
                 }
 
+                val prefix = if (substitutionType == "Inclusion") "[Inclusion] " else "[Exclusion] "
+                val formattedReason = if (reasonText.startsWith("[Inclusion]") || reasonText.startsWith("[Exclusion]")) reasonText else (prefix + reasonText)
                 val newSub = SubstitutionData(
                     id = java.util.UUID.randomUUID().toString(),
                     teamCode = activeCode,
@@ -3161,7 +3392,7 @@ open class MemberActivity : AppCompatActivity() {
                     role = assignedRole,
                     substituteUid = selectedSubstituteUid.ifBlank { "sub_${selectedSubstituteName.hashCode()}" },
                     substituteName = selectedSubstituteName,
-                    reason = reasonText,
+                    reason = formattedReason,
                     status = "Pending",
                     createdBy = currentUid,
                     createdAt = System.currentTimeMillis(),
@@ -3325,14 +3556,26 @@ open class MemberActivity : AppCompatActivity() {
         fun populateSubstitutions() {
             subCol.removeAllViews()
             val list = TeamRepository.getCachedSubstitutions(activeCode, preferences)
-            if (list.isEmpty()) {
+            val myRole = preferences.getString(SessionManager.KEY_MINISTRY_ROLE, "").orEmpty()
+                .ifBlank { preferences.getString("ministryRole", "").orEmpty() }
+            val isSubLeader = myRole.equals("Substitute Leader", ignoreCase = true)
+
+            val visibleList = list.filter { sub ->
+                val isTarget = (currentUid.isNotBlank() && sub.substituteUid == currentUid) ||
+                        (currentName.isNotBlank() && sub.substituteName.equals(currentName, ignoreCase = true))
+                val isReq = (currentUid.isNotBlank() && sub.requesterUid == currentUid) ||
+                        (currentName.isNotBlank() && sub.requesterName.equals(currentName, ignoreCase = true))
+                isTarget || isReq || isSubLeader
+            }
+
+            if (visibleList.isEmpty()) {
                 subCol.add(panel().apply {
                     add(text("No substitution requests.", 13, Color.GRAY, centered = true))
                 }); subCol.space(24)
                 return
             }
 
-            for (sub in list) {
+            for (sub in visibleList) {
                 subCol.add(panel().apply {
                     val headerRow = horizontal().apply { gravity = Gravity.CENTER_VERTICAL }
                     headerRow.add(text(sub.serviceTitle.ifBlank { "Sunday Worship Service" }, 15, Color.rgb(80, 5, 104), bold = true), 0, -2, 1f)
@@ -3361,7 +3604,40 @@ open class MemberActivity : AppCompatActivity() {
                         setPadding(dp(8), dp(4), dp(8), dp(4))
                     }
                     headerRow.add(statusBadge, -2, -2)
-                    add(headerRow); space(10)
+                    val isInclusion = sub.reason.startsWith("[Inclusion]")
+                    val isExclusion = sub.reason.startsWith("[Exclusion]")
+                    if (isInclusion || isExclusion) {
+                        val typeBadge = text(
+                            if (isInclusion) "INCLUSION" else "EXCLUSION",
+                            9,
+                            if (isInclusion) Color.rgb(13, 148, 136) else Color.rgb(234, 88, 12),
+                            bold = true
+                        ).apply {
+                            background = bg(
+                                if (isInclusion) Color.rgb(204, 251, 241) else Color.rgb(255, 237, 213),
+                                8
+                            )
+                            setPadding(dp(6), dp(4), dp(6), dp(4))
+                        }
+                        headerRow.add(View(this@MemberActivity), 6, 1)
+                        headerRow.add(typeBadge, -2, -2)
+                    }
+                    add(headerRow); space(6)
+                    val matchedSvc = storedServices().find { it.optString("id") == sub.serviceId }
+                    val dStr = sub.serviceDate.ifBlank { matchedSvc?.optString("date").orEmpty() }
+                    val tStr = matchedSvc?.let {
+                        val s = it.optString("start"); val e = it.optString("end")
+                        if (s.isNotBlank() && e.isNotBlank()) "${formatServiceTime(s)} – ${formatServiceTime(e)}" else if (s.isNotBlank()) formatServiceTime(s) else ""
+                    }.orEmpty()
+                    val vStr = matchedSvc?.optString("venue").orEmpty()
+                    val metaList = mutableListOf<String>()
+                    if (dStr.isNotBlank()) metaList.add("📅 $dStr")
+                    if (tStr.isNotBlank()) metaList.add("⏰ $tStr")
+                    if (vStr.isNotBlank()) metaList.add("📍 $vStr")
+                    if (metaList.isNotEmpty()) {
+                        add(text(metaList.joinToString("  •  "), 11, Color.rgb(100, 116, 139)))
+                        space(6)
+                    }
 
                     add(text("Requesting: ${sub.requesterName} (${sub.role})", 12, Color.rgb(30, 41, 59))); space(4)
                     add(text("Proposed Substitute: ${sub.substituteName}", 12, Color.BLACK, bold = true)); space(4)
@@ -3372,7 +3648,36 @@ open class MemberActivity : AppCompatActivity() {
                     val isRequester = (currentUid.isNotBlank() && sub.requesterUid == currentUid) ||
                             (currentName.isNotBlank() && sub.requesterName.equals(currentName, ignoreCase = true))
 
-                    if (isPending && (isTargetSubstitute || !isRequester)) {
+                    if (isPending && isRequester) {
+                        space(12)
+                        val cancelBtn = Button(this@MemberActivity).apply {
+                            text = "Cancel Request"
+                            isAllCaps = false
+                            background = bg(Color.WHITE, 8, Color.rgb(220, 38, 38))
+                            setTextColor(Color.rgb(220, 38, 38))
+                            minimumHeight = dp(38)
+                            textSize = 12f
+                            setTypeface(typeface, Typeface.BOLD)
+                            setOnClickListener {
+                                AlertDialog.Builder(this@MemberActivity)
+                                    .setTitle("Cancel request?")
+                                    .setMessage("Are you sure you want to cancel this substitution request?")
+                                    .setPositiveButton("Cancel Request") { _, _ ->
+                                        TeamRepository.updateSubstitutionStatus(activeCode, sub.id, "Cancelled", preferences) { res ->
+                                            runOnUiThread {
+                                                if (res.isSuccess) toast("Request cancelled.")
+                                                populateSubstitutions()
+                                            }
+                                        }
+                                    }
+                                    .setNegativeButton("Back", null)
+                                    .show()
+                            }
+                        }
+                        add(cancelBtn, -1, 38)
+                    }
+
+                    if (isPending && (isTargetSubstitute || isSubLeader)) {
                         space(16)
                         val actions = horizontal()
                         val acceptBtn = Button(this@MemberActivity).apply {
@@ -3481,7 +3786,15 @@ open class MemberActivity : AppCompatActivity() {
         leaderPosts(col)
     }
 
-    private fun notificationsView(): View = memberPage("Announcement", "home") { col ->
+    private fun notificationsView(): View = memberPage("Notification", "home") { col ->
+        val activeCode = preferences.getString("teamCode", "").orEmpty()
+        if (activeCode.isNotBlank()) {
+            TeamRepository.getSubstitutions(activeCode, true, preferences) {
+                runOnUiThread {
+                    if (page == "notifications") navigate("notifications")
+                }
+            }
+        }
         col.add(text("Substitution Request", 15, purple, bold = true)); col.space(12)
         substitutionFeed(col)
         col.space(16)
@@ -3522,12 +3835,10 @@ open class MemberActivity : AppCompatActivity() {
     private val youtubeThumbnailCache = java.util.concurrent.ConcurrentHashMap<String, Bitmap>()
 
     private fun songCover(title: String, referenceUrl: String = ""): View {
-        val img = image("song_covers_source", "$title cover").apply {
-            scaleType = ImageView.ScaleType.CENTER_CROP
-            background = bg(navy, 6); outlineProvider = ViewOutlineProvider.BACKGROUND; clipToOutline = true
-            (drawable as? android.graphics.drawable.BitmapDrawable)?.setFilterBitmap(true)
-        }
-        val source = (img.drawable as? android.graphics.drawable.BitmapDrawable)?.bitmap
+        val videoId = com.example.syncedn.data.model.SongData.extractYoutubeVideoId(referenceUrl)
+        val cached = if (videoId != null) youtubeThumbnailCache[videoId] else null
+
+        val source = (image("song_covers_source", "$title cover").drawable as? android.graphics.drawable.BitmapDrawable)?.bitmap
         val defaultBitmap = if (source != null && !source.isRecycled) {
             val coverY = when (title) { "Praise" -> 210; "Trust in God" -> 320; "Way Maker" -> 430; else -> 540 }
             bitmaps.getOrPut("song_cover_$title") {
@@ -3535,46 +3846,48 @@ open class MemberActivity : AppCompatActivity() {
             }
         } else null
 
-        val videoId = com.example.syncedn.data.model.SongData.extractYoutubeVideoId(referenceUrl)
-        if (videoId != null) {
-            val cached = youtubeThumbnailCache[videoId]
+        val img = ImageView(this).apply {
+            contentDescription = "$title cover"
+            scaleType = ImageView.ScaleType.CENTER_CROP
+            background = bg(navy, 6)
+            outlineProvider = ViewOutlineProvider.BACKGROUND
+            clipToOutline = true
             if (cached != null && !cached.isRecycled) {
-                img.setImageBitmap(cached)
-            } else {
-                if (defaultBitmap != null) img.setImageBitmap(defaultBitmap)
-                img.tag = videoId
-                Thread {
-                    try {
-                        val thumbUrl = com.example.syncedn.data.model.SongData.getYoutubeThumbnailUrl(referenceUrl)
-                        if (thumbUrl != null) {
-                            val url = java.net.URL(thumbUrl)
-                            val conn = url.openConnection() as java.net.HttpURLConnection
-                            conn.connectTimeout = 4000
-                            conn.readTimeout = 4000
-                            conn.instanceFollowRedirects = true
-                            conn.connect()
-                            if (conn.responseCode == 200) {
-                                val stream = conn.inputStream
-                                val downloaded = BitmapFactory.decodeStream(stream)
-                                stream.close()
-                                if (downloaded != null) {
-                                    youtubeThumbnailCache[videoId] = downloaded
-                                    runOnUiThread {
-                                        if (img.tag == videoId) {
-                                            img.setImageBitmap(downloaded)
-                                        }
+                setImageBitmap(cached)
+            } else if (defaultBitmap != null && !defaultBitmap.isRecycled) {
+                setImageBitmap(defaultBitmap)
+            }
+        }
+
+        if (videoId != null && (cached == null || cached.isRecycled)) {
+            img.tag = videoId
+            Thread {
+                try {
+                    val thumbUrl = com.example.syncedn.data.model.SongData.getYoutubeThumbnailUrl(referenceUrl)
+                    if (thumbUrl != null) {
+                        val url = java.net.URL(thumbUrl)
+                        val conn = url.openConnection() as java.net.HttpURLConnection
+                        conn.connectTimeout = 4000
+                        conn.readTimeout = 4000
+                        conn.instanceFollowRedirects = true
+                        conn.connect()
+                        if (conn.responseCode == 200) {
+                            val stream = conn.inputStream
+                            val downloaded = BitmapFactory.decodeStream(stream)
+                            stream.close()
+                            if (downloaded != null) {
+                                youtubeThumbnailCache[videoId] = downloaded
+                                runOnUiThread {
+                                    if (img.tag == videoId) {
+                                        img.setImageBitmap(downloaded)
                                     }
                                 }
                             }
-                            conn.disconnect()
                         }
-                    } catch (_: Exception) {}
-                }.start()
-            }
-        } else {
-            if (defaultBitmap != null) {
-                img.setImageBitmap(defaultBitmap)
-            }
+                        conn.disconnect()
+                    }
+                } catch (_: Exception) {}
+            }.start()
         }
         return img
     }
@@ -3781,14 +4094,46 @@ open class MemberActivity : AppCompatActivity() {
             songMetronome = metronome
             add(metronome)
         }); col.space(24)
+        val refLink = currentSong?.referenceUrl.orEmpty().ifBlank { savedSong.optString("link") }
+        val ytVidId = extractYouTubeVideoId(refLink)
+        if (ytVidId != null) {
+            col.add(text("Rehearsal Video", 13, navy, true)); col.space(8)
+            val webView = android.webkit.WebView(this@MemberActivity).apply {
+                settings.javaScriptEnabled = true
+                settings.domStorageEnabled = true
+                settings.mediaPlaybackRequiresUserGesture = false
+                webChromeClient = android.webkit.WebChromeClient()
+                val html = """
+                    <!DOCTYPE html>
+                    <html>
+                    <head>
+                        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                        <style>
+                            body { margin: 0; background-color: #000; display: flex; align-items: center; justify-content: center; height: 100vh; }
+                            iframe { width: 100%; height: 100%; border: 0; }
+                        </style>
+                    </head>
+                    <body>
+                        <iframe src="https://www.youtube-nocookie.com/embed/$ytVidId?playsinline=1&rel=0" allowfullscreen></iframe>
+                    </body>
+                    </html>
+                """.trimIndent()
+                loadDataWithBaseURL("https://www.youtube.com", html, "text/html", "UTF-8", null)
+            }
+            col.add(panel().apply {
+                setPadding(dp(4), dp(4), dp(4), dp(4))
+                add(webView, -1, 200)
+            }); col.space(16)
+        }
+
         col.add(text(if(showChords) "Lyrics & Chords Sheet" else "Lyrics", 13, navy, true)); col.space(10)
         col.add(panel().apply {
             add(sheetText, -1, -2)
         }); col.space(24)
         renderTarget((basePitch + offset) % 12)
         col.add(text("Reference Link", 13, navy, true)); col.space(10)
-        col.add(memberButton("Find song on YouTube", navy) {
-            val reference = currentSong?.referenceUrl ?: savedSong.optString("link")
+        col.add(memberButton("Open in YouTube App", navy) {
+            val reference = currentSong?.referenceUrl.orEmpty().ifBlank { savedSong.optString("link") }
             val url = if (reference.startsWith("https://") || reference.startsWith("http://")) reference
                 else "https://www.youtube.com/results?search_query=" + Uri.encode("$selectedSong worship")
             try { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }
@@ -3954,6 +4299,9 @@ open class MemberActivity : AppCompatActivity() {
                     }
                     add(iv, 220, 180)
                     ImageLoader.loadProfilePhoto(iv, msg.mediaUrl, circular = false)
+                    iv.isClickable = true
+                    iv.isFocusable = true
+                    iv.setOnClickListener { showChatImageViewer(msg.mediaUrl) }
                     if (msg.text.isNotBlank()) space(6)
                 }
                 if (msg.text.isNotBlank()) {
@@ -3967,8 +4315,64 @@ open class MemberActivity : AppCompatActivity() {
                 ViewGroup.LayoutParams.WRAP_CONTENT
             ).apply { gravity = Gravity.END })
 
+            bubble.isClickable = true
+            bubble.isFocusable = true
+            bubble.setOnLongClickListener {
+                val options = if (msg.text.isNotBlank()) arrayOf("Edit Message", "Delete Message") else arrayOf("Delete Message")
+                AlertDialog.Builder(this@MemberActivity)
+                    .setTitle("Message Options")
+                    .setItems(options) { _, which ->
+                        val action = options[which]
+                        val curCode = preferences.getString("teamCode", "").orEmpty()
+                        if (action == "Edit Message") {
+                            val input = EditText(this@MemberActivity).apply {
+                                setText(msg.text)
+                                setSelection(msg.text.length)
+                                setPadding(dp(16), dp(12), dp(16), dp(12))
+                            }
+                            AlertDialog.Builder(this@MemberActivity)
+                                .setTitle("Edit Message")
+                                .setView(input)
+                                .setPositiveButton("Save") { _, _ ->
+                                    val newTxt = input.text.toString().trim()
+                                    if (newTxt.isNotBlank()) {
+                                        TeamRepository.editChatMessage(curCode, msg.id, newTxt, preferences) { res ->
+                                            runOnUiThread {
+                                                if (res.isSuccess) {
+                                                    val idx = chatMessages.indexOfFirst { it.id == msg.id }
+                                                    if (idx != -1) chatMessages[idx] = chatMessages[idx].copy(text = newTxt)
+                                                    navigate("teams")
+                                                } else toast("Failed to edit message")
+                                            }
+                                        }
+                                    }
+                                }
+                                .setNegativeButton("Cancel", null)
+                                .show()
+                        } else if (action == "Delete Message") {
+                            AlertDialog.Builder(this@MemberActivity)
+                                .setTitle("Delete Message?")
+                                .setMessage("Are you sure you want to delete this message?")
+                                .setPositiveButton("Delete") { _, _ ->
+                                    TeamRepository.deleteChatMessage(curCode, msg.id, preferences) { res ->
+                                        runOnUiThread {
+                                            if (res.isSuccess) {
+                                                chatMessages.removeAll { it.id == msg.id }
+                                                navigate("teams")
+                                            } else toast("Failed to delete message")
+                                        }
+                                    }
+                                }
+                                .setNegativeButton("Cancel", null)
+                                .show()
+                        }
+                    }
+                    .show()
+                true
+            }
+
             val timeStr = timeFormat.format(java.util.Date(msg.timestamp))
-            val caption = text(timeStr, 10, Color.rgb(148, 163, 184)).apply {
+            val caption = text("$timeStr  ✓✓ Delivered", 10, Color.rgb(148, 163, 184)).apply {
                 setPadding(0, dp(2), dp(4), 0)
             }
             bubbleContainer.addView(caption, LinearLayout.LayoutParams(
@@ -4023,6 +4427,9 @@ open class MemberActivity : AppCompatActivity() {
                     }
                     add(iv, 220, 180)
                     ImageLoader.loadProfilePhoto(iv, msg.mediaUrl, circular = false)
+                    iv.isClickable = true
+                    iv.isFocusable = true
+                    iv.setOnClickListener { showChatImageViewer(msg.mediaUrl) }
                     if (msg.text.isNotBlank()) space(6)
                 }
                 if (msg.text.isNotBlank()) {
@@ -4060,7 +4467,8 @@ open class MemberActivity : AppCompatActivity() {
             chatEmptyView = null
         }
         col.addView(buildChatMessageBubble(msg, currentUid))
-        chatScrollView?.post { chatScrollView?.fullScroll(View.FOCUS_DOWN) }
+        chatScrollView?.removeCallbacks(chatScrollRunnable)
+        chatScrollView?.postDelayed(chatScrollRunnable, 50)
     }
 
     private fun teamsView(): View {
@@ -4322,7 +4730,9 @@ open class MemberActivity : AppCompatActivity() {
         col.add(row); col.space(4)
         col.add(teamDetailAction("warning", "Report") {
             val reason = plainInput("Describe the issue", true)
-            AlertDialog.Builder(this).setTitle("Report Team").setView(reason)
+            AlertDialog.Builder(this).setTitle("Report Issue to Ministry Leadership")
+                .setMessage("Submit a confidential report regarding team conduct, attendance, or technical issues. Your report will be safely routed to the Team Leader in the team records.")
+                .setView(reason)
                 .setNegativeButton("Cancel", null).setPositiveButton("Submit Report", null).create().apply {
                     setOnShowListener {
                         getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
