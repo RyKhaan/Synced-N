@@ -346,9 +346,10 @@ open class MemberActivity : AppCompatActivity() {
                 .collection("users").document(myCurrentUid)
                 .addSnapshotListener { snapshot, error ->
                     if (error != null || snapshot == null || !snapshot.exists()) return@addSnapshotListener
+                    val removedByLeader = snapshot.getBoolean("removedByLeader") ?: false
                     val tCode = snapshot.getString("teamCode").orEmpty()
                     val curTeam = preferences.getString("teamCode", "").orEmpty()
-                    if (curTeam.isNotBlank() && tCode.isBlank() && !preferences.getBoolean("leftTeam", false)) {
+                    if (removedByLeader && curTeam.isNotBlank() && tCode.isBlank() && !preferences.getBoolean("leftTeam", false)) {
                         preferences.edit()
                             .putString("role", "")
                             .remove("teamName")
@@ -589,45 +590,61 @@ open class MemberActivity : AppCompatActivity() {
                     val joinBtn = findViewById<Button>(UI.joinTeamButton)
                     joinBtn?.isEnabled = false
                     syncLocalTeamsToMemory()
-                    FirestoreManager.getTeamByCode(enteredCode) { result ->
+                    val uid = preferences.getString("userId", "").orEmpty()
+                        .ifBlank { com.example.syncedn.data.auth.AuthManager.currentUser?.uid.orEmpty() }
+                        .ifBlank { "user_${displayName.hashCode()}" }
+                    val emailStr = preferences.getString("email", "").orEmpty()
+                        .ifBlank { com.example.syncedn.data.auth.AuthManager.currentUser?.email.orEmpty() }
+
+                    TeamRepository.isMemberRemovedFromTeam(enteredCode, uid, emailStr, preferences) { isRemoved ->
                         runOnUiThread {
-                            joinBtn?.isEnabled = true
-                            if (result.isSuccess) {
-                                val (validCode, foundTeamName) = result.getOrNull()!!
-                                teamName = foundTeamName
-                                val uid = preferences.getString("userId", "").orEmpty()
-                                    .ifBlank { com.example.syncedn.data.auth.AuthManager.currentUser?.uid.orEmpty() }
-                                    .ifBlank { "user_${displayName.hashCode()}" }
-                                val emailStr = preferences.getString("email", "").orEmpty()
-                                    .ifBlank { com.example.syncedn.data.auth.AuthManager.currentUser?.email.orEmpty() }
-                                preferences.edit {
-                                    putString("userId", uid)
-                                    putString("email", emailStr)
+                            if (isRemoved) {
+                                joinBtn?.isEnabled = true
+                                AlertDialog.Builder(this@MemberActivity)
+                                    .setTitle("Access Restricted")
+                                    .setMessage("You were removed from this team by the Team Leader and cannot rejoin without the Leader's approval.")
+                                    .setPositiveButton("OK", null)
+                                    .show()
+                                return@runOnUiThread
+                            }
+
+                            FirestoreManager.getTeamByCode(enteredCode) { result ->
+                                runOnUiThread {
+                                    joinBtn?.isEnabled = true
+                                    if (result.isSuccess) {
+                                        val (validCode, foundTeamName) = result.getOrNull()!!
+                                        teamName = foundTeamName
+                                        preferences.edit {
+                                            putString("userId", uid)
+                                            putString("email", emailStr)
+                                            putBoolean("leftTeam", false)
+                                        }
+                                        saveUserTeamState("Member", foundTeamName, validCode)
+                                        FirestoreManager.updateUserRoleAndTeam(uid, "Member", foundTeamName, validCode, emailStr)
+                                        val memberName = fullName.ifBlank { displayName }
+                                        val newMember = com.example.syncedn.data.model.TeamMember(
+                                            uid = uid,
+                                            fullName = memberName,
+                                            username = displayName,
+                                            email = emailStr,
+                                            role = "Member",
+                                            ministryRole = preferences.getString("ministryRole", "Member").orEmpty().ifBlank { "Member" },
+                                            teamCode = validCode
+                                        )
+                                        TeamRepository.cacheMember(newMember, preferences)
+                                        toast("Joined team: $foundTeamName")
+                                        if (javaClass == MainActivity::class.java) {
+                                            startActivity(Intent(this@MemberActivity, MemberActivity::class.java).putExtra("startPage", "home"))
+                                            finish()
+                                        } else {
+                                            navigate("home")
+                                        }
+                                    } else {
+                                        val err = result.exceptionOrNull()?.localizedMessage ?: "Invalid team code. Please check with your Team Leader."
+                                        invalid(code, err)
+                                        toast(err)
+                                    }
                                 }
-                                saveUserTeamState("Member", foundTeamName, validCode)
-                                FirestoreManager.updateUserRoleAndTeam(uid, "Member", foundTeamName, validCode, emailStr)
-                                val memberName = fullName.ifBlank { displayName }
-                                val newMember = com.example.syncedn.data.model.TeamMember(
-                                    uid = uid,
-                                    fullName = memberName,
-                                    username = displayName,
-                                    email = emailStr,
-                                    role = "Member",
-                                    ministryRole = preferences.getString("ministryRole", "Member").orEmpty().ifBlank { "Member" },
-                                    teamCode = validCode
-                                )
-                                TeamRepository.cacheMember(newMember, preferences)
-                                toast("Joined team: $foundTeamName")
-                                if (javaClass == MainActivity::class.java) {
-                                    startActivity(Intent(this@MemberActivity, MemberActivity::class.java).putExtra("startPage", "home"))
-                                    finish()
-                                } else {
-                                    navigate("home")
-                                }
-                            } else {
-                                val err = result.exceptionOrNull()?.localizedMessage ?: "Invalid team code. Please check with your Team Leader."
-                                invalid(code, err)
-                                toast(err)
                             }
                         }
                     }
@@ -1582,8 +1599,27 @@ open class MemberActivity : AppCompatActivity() {
     }
     private fun homeView(): View {
         val root=vertical().apply { setBackgroundColor(Color.WHITE) }
+        val swipeRefresh = androidx.swiperefreshlayout.widget.SwipeRefreshLayout(this).apply {
+            setColorSchemeColors(navy, Color.rgb(167, 0, 213))
+            setOnRefreshListener {
+                refreshTeamRoster(force = true)
+                refreshTeamServices(force = true)
+                val activeCode = preferences.getString("teamCode", "").orEmpty()
+                    .ifBlank { FirestoreManager.findCodeByTeamName(teamName).orEmpty() }
+                if (activeCode.isNotBlank()) {
+                    TeamRepository.getAnnouncements(activeCode, true, preferences)
+                    TeamRepository.getSubstitutions(activeCode, true, preferences)
+                }
+                postDelayed({
+                    isRefreshing = false
+                    navigate("home")
+                }, 900)
+            }
+        }
         val scroll=StableScrollView(this).apply { isFillViewport=true }
-        val content=vertical(); scroll.addView(content, FrameLayout.LayoutParams(-1,-2)); root.add(scroll,-1,0,1f)
+        val content=vertical(); scroll.addView(content, FrameLayout.LayoutParams(-1,-2))
+        swipeRefresh.addView(scroll, FrameLayout.LayoutParams(-1, -1))
+        root.add(swipeRefresh,-1,0,1f)
         val hero=HomeHeroLayout(this)
         val header=View(this).apply {
             background=GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,intArrayOf(Color.rgb(8,7,32),Color.rgb(21,18,105))).apply { cornerRadii=floatArrayOf(0f,0f,0f,0f,dp(60).toFloat(),dp(60).toFloat(),dp(60).toFloat(),dp(60).toFloat()) }
@@ -2689,7 +2725,18 @@ space(48)
                 col.add(row); col.space(16)
             }
         }
-        root.add(scroll, -1, 0, 1f)
+        val swipeRefresh = androidx.swiperefreshlayout.widget.SwipeRefreshLayout(this).apply {
+            setColorSchemeColors(navy, Color.rgb(167, 0, 213))
+            setOnRefreshListener {
+                refreshTeamServices(force = true)
+                postDelayed({
+                    isRefreshing = false
+                    navigate("schedule")
+                }, 900)
+            }
+        }
+        swipeRefresh.addView(scroll, FrameLayout.LayoutParams(-1, -1))
+        root.add(swipeRefresh, -1, 0, 1f)
         root.add(memberNavigation("Schedule"), -1, 64)
         return root
     }
@@ -3422,9 +3469,12 @@ space(48)
                 diff < 60_000L -> "Just now"
                 diff < 3600_000L -> "${(diff / 60_000L).coerceAtLeast(1)}m ago"
                 diff < 86400_000L -> {
-                    val calNow = java.util.Calendar.getInstance()
-                    val calThen = java.util.Calendar.getInstance().apply { timeInMillis = timestamp }
-                    val timeStr = java.text.SimpleDateFormat("h:mm a", java.util.Locale.US).format(java.util.Date(timestamp))
+                    val phtZone = java.util.TimeZone.getTimeZone("Asia/Manila")
+                    val calNow = java.util.Calendar.getInstance(phtZone)
+                    val calThen = java.util.Calendar.getInstance(phtZone).apply { timeInMillis = timestamp }
+                    val timeStr = java.text.SimpleDateFormat("h:mm a", java.util.Locale.US).apply {
+                        timeZone = phtZone
+                    }.format(java.util.Date(timestamp))
                     if (calNow.get(java.util.Calendar.DAY_OF_YEAR) == calThen.get(java.util.Calendar.DAY_OF_YEAR)) {
                         "Today at $timeStr"
                     } else {
@@ -3788,13 +3838,6 @@ space(48)
 
     private fun notificationsView(): View = memberPage("Notification", "home") { col ->
         val activeCode = preferences.getString("teamCode", "").orEmpty()
-        if (activeCode.isNotBlank()) {
-            TeamRepository.getSubstitutions(activeCode, true, preferences) {
-                runOnUiThread {
-                    if (page == "notifications") navigate("notifications")
-                }
-            }
-        }
         col.add(text("Substitution Request", 15, purple, bold = true)); col.space(12)
         substitutionFeed(col)
         col.space(16)
@@ -4099,9 +4142,12 @@ space(48)
         if (ytVidId != null) {
             col.add(text("Rehearsal Video", 13, navy, true)); col.space(8)
             val webView = android.webkit.WebView(this@MemberActivity).apply {
+                android.webkit.CookieManager.getInstance().setAcceptCookie(true)
+                android.webkit.CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
                 settings.javaScriptEnabled = true
                 settings.domStorageEnabled = true
                 settings.mediaPlaybackRequiresUserGesture = false
+                try { settings.userAgentString = settings.userAgentString.replace("; wv", "") } catch (_: Throwable) {}
                 webChromeClient = android.webkit.WebChromeClient()
                 val html = """
                     <!DOCTYPE html>
@@ -4114,7 +4160,7 @@ space(48)
                         </style>
                     </head>
                     <body>
-                        <iframe src="https://www.youtube-nocookie.com/embed/$ytVidId?playsinline=1&rel=0" allowfullscreen></iframe>
+                        <iframe src="https://www.youtube.com/embed/$ytVidId?enablejsapi=1&origin=https://www.youtube.com&playsinline=1&rel=0" allowfullscreen></iframe>
                     </body>
                     </html>
                 """.trimIndent()
@@ -4123,7 +4169,14 @@ space(48)
             col.add(panel().apply {
                 setPadding(dp(4), dp(4), dp(4), dp(4))
                 add(webView, -1, 200)
-            }); col.space(16)
+            }); col.space(8)
+            col.add(memberButton("Watch on YouTube App", navy) {
+                try {
+                    startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("vnd.youtube:$ytVidId")).setFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                } catch (_: Exception) {
+                    startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://www.youtube.com/watch?v=$ytVidId")))
+                }
+            }, -1, 44); col.space(16)
         }
 
         col.add(text(if(showChords) "Lyrics & Chords Sheet" else "Lyrics", 13, navy, true)); col.space(10)
@@ -4264,7 +4317,9 @@ space(48)
     }
     private fun buildChatMessageBubble(msg: ChatMessage, currentUid: String): View {
         val maxBubbleWidth = (resources.displayMetrics.widthPixels * 0.72f).toInt()
-        val timeFormat = java.text.SimpleDateFormat("h:mm a", java.util.Locale.getDefault())
+        val timeFormat = java.text.SimpleDateFormat("h:mm a", java.util.Locale.getDefault()).apply {
+            timeZone = java.util.TimeZone.getTimeZone("Asia/Manila")
+        }
         val isSelf = (msg.senderUid.isNotBlank() && msg.senderUid == currentUid) ||
                 (msg.senderName.equals(displayName, ignoreCase = true) || msg.senderName.equals(fullName, ignoreCase = true))
 
@@ -4605,6 +4660,13 @@ space(48)
                 chatScrollView = scroll
                 chatMessagesCol = col
                 chatEmptyView = null
+                var initialScrolled = false
+                scroll.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
+                    if (!initialScrolled && col.height > 0) {
+                        initialScrolled = true
+                        scroll.scrollTo(0, col.height)
+                    }
+                }
 
                 val displayList = if (chatMessages.isNotEmpty()) chatMessages else TeamRepository.getCachedChatMessages(currentCode, preferences)
 

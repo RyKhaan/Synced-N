@@ -1550,8 +1550,27 @@ class AdminActivity : AppCompatActivity() {
     }
     private fun homeView(): View {
         val root=vertical().apply { setBackgroundColor(Color.WHITE) }
+        val swipeRefresh = androidx.swiperefreshlayout.widget.SwipeRefreshLayout(this).apply {
+            setColorSchemeColors(navy, Color.rgb(167, 0, 213))
+            setOnRefreshListener {
+                refreshTeamRoster(force = true)
+                refreshTeamServices(force = true)
+                val activeCode = preferences.getString("teamCode", "").orEmpty()
+                    .ifBlank { FirestoreManager.findCodeByTeamName(teamName).orEmpty() }
+                if (activeCode.isNotBlank()) {
+                    TeamRepository.getAnnouncements(activeCode, true, preferences)
+                    TeamRepository.getSubstitutions(activeCode, true, preferences)
+                }
+                postDelayed({
+                    isRefreshing = false
+                    navigate("home")
+                }, 900)
+            }
+        }
         val scroll=StableScrollView(this).apply { isFillViewport=true }
-        val content=vertical(); scroll.addView(content, FrameLayout.LayoutParams(-1,-2)); root.add(scroll,-1,0,1f)
+        val content=vertical(); scroll.addView(content, FrameLayout.LayoutParams(-1,-2))
+        swipeRefresh.addView(scroll, FrameLayout.LayoutParams(-1, -1))
+        root.add(swipeRefresh,-1,0,1f)
         val hero=HomeHeroLayout(this)
         val header=View(this).apply {
             background=GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,intArrayOf(Color.rgb(8,7,32),Color.rgb(21,18,105))).apply { cornerRadii=floatArrayOf(0f,0f,0f,0f,dp(60).toFloat(),dp(60).toFloat(),dp(60).toFloat(),dp(60).toFloat()) }
@@ -3562,9 +3581,12 @@ class AdminActivity : AppCompatActivity() {
                 diff < 60_000L -> "Just now"
                 diff < 3600_000L -> "${(diff / 60_000L).coerceAtLeast(1)}m ago"
                 diff < 86400_000L -> {
-                    val calNow = java.util.Calendar.getInstance()
-                    val calThen = java.util.Calendar.getInstance().apply { timeInMillis = timestamp }
-                    val timeStr = java.text.SimpleDateFormat("h:mm a", java.util.Locale.US).format(java.util.Date(timestamp))
+                    val phtZone = java.util.TimeZone.getTimeZone("Asia/Manila")
+                    val calNow = java.util.Calendar.getInstance(phtZone)
+                    val calThen = java.util.Calendar.getInstance(phtZone).apply { timeInMillis = timestamp }
+                    val timeStr = java.text.SimpleDateFormat("h:mm a", java.util.Locale.US).apply {
+                        timeZone = phtZone
+                    }.format(java.util.Date(timestamp))
                     if (calNow.get(java.util.Calendar.DAY_OF_YEAR) == calThen.get(java.util.Calendar.DAY_OF_YEAR)) {
                         "Today at $timeStr"
                     } else {
@@ -3586,15 +3608,21 @@ class AdminActivity : AppCompatActivity() {
             background = bg(Color.rgb(217, 217, 217), 12)
             filters = arrayOf(InputFilter.LengthFilter(120))
         }
-        val charCounter = text("${editingAnnouncement?.message?.length ?: 0} / 500 characters", 11, Color.GRAY)
+        val charCounter = text("${editingAnnouncement?.message?.length ?: 0} / 250 characters", 11, Color.GRAY)
         val message = plainInput("", true).apply {
             editingAnnouncement?.let { setText(it.message) }
             background = bg(Color.rgb(217, 217, 217), 14)
-            filters = arrayOf(InputFilter.LengthFilter(500))
+            maxLines = 5
+            val lineFilter = InputFilter { source, start, end, dest, dstart, dend ->
+                val resultingText = StringBuilder(dest).replace(dstart, dend, source.subSequence(start, end).toString()).toString()
+                val newlineCount = resultingText.count { it == '\n' }
+                if (newlineCount > 4) "" else null
+            }
+            filters = arrayOf(InputFilter.LengthFilter(250), lineFilter)
             addTextChangedListener(object : android.text.TextWatcher {
                 override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
                 override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
-                    charCounter.text = "${s?.length ?: 0} / 500 characters"
+                    charCounter.text = "${s?.length ?: 0} / 250 characters"
                 }
                 override fun afterTextChanged(s: android.text.Editable?) {}
             })
@@ -3819,10 +3847,14 @@ class AdminActivity : AppCompatActivity() {
                 .setMessage("Are you sure you want to remove $name from the team?")
                 .setNegativeButton("Cancel", null)
                 .setPositiveButton("Remove") { _, _ ->
+                    val activeCode = preferences.getString("teamCode", "").orEmpty()
                     val removed = preferences.getStringSet("removedMembers", emptySet()).orEmpty().toMutableSet()
-                    removed.add(name); preferences.edit().putStringSet("removedMembers", removed).apply()
+                    removed.add(name)
+                    if (selectedMember.uid.isNotBlank()) removed.add(selectedMember.uid)
+                    if (selectedMember.email.isNotBlank()) removed.add(selectedMember.email.trim().lowercase())
+                    preferences.edit().putStringSet("removedMembers", removed).apply()
                     if (selectedMember.uid.isNotBlank()) {
-                        TeamRepository.removeMemberFromTeam(selectedMember.uid) { result ->
+                        TeamRepository.removeMemberFromTeam(selectedMember.uid, activeCode) { result ->
                             runOnUiThread {
                                 if (result.isSuccess) {
                                     toast("$name removed from team.")
@@ -4332,7 +4364,18 @@ class AdminActivity : AppCompatActivity() {
                 col.add(row); col.space(16)
             }
         }
-        root.add(scroll, -1, 0, 1f)
+        val swipeRefresh = androidx.swiperefreshlayout.widget.SwipeRefreshLayout(this).apply {
+            setColorSchemeColors(navy, Color.rgb(167, 0, 213))
+            setOnRefreshListener {
+                refreshTeamServices(force = true)
+                postDelayed({
+                    isRefreshing = false
+                    navigate("schedule")
+                }, 900)
+            }
+        }
+        swipeRefresh.addView(scroll, FrameLayout.LayoutParams(-1, -1))
+        root.add(swipeRefresh, -1, 0, 1f)
         root.add(memberNavigation("Schedule"), -1, 64)
         return root
     }
@@ -5035,13 +5078,6 @@ class AdminActivity : AppCompatActivity() {
 
     private fun notificationsView(): View = memberPage("Notification", "home") { col ->
         val activeCode = preferences.getString("teamCode", "").orEmpty()
-        if (activeCode.isNotBlank()) {
-            TeamRepository.getSubstitutions(activeCode, true, preferences) {
-                runOnUiThread {
-                    if (page == "notifications") navigate("notifications")
-                }
-            }
-        }
         col.add(text("Substitution Request", 15, purple, bold = true)); col.space(12)
         substitutionFeed(col)
         col.space(16)
@@ -5309,9 +5345,12 @@ class AdminActivity : AppCompatActivity() {
         if (ytVidId != null) {
             col.add(text("Rehearsal Video", 13, navy, true)); col.space(8)
             val webView = android.webkit.WebView(this@AdminActivity).apply {
+                android.webkit.CookieManager.getInstance().setAcceptCookie(true)
+                android.webkit.CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
                 settings.javaScriptEnabled = true
                 settings.domStorageEnabled = true
                 settings.mediaPlaybackRequiresUserGesture = false
+                try { settings.userAgentString = settings.userAgentString.replace("; wv", "") } catch (_: Throwable) {}
                 webChromeClient = android.webkit.WebChromeClient()
                 val html = """
                     <!DOCTYPE html>
@@ -5324,7 +5363,7 @@ class AdminActivity : AppCompatActivity() {
                         </style>
                     </head>
                     <body>
-                        <iframe src="https://www.youtube-nocookie.com/embed/$ytVidId?playsinline=1&rel=0" allowfullscreen></iframe>
+                        <iframe src="https://www.youtube.com/embed/$ytVidId?enablejsapi=1&origin=https://www.youtube.com&playsinline=1&rel=0" allowfullscreen></iframe>
                     </body>
                     </html>
                 """.trimIndent()
@@ -5333,7 +5372,14 @@ class AdminActivity : AppCompatActivity() {
             col.add(panel().apply {
                 setPadding(dp(4), dp(4), dp(4), dp(4))
                 add(webView, -1, 200)
-            }); col.space(16)
+            }); col.space(8)
+            col.add(memberButton("Watch on YouTube App", navy) {
+                try {
+                    startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("vnd.youtube:$ytVidId")).setFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                } catch (_: Exception) {
+                    startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://www.youtube.com/watch?v=$ytVidId")))
+                }
+            }, -1, 44); col.space(16)
         }
 
         col.add(text(if(showChords) "Lyrics & Chords Sheet" else "Lyrics", 13, navy, true)); col.space(10)
@@ -5432,7 +5478,9 @@ class AdminActivity : AppCompatActivity() {
     }
     private fun buildChatMessageBubble(msg: ChatMessage, currentUid: String): View {
         val maxBubbleWidth = (resources.displayMetrics.widthPixels * 0.72f).toInt()
-        val timeFormat = java.text.SimpleDateFormat("h:mm a", java.util.Locale.getDefault())
+        val timeFormat = java.text.SimpleDateFormat("h:mm a", java.util.Locale.getDefault()).apply {
+            timeZone = java.util.TimeZone.getTimeZone("Asia/Manila")
+        }
         val isSelf = (msg.senderUid.isNotBlank() && msg.senderUid == currentUid) ||
                 (msg.senderName.equals(displayName, ignoreCase = true) || msg.senderName.equals(fullName, ignoreCase = true))
 
@@ -5812,6 +5860,13 @@ class AdminActivity : AppCompatActivity() {
                 chatScrollView = scroll
                 chatMessagesCol = col
                 chatEmptyView = null
+                var initialScrolled = false
+                scroll.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
+                    if (!initialScrolled && col.height > 0) {
+                        initialScrolled = true
+                        scroll.scrollTo(0, col.height)
+                    }
+                }
 
                 val displayList = if (chatMessages.isNotEmpty()) chatMessages else TeamRepository.getCachedChatMessages(currentCode, preferences)
 
@@ -6005,6 +6060,61 @@ class AdminActivity : AppCompatActivity() {
         }, 52, 48)
         col.add(unmuteRow); col.space(4)
 
+        col.add(teamDetailAction("chat", "Team Reports") {
+            val activeCode = preferences.getString("teamCode", "").orEmpty()
+                .ifBlank { FirestoreManager.findCodeByTeamName(teamName).orEmpty() }
+            val progress = android.app.ProgressDialog(this).apply {
+                setMessage("Loading team reports...")
+                setCancelable(false)
+                show()
+            }
+            TeamRepository.getTeamReports(activeCode, preferences) { reports ->
+                runOnUiThread {
+                    progress.dismiss()
+                    if (reports.isEmpty()) {
+                        AlertDialog.Builder(this)
+                            .setTitle("Team Reports")
+                            .setMessage("No reports have been submitted for this team.")
+                            .setPositiveButton("OK", null)
+                            .show()
+                    } else {
+                        val reportItems = reports.map { rep ->
+                            val reporter = rep["reporterName"]?.toString() ?: "Member"
+                            val reason = rep["reason"]?.toString() ?: ""
+                            val ts = (rep["createdAt"] as? Number)?.toLong() ?: 0L
+                            val dateStr = if (ts > 0) {
+                                java.text.SimpleDateFormat("MMM d, yyyy h:mm a", java.util.Locale.US).apply {
+                                    timeZone = java.util.TimeZone.getTimeZone("Asia/Manila")
+                                }.format(java.util.Date(ts))
+                            } else "Recent"
+                            "From: $reporter ($dateStr)\n$reason"
+                        }.toTypedArray()
+
+                        AlertDialog.Builder(this)
+                            .setTitle("Team Reports (${reports.size})")
+                            .setItems(reportItems) { _, which ->
+                                val selected = reports[which]
+                                val reporter = selected["reporterName"]?.toString() ?: "Member"
+                                val reason = selected["reason"]?.toString() ?: ""
+                                val ts = (selected["createdAt"] as? Number)?.toLong() ?: 0L
+                                val dateStr = if (ts > 0) {
+                                    java.text.SimpleDateFormat("MMM d, yyyy h:mm a", java.util.Locale.US).apply {
+                                        timeZone = java.util.TimeZone.getTimeZone("Asia/Manila")
+                                    }.format(java.util.Date(ts))
+                                } else "Recent"
+                                AlertDialog.Builder(this)
+                                    .setTitle("Report from $reporter")
+                                    .setMessage("Date: $dateStr\n\nIssue Details:\n$reason")
+                                    .setPositiveButton("Close", null)
+                                    .show()
+                            }
+                            .setPositiveButton("Close", null)
+                            .show()
+                    }
+                }
+            }
+        }); col.space(4)
+
         col.add(teamDetailAction("warning", "Report") {
             val reason = plainInput("Describe the issue", true)
             AlertDialog.Builder(this).setTitle("Report Team").setView(reason)
@@ -6183,10 +6293,14 @@ class AdminActivity : AppCompatActivity() {
                                     .setMessage("Are you sure you want to remove $mName from the team?")
                                     .setNegativeButton("Cancel", null)
                                     .setPositiveButton("Remove") { _, _ ->
+                                        val activeCode = preferences.getString("teamCode", "").orEmpty()
                                         val removed = preferences.getStringSet("removedMembers", emptySet()).orEmpty().toMutableSet()
-                                        removed.add(mName); preferences.edit().putStringSet("removedMembers", removed).apply()
+                                        removed.add(mName)
+                                        if (member.uid.isNotBlank()) removed.add(member.uid)
+                                        if (member.email.isNotBlank()) removed.add(member.email.trim().lowercase())
+                                        preferences.edit().putStringSet("removedMembers", removed).apply()
                                         if (member.uid.isNotBlank()) {
-                                            TeamRepository.removeMemberFromTeam(member.uid) { result ->
+                                            TeamRepository.removeMemberFromTeam(member.uid, activeCode) { result ->
                                                 runOnUiThread {
                                                     if (result.isSuccess) {
                                                         toast("$mName removed from team.")
