@@ -145,6 +145,8 @@ open class MemberActivity : AppCompatActivity() {
     }
 
     private var substitutionType = "Exclusion"
+    private var servicesListener: com.google.firebase.firestore.ListenerRegistration? = null
+    private var substitutionsListener: com.google.firebase.firestore.ListenerRegistration? = null
     private var userMembershipListener: com.google.firebase.firestore.ListenerRegistration? = null
     private val chatScrollRunnable = Runnable { chatScrollView?.fullScroll(View.FOCUS_DOWN) }
     protected open val initialPage: String = "home"
@@ -271,6 +273,34 @@ open class MemberActivity : AppCompatActivity() {
         email: String
     ): Triple<String, String, String> {
         syncLocalTeamsToMemory()
+        val currentTeamCode = preferences.getString(SessionManager.KEY_TEAM_CODE, "").orEmpty()
+            .ifBlank { preferences.getString("teamCode", "").orEmpty() }
+        if (currentTeamCode.isNotBlank()) {
+            servicesListener = TeamRepository.subscribeToServices(currentTeamCode, isLeader = false, preferences) { updatedList ->
+                runOnUiThread {
+                    if (page in listOf("home", "schedule")) {
+                        navigate(page, triggerRefresh = false)
+                    } else if (page == "service") {
+                        selectedSheetService?.let { sel ->
+                            val sid = sel.optString("id")
+                            val fresh = updatedList.find { it.id == sid }
+                            if (fresh != null) {
+                                selectedSheetService = org.json.JSONObject(fresh.toMap())
+                                navigate("service", triggerRefresh = false)
+                            }
+                        }
+                    }
+                }
+            }
+            substitutionsListener = TeamRepository.subscribeToSubstitutions(currentTeamCode, preferences) { updatedSubs ->
+                runOnUiThread {
+                    if (page in listOf("notifications", "announcements")) {
+                        navigate(page, triggerRefresh = false)
+                    }
+                }
+            }
+        }
+
         return SessionManager.resolveUserTeamSession(preferences, profile, email)
     }
 
@@ -340,7 +370,13 @@ open class MemberActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        val myCurrentUid = preferences.getString(SessionManager.KEY_USER_ID, "").orEmpty()
+        val myCurrentUid = com.example.syncedn.data.auth.AuthManager.currentUser?.uid?.takeIf { it.isNotBlank() }
+            ?: preferences.getString(SessionManager.KEY_USER_ID, "").orEmpty().ifBlank {
+                preferences.getString("userId", "").orEmpty()
+            }
+        val myCurrentEmail = preferences.getString("email", "").orEmpty().ifBlank {
+            com.example.syncedn.data.auth.AuthManager.currentUser?.email.orEmpty()
+        }
         if (myCurrentUid.isNotBlank()) {
             userMembershipListener = com.google.firebase.firestore.FirebaseFirestore.getInstance()
                 .collection("users").document(myCurrentUid)
@@ -348,8 +384,8 @@ open class MemberActivity : AppCompatActivity() {
                     if (error != null || snapshot == null || !snapshot.exists()) return@addSnapshotListener
                     val removedByLeader = snapshot.getBoolean("removedByLeader") ?: false
                     val tCode = snapshot.getString("teamCode").orEmpty()
-                    val curTeam = preferences.getString("teamCode", "").orEmpty()
-                    if (removedByLeader && curTeam.isNotBlank() && tCode.isBlank() && !preferences.getBoolean("leftTeam", false)) {
+                    val curTeam = preferences.getString("teamCode", "").orEmpty().ifBlank { preferences.getString("teamName", "").orEmpty() }
+                    if (removedByLeader || (curTeam.isNotBlank() && tCode.isBlank() && !preferences.getBoolean("leftTeam", false))) {
                         preferences.edit()
                             .putString("role", "")
                             .remove("teamName")
@@ -358,8 +394,12 @@ open class MemberActivity : AppCompatActivity() {
                             .putBoolean("leftTeam", true)
                             .apply()
                         runOnUiThread {
-                            toast("You have been removed from the team by the Leader.")
-                            navigate("teamChoice")
+                            AlertDialog.Builder(this@MemberActivity)
+                                .setTitle("Removed from Team")
+                                .setMessage("You have been removed from the team by the Team Leader.")
+                                .setPositiveButton("OK") { _, _ -> navigate("teamChoice") }
+                                .setCancelable(false)
+                                .show()
                         }
                     }
                 }
@@ -428,6 +468,10 @@ open class MemberActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
+        servicesListener?.remove()
+        servicesListener = null
+        substitutionsListener?.remove()
+        substitutionsListener = null
         super.onDestroy()
         chatListener?.remove()
         chatListener = null
@@ -1501,6 +1545,24 @@ open class MemberActivity : AppCompatActivity() {
         }
         return published.maxByOrNull { it.optString("date") + it.optString("start") }
     }
+    private fun formatHeroDateSubtitle(rawDate: String?, start: String?, end: String?): String {
+        if (rawDate.isNullOrBlank()) return "Sunday, May 18, 2025 - 9:00 AM"
+        val formattedDate = try {
+            val inFormat = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).apply {
+                timeZone = java.util.TimeZone.getTimeZone("Asia/Manila")
+            }
+            val d = inFormat.parse(rawDate.trim())
+            if (d != null) {
+                java.text.SimpleDateFormat("EEEE, MMM d, yyyy", java.util.Locale.US).apply {
+                    timeZone = java.util.TimeZone.getTimeZone("Asia/Manila")
+                }.format(d)
+            } else rawDate
+        } catch (_: Exception) { rawDate }
+
+        val sTime = if (!start.isNullOrBlank()) formatServiceTime(start) else ""
+        return if (sTime.isNotBlank()) "$formattedDate - $sTime" else formattedDate
+    }
+
     private fun homeUpcomingSecondRecord(): org.json.JSONObject? {
         val phtZone = java.util.TimeZone.getTimeZone("Asia/Manila")
         val today = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).apply { timeZone = phtZone }.format(java.util.Date())
@@ -1661,7 +1723,7 @@ open class MemberActivity : AppCompatActivity() {
             LinearLayout.LayoutParams(dp(50),dp(50)).apply {leftMargin=dp(12)})
         top.add(row);top.space(18);top.add(text("Together, in Worship, in Sync",14,Color.rgb(183,209,255)))
         hero.addView(top,FrameLayout.LayoutParams(-1,-2))
-        // Use the earlier supplied artwork without its baked-in outer shadow.
+        // Clean high-contrast worship hero card strictly matching user specification
         val upcomingRec = homeUpcomingRecord()
         val card = FrameLayout(this).apply {
             id = UI.worshipCard
@@ -1683,14 +1745,7 @@ open class MemberActivity : AppCompatActivity() {
                 if (coverUrl.isNotBlank()) {
                     com.example.syncedn.data.storage.ImageLoader.loadProfilePhoto(this, coverUrl, circular = false, maxDimension = 800)
                 } else {
-                    val artwork = (image("hero_container").drawable as? android.graphics.drawable.BitmapDrawable)?.bitmap
-                    if (artwork != null) {
-                        val scaleX = artwork.width.toFloat() / 360f
-                        val scaleY = artwork.height.toFloat() / 247f
-                        setImageBitmap(bitmaps.getOrPut("hero_card_clean") {
-                            Bitmap.createBitmap(artwork, (24 * scaleX).toInt(), (16 * scaleY).toInt(), (312 * scaleX).toInt(), (200 * scaleY).toInt())
-                        })
-                    }
+                    setImageResource(R.drawable.worship_hero_bg)
                 }
             }
             addView(imgView, FrameLayout.LayoutParams(-1, -1))
@@ -1698,55 +1753,83 @@ open class MemberActivity : AppCompatActivity() {
             val overlay = View(this@MemberActivity).apply {
                 background = GradientDrawable(
                     GradientDrawable.Orientation.TOP_BOTTOM,
-                    intArrayOf(Color.argb(30, 0, 0, 0), Color.argb(215, 10, 13, 27))
+                    intArrayOf(Color.argb(85, 0, 0, 0), Color.argb(225, 8, 11, 24))
                 )
             }
             addView(overlay, FrameLayout.LayoutParams(-1, -1))
 
-            val textCol = vertical().apply {
-                setPadding(dp(16), dp(16), dp(16), dp(16))
-                val title = upcomingRec?.optString("title")?.ifBlank { "Sunday Worship Service" } ?: "Sunday Worship Service"
-                val date = upcomingRec?.optString("date")?.ifBlank { "Upcoming Service" } ?: "Upcoming Service"
-                val start = upcomingRec?.optString("start").orEmpty()
-                val end = upcomingRec?.optString("end").orEmpty()
-                val timeStr = if (start.isNotBlank() && end.isNotBlank()) "${formatServiceTime(start)} – ${formatServiceTime(end)}" else if (start.isNotBlank()) formatServiceTime(start) else ""
-                val venue = upcomingRec?.optString("venue")?.ifBlank { "Main Sanctuary" } ?: "Main Sanctuary"
+            val innerRow = horizontal().apply {
+                setPadding(dp(22), dp(20), dp(20), dp(20))
+                gravity = Gravity.CENTER_VERTICAL
+                clipChildren = false
+                clipToPadding = false
 
-                val badge = TextView(this@MemberActivity).apply {
-                    text = "NEXT WORSHIP SERVICE"
-                    setTextColor(Color.rgb(244, 243, 227))
-                    textSize = 10f
-                    typeface = Typeface.DEFAULT_BOLD
-                    background = bg(Color.argb(130, 0, 0, 0), 6)
-                    setPadding(dp(8), dp(3), dp(8), dp(3))
+                val textCol = vertical().apply {
+                    val rawTitle = upcomingRec?.optString("title")?.ifBlank { "Next Worship\nSession" } ?: "Next Worship\nSession"
+                    val formattedTitle = if (rawTitle.contains("Worship", ignoreCase = true) && !rawTitle.contains("\n")) {
+                        rawTitle.replaceFirst(" ", "\n")
+                    } else rawTitle
+
+                    val titleTv = TextView(this@MemberActivity).apply {
+                        text = formattedTitle
+                        setTextColor(Color.WHITE)
+                        textSize = 22f
+                        typeface = Typeface.DEFAULT_BOLD
+                        maxLines = 2
+                        ellipsize = android.text.TextUtils.TruncateAt.END
+                    }
+                    addView(titleTv, LinearLayout.LayoutParams(-1, -2))
+                    space(6)
+
+                    val rawDate = upcomingRec?.optString("date")
+                    val rawStart = upcomingRec?.optString("start")
+                    val rawEnd = upcomingRec?.optString("end")
+                    val formattedSubtitle = formatHeroDateSubtitle(rawDate, rawStart, rawEnd)
+
+                    val subTv = TextView(this@MemberActivity).apply {
+                        text = formattedSubtitle
+                        setTextColor(Color.rgb(203, 213, 225))
+                        textSize = 13f
+                        maxLines = 1
+                        ellipsize = android.text.TextUtils.TruncateAt.END
+                    }
+                    addView(subTv, LinearLayout.LayoutParams(-1, -2))
+                    space(14)
+
+                    val venuePill = FrameLayout(this@MemberActivity).apply {
+                        background = bg(Color.argb(175, 26, 32, 44), 16, Color.argb(90, 255, 255, 255))
+                        setPadding(dp(14), dp(6), dp(14), dp(6))
+                        val vTv = TextView(this@MemberActivity).apply {
+                            text = upcomingRec?.optString("venue")?.ifBlank { "Main Sanctuary" } ?: "Main Sanctuary"
+                            setTextColor(Color.WHITE)
+                            textSize = 12f
+                            typeface = Typeface.DEFAULT_BOLD
+                            maxLines = 1
+                            ellipsize = android.text.TextUtils.TruncateAt.END
+                        }
+                        addView(vTv, FrameLayout.LayoutParams(-2, -2))
+                    }
+                    addView(venuePill, LinearLayout.LayoutParams(-2, -2))
                 }
-                addView(badge, LinearLayout.LayoutParams(-2, -2))
-                space(6)
-                val titleTv = TextView(this@MemberActivity).apply {
-                    this.text = title
-                    setTextColor(Color.WHITE)
-                    textSize = 17f
-                    typeface = Typeface.DEFAULT_BOLD
-                    maxLines = 1
-                    ellipsize = android.text.TextUtils.TruncateAt.END
+                add(textCol, 0, -2, 1f)
+
+                val chevronBtn = FrameLayout(this@MemberActivity).apply {
+                    background = bg(Color.argb(135, 30, 41, 59), 23, Color.argb(60, 255, 255, 255))
+                    val arrow = TextView(this@MemberActivity).apply {
+                        text = "›"
+                        setTextColor(Color.WHITE)
+                        textSize = 24f
+                        typeface = Typeface.DEFAULT_BOLD
+                        gravity = Gravity.CENTER
+                    }
+                    addView(arrow, FrameLayout.LayoutParams(-2, -2, Gravity.CENTER))
                 }
-                addView(titleTv, LinearLayout.LayoutParams(-1, -2))
-                space(4)
-                val metaTv = TextView(this@MemberActivity).apply {
-                    val parts = listOfNotNull(
-                        if (date.isNotBlank()) "📅 $date" else null,
-                        if (timeStr.isNotBlank()) "⏰ $timeStr" else null,
-                        if (venue.isNotBlank()) "📍 $venue" else null
-                    )
-                    this.text = parts.joinToString("  •  ")
-                    setTextColor(Color.rgb(220, 225, 240))
-                    textSize = 11f
-                    maxLines = 1
-                    ellipsize = android.text.TextUtils.TruncateAt.END
-                }
-                addView(metaTv, LinearLayout.LayoutParams(-1, -2))
+                addView(chevronBtn, LinearLayout.LayoutParams(dp(46), dp(46)).apply {
+                    gravity = Gravity.CENTER_VERTICAL
+                    leftMargin = dp(12)
+                })
             }
-            addView(textCol, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM))
+            addView(innerRow, FrameLayout.LayoutParams(-1, -1))
 
             contentDescription = if (upcomingRec != null) {
                 "Next Worship Session. ${upcomingRec.optString("title")}, ${upcomingRec.optString("date")}. ${upcomingRec.optString("venue", "Main Sanctuary")}. Open details."
@@ -1754,8 +1837,7 @@ open class MemberActivity : AppCompatActivity() {
                 "Next Worship Session. Open details."
             }
         }
-        hero.clipChildren = false
-        hero.clipToPadding = false
+
         hero.addView(card, FrameLayout.LayoutParams(-1, dp(200)).apply {
             leftMargin = dp(24)
             rightMargin = dp(24)
@@ -3299,7 +3381,11 @@ space(48)
         col.add(dualButtons("Songs", { songsReturnPage = "service"; navigate("songs") }, "Song Lineups", { navigate("lineup") }))
         col.space(24)
         col.add(text("Assigned Members and their Roles", 13, navy)); col.space(12)
-        val assignments = selectedSheetService?.optJSONArray("assignments")
+        val currentSheetService = selectedSheetService?.let { sel ->
+            val sid = sel.optString("id")
+            storedServices().find { it.optString("id") == sid } ?: sel
+        } ?: selectedSheetService
+        val assignments = currentSheetService?.optJSONArray("assignments")
         if (assignments != null && assignments.length() > 0) {
             repeat(assignments.length()) { index ->
                 val item = assignments.getJSONObject(index)
@@ -3498,7 +3584,12 @@ space(48)
             }
             for (member in rosterCandidates) {
                 val mName = member.fullName.ifBlank { member.username }
-                val mRole = member.ministryRole.ifBlank { member.role }
+                val isLeader = member.role.equals("Leader", true) || member.email.trim().equals("ryanlloydgenturo@gmail.com", true) || mName.contains("Ryan Lloyd", true)
+                val mRole = if (isLeader) {
+                    if (member.ministryRole.isBlank() || member.ministryRole.equals("Member", true)) "Worship Leader" else member.ministryRole
+                } else {
+                    member.ministryRole.ifBlank { member.role }
+                }
                 val isSame = mRole.equals(assignedRole, ignoreCase = true) || (assignedRole.isNotBlank() && mRole.contains(assignedRole, ignoreCase = true))
                 val memberRanges = member.unavailableRanges.takeIf { it.isNotEmpty() }
                     ?: TeamRepository.getMemberUnavailableRanges(member.uid, preferences, member.email, mName)
@@ -3532,17 +3623,26 @@ space(48)
                     orientation = LinearLayout.VERTICAL
                     setPadding(dp(12), 0, dp(8), 0)
                     val nameRow = horizontal().apply { gravity = Gravity.CENTER_VERTICAL }
-                    nameRow.add(text(cand.name, 14, navy, true))
+                    nameRow.addView(text(cand.name, 14, navy, true), LinearLayout.LayoutParams(-2, -2))
                     if (cand.isSameRole) {
-                        nameRow.add(View(this@MemberActivity), 6, 1)
-                        val recBadge = text("⭐ Recommended", 9, Color.rgb(147, 51, 234), bold = true).apply {
+                        val recBadge = TextView(this@MemberActivity).apply {
+                            text = "⭐ Recommended (Same Role)"
+                            setTextColor(Color.rgb(126, 34, 206))
+                            textSize = 9.5f
+                            typeface = Typeface.DEFAULT_BOLD
                             background = bg(Color.rgb(243, 232, 255), 6)
-                            setPadding(dp(6), dp(2), dp(6), dp(2))
+                            setPadding(dp(8), dp(2), dp(8), dp(2))
                         }
-                        nameRow.add(recBadge, -2, -2)
+                        val badgeParams = LinearLayout.LayoutParams(-2, -2).apply {
+                            leftMargin = dp(8)
+                        }
+                        nameRow.addView(recBadge, badgeParams)
                     }
-                    add(nameRow)
-                    add(text(cand.role.ifBlank { "Team Member" }, 12, Color.rgb(90, 90, 95)))
+                    add(nameRow, -1, -2)
+                    val candDisplayRole = if (cand.role.equals("Leader", true) || cand.name.contains("Ryan Lloyd", true)) {
+                        if (cand.role.isBlank() || cand.role.equals("Member", true)) "Worship Leader" else cand.role
+                    } else cand.role.ifBlank { "Team Member" }
+                    add(text(candDisplayRole, 12, Color.rgb(90, 90, 95)), -1, -2)
                     if (cand.conflictReason != null) {
                         add(text("✕ Unavailable • ${cand.conflictReason}", 11, Color.rgb(220, 38, 38), true))
                     } else if (!isInclusion) {
@@ -4021,23 +4121,6 @@ space(48)
                     } else if (isSubAccepted && isRequester) {
                         space(12)
                         add(text("✓ ${sub.substituteName} accepted! Waiting for Leader's final approval.", 11, Color.rgb(14, 116, 144)))
-                    } else if (isPending && isRequester) {
-                        space(14)
-                        val cancelBtn = memberButton("Cancel Request", Color.rgb(180, 50, 50)) {
-                            AlertDialog.Builder(this@MemberActivity).setTitle("Cancel substitution request?")
-                                .setMessage("Are you sure you want to cancel your request for ${sub.role}?")
-                                .setNegativeButton("No", null)
-                                .setPositiveButton("Yes, Cancel") { _, _ ->
-                                    TeamRepository.updateSubstitutionStatus(activeCode, sub.id, "Cancelled", preferences) { res ->
-                                        runOnUiThread {
-                                            if (res.isSuccess) toast("Request cancelled.")
-                                            else toast("Failed to cancel request: ${res.exceptionOrNull()?.message ?: "Unknown error"}")
-                                            populateSubstitutions()
-                                        }
-                                    }
-                                }.show()
-                        }
-                        add(cancelBtn, -1, 40)
                     }
                 }); subCol.space(16)
             }

@@ -387,6 +387,25 @@ class AdminActivity : AppCompatActivity() {
             state.getStringArrayList("lineupSongs")?.let { lineupSongs.clear(); lineupSongs.addAll(it) }
         }
         initializeLeaderDemo()
+        if (activeCode.isNotBlank()) {
+            servicesListener = TeamRepository.subscribeToServices(activeCode, isLeader = true, preferences) { list ->
+                runOnUiThread {
+                    localServices.clear()
+                    list.forEach { localServices.add(org.json.JSONObject(it.toMap())) }
+                    if (page in listOf("home", "schedule")) {
+                        navigate(page, triggerRefresh = false)
+                    }
+                }
+            }
+            substitutionsListener = TeamRepository.subscribeToSubstitutions(activeCode, preferences) { list ->
+                runOnUiThread {
+                    if (page in listOf("notifications", "announcements")) {
+                        navigate(page, triggerRefresh = false)
+                    }
+                }
+            }
+        }
+
         navigate(savedInstanceState?.getString("page") ?: intent.getStringExtra("startPage") ?: "home")
         val newTeamCode = intent.getStringExtra("newTeamCode").orEmpty()
         if (newTeamCode.isNotBlank()) {
@@ -1474,6 +1493,24 @@ class AdminActivity : AppCompatActivity() {
         }
         return published.maxByOrNull { it.optString("date") + it.optString("start") }
     }
+    private fun formatHeroDateSubtitle(rawDate: String?, start: String?, end: String?): String {
+        if (rawDate.isNullOrBlank()) return "Sunday, May 18, 2025 - 9:00 AM"
+        val formattedDate = try {
+            val inFormat = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).apply {
+                timeZone = java.util.TimeZone.getTimeZone("Asia/Manila")
+            }
+            val d = inFormat.parse(rawDate.trim())
+            if (d != null) {
+                java.text.SimpleDateFormat("EEEE, MMM d, yyyy", java.util.Locale.US).apply {
+                    timeZone = java.util.TimeZone.getTimeZone("Asia/Manila")
+                }.format(d)
+            } else rawDate
+        } catch (_: Exception) { rawDate }
+
+        val sTime = if (!start.isNullOrBlank()) leaderTime(start) else ""
+        return if (sTime.isNotBlank()) "$formattedDate - $sTime" else formattedDate
+    }
+
     private fun homeUpcomingSecondRecord(): org.json.JSONObject? {
         val phtZone = java.util.TimeZone.getTimeZone("Asia/Manila")
         val today = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).apply { timeZone = phtZone }.format(java.util.Date())
@@ -1606,7 +1643,7 @@ class AdminActivity : AppCompatActivity() {
             LinearLayout.LayoutParams(dp(50),dp(50)).apply {leftMargin=dp(12)})
         top.add(row);top.space(18);top.add(text("Together, in Worship, in Sync",14,Color.rgb(183,209,255)))
         hero.addView(top,FrameLayout.LayoutParams(-1,-2))
-        // Use the earlier supplied artwork without its baked-in outer shadow.
+        // Clean high-contrast worship hero card strictly matching user specification
         val upcomingRec = homeUpcomingRecord()
         val card = FrameLayout(this).apply {
             id = UI.worshipCard
@@ -1628,14 +1665,7 @@ class AdminActivity : AppCompatActivity() {
                 if (coverUrl.isNotBlank()) {
                     com.example.syncedn.data.storage.ImageLoader.loadProfilePhoto(this, coverUrl, circular = false, maxDimension = 800)
                 } else {
-                    val artwork = (image("hero_container").drawable as? android.graphics.drawable.BitmapDrawable)?.bitmap
-                    if (artwork != null) {
-                        val scaleX = artwork.width.toFloat() / 360f
-                        val scaleY = artwork.height.toFloat() / 247f
-                        setImageBitmap(bitmaps.getOrPut("hero_card_clean") {
-                            Bitmap.createBitmap(artwork, (24 * scaleX).toInt(), (16 * scaleY).toInt(), (312 * scaleX).toInt(), (200 * scaleY).toInt())
-                        })
-                    }
+                    setImageResource(R.drawable.worship_hero_bg)
                 }
             }
             addView(imgView, FrameLayout.LayoutParams(-1, -1))
@@ -1643,55 +1673,83 @@ class AdminActivity : AppCompatActivity() {
             val overlay = View(this@AdminActivity).apply {
                 background = GradientDrawable(
                     GradientDrawable.Orientation.TOP_BOTTOM,
-                    intArrayOf(Color.argb(30, 0, 0, 0), Color.argb(215, 10, 13, 27))
+                    intArrayOf(Color.argb(85, 0, 0, 0), Color.argb(225, 8, 11, 24))
                 )
             }
             addView(overlay, FrameLayout.LayoutParams(-1, -1))
 
-            val textCol = vertical().apply {
-                setPadding(dp(16), dp(16), dp(16), dp(16))
-                val title = upcomingRec?.optString("title")?.ifBlank { "Sunday Worship Service" } ?: "Sunday Worship Service"
-                val date = upcomingRec?.optString("date")?.ifBlank { "Upcoming Service" } ?: "Upcoming Service"
-                val start = upcomingRec?.optString("start").orEmpty()
-                val end = upcomingRec?.optString("end").orEmpty()
-                val timeStr = if (start.isNotBlank() && end.isNotBlank()) "${leaderTime(start)} – ${leaderTime(end)}" else if (start.isNotBlank()) leaderTime(start) else ""
-                val venue = upcomingRec?.optString("venue")?.ifBlank { "Main Sanctuary" } ?: "Main Sanctuary"
+            val innerRow = horizontal().apply {
+                setPadding(dp(22), dp(20), dp(20), dp(20))
+                gravity = Gravity.CENTER_VERTICAL
+                clipChildren = false
+                clipToPadding = false
 
-                val badge = TextView(this@AdminActivity).apply {
-                    text = "NEXT WORSHIP SERVICE"
-                    setTextColor(Color.rgb(244, 243, 227))
-                    textSize = 10f
-                    typeface = Typeface.DEFAULT_BOLD
-                    background = bg(Color.argb(130, 0, 0, 0), 6)
-                    setPadding(dp(8), dp(3), dp(8), dp(3))
+                val textCol = vertical().apply {
+                    val rawTitle = upcomingRec?.optString("title")?.ifBlank { "Next Worship\nSession" } ?: "Next Worship\nSession"
+                    val formattedTitle = if (rawTitle.contains("Worship", ignoreCase = true) && !rawTitle.contains("\n")) {
+                        rawTitle.replaceFirst(" ", "\n")
+                    } else rawTitle
+
+                    val titleTv = TextView(this@AdminActivity).apply {
+                        text = formattedTitle
+                        setTextColor(Color.WHITE)
+                        textSize = 22f
+                        typeface = Typeface.DEFAULT_BOLD
+                        maxLines = 2
+                        ellipsize = android.text.TextUtils.TruncateAt.END
+                    }
+                    addView(titleTv, LinearLayout.LayoutParams(-1, -2))
+                    space(6)
+
+                    val rawDate = upcomingRec?.optString("date")
+                    val rawStart = upcomingRec?.optString("start")
+                    val rawEnd = upcomingRec?.optString("end")
+                    val formattedSubtitle = formatHeroDateSubtitle(rawDate, rawStart, rawEnd)
+
+                    val subTv = TextView(this@AdminActivity).apply {
+                        text = formattedSubtitle
+                        setTextColor(Color.rgb(203, 213, 225))
+                        textSize = 13f
+                        maxLines = 1
+                        ellipsize = android.text.TextUtils.TruncateAt.END
+                    }
+                    addView(subTv, LinearLayout.LayoutParams(-1, -2))
+                    space(14)
+
+                    val venuePill = FrameLayout(this@AdminActivity).apply {
+                        background = bg(Color.argb(175, 26, 32, 44), 16, Color.argb(90, 255, 255, 255))
+                        setPadding(dp(14), dp(6), dp(14), dp(6))
+                        val vTv = TextView(this@AdminActivity).apply {
+                            text = upcomingRec?.optString("venue")?.ifBlank { "Main Sanctuary" } ?: "Main Sanctuary"
+                            setTextColor(Color.WHITE)
+                            textSize = 12f
+                            typeface = Typeface.DEFAULT_BOLD
+                            maxLines = 1
+                            ellipsize = android.text.TextUtils.TruncateAt.END
+                        }
+                        addView(vTv, FrameLayout.LayoutParams(-2, -2))
+                    }
+                    addView(venuePill, LinearLayout.LayoutParams(-2, -2))
                 }
-                addView(badge, LinearLayout.LayoutParams(-2, -2))
-                space(6)
-                val titleTv = TextView(this@AdminActivity).apply {
-                    this.text = title
-                    setTextColor(Color.WHITE)
-                    textSize = 17f
-                    typeface = Typeface.DEFAULT_BOLD
-                    maxLines = 1
-                    ellipsize = android.text.TextUtils.TruncateAt.END
+                add(textCol, 0, -2, 1f)
+
+                val chevronBtn = FrameLayout(this@AdminActivity).apply {
+                    background = bg(Color.argb(135, 30, 41, 59), 23, Color.argb(60, 255, 255, 255))
+                    val arrow = TextView(this@AdminActivity).apply {
+                        text = "›"
+                        setTextColor(Color.WHITE)
+                        textSize = 24f
+                        typeface = Typeface.DEFAULT_BOLD
+                        gravity = Gravity.CENTER
+                    }
+                    addView(arrow, FrameLayout.LayoutParams(-2, -2, Gravity.CENTER))
                 }
-                addView(titleTv, LinearLayout.LayoutParams(-1, -2))
-                space(4)
-                val metaTv = TextView(this@AdminActivity).apply {
-                    val parts = listOfNotNull(
-                        if (date.isNotBlank()) "📅 $date" else null,
-                        if (timeStr.isNotBlank()) "⏰ $timeStr" else null,
-                        if (venue.isNotBlank()) "📍 $venue" else null
-                    )
-                    this.text = parts.joinToString("  •  ")
-                    setTextColor(Color.rgb(220, 225, 240))
-                    textSize = 11f
-                    maxLines = 1
-                    ellipsize = android.text.TextUtils.TruncateAt.END
-                }
-                addView(metaTv, LinearLayout.LayoutParams(-1, -2))
+                addView(chevronBtn, LinearLayout.LayoutParams(dp(46), dp(46)).apply {
+                    gravity = Gravity.CENTER_VERTICAL
+                    leftMargin = dp(12)
+                })
             }
-            addView(textCol, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM))
+            addView(innerRow, FrameLayout.LayoutParams(-1, -1))
 
             contentDescription = if (upcomingRec != null) {
                 "Next Worship Session. ${upcomingRec.optString("title")}, ${upcomingRec.optString("date")}. ${upcomingRec.optString("venue", "Main Sanctuary")}. Open details."
@@ -1699,8 +1757,7 @@ class AdminActivity : AppCompatActivity() {
                 "Next Worship Session. Open details."
             }
         }
-        hero.clipChildren = false
-        hero.clipToPadding = false
+
         hero.addView(card, FrameLayout.LayoutParams(-1, dp(200)).apply {
             leftMargin = dp(24)
             rightMargin = dp(24)
@@ -2272,6 +2329,8 @@ class AdminActivity : AppCompatActivity() {
     // ---- ADMIN / LEADER DEMO: editable local data, with the same native layout helpers. ----
     private val isLeader = true
     private var serviceWizard = false
+    private var servicesListener: com.google.firebase.firestore.ListenerRegistration? = null
+    private var substitutionsListener: com.google.firebase.firestore.ListenerRegistration? = null
     private var activeServiceIndex = -1
     private var roleMember = "Angelo Daniel"
     private var roleMemberUid = ""
@@ -4011,7 +4070,7 @@ class AdminActivity : AppCompatActivity() {
                     if (selectedMember.email.isNotBlank()) removed.add(selectedMember.email.trim().lowercase())
                     preferences.edit().putStringSet("removedMembers", removed).apply()
                     if (selectedMember.uid.isNotBlank()) {
-                        TeamRepository.removeMemberFromTeam(selectedMember.uid, activeCode) { result ->
+                        TeamRepository.removeMemberFromTeam(selectedMember.uid, activeCode, selectedMember.email) { result ->
                             runOnUiThread {
                                 if (result.isSuccess) {
                                     toast("$name removed from team.")
@@ -6481,7 +6540,7 @@ class AdminActivity : AppCompatActivity() {
                                         if (member.email.isNotBlank()) removed.add(member.email.trim().lowercase())
                                         preferences.edit().putStringSet("removedMembers", removed).apply()
                                         if (member.uid.isNotBlank()) {
-                                            TeamRepository.removeMemberFromTeam(member.uid, activeCode) { result ->
+                                            TeamRepository.removeMemberFromTeam(member.uid, activeCode, member.email) { result ->
                                                 runOnUiThread {
                                                     if (result.isSuccess) {
                                                         toast("$mName removed from team.")
