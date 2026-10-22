@@ -249,8 +249,8 @@ object ImageLoader {
         }
 
         // 2. For circular avatars, synchronous disk check (<1ms) prevents profile avatar flicker
-        if (circular) {
-            val diskFile = getCacheFile(imageView.context, cacheKey, circular = true)
+        if (circular || maxDimension <= 1024) {
+            val diskFile = getCacheFile(imageView.context, cacheKey, circular = circular)
             val diskBitmap = loadFromDisk(diskFile, maxDimension)
             if (diskBitmap != null && !diskBitmap.isRecycled) {
                 memoryCache.put(cacheKey, diskBitmap)

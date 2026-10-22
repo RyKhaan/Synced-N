@@ -71,6 +71,13 @@ object CloudinaryUploader {
                 }
 
                 val uploadedUrl = executeUpload(compressedBytes)
+                try {
+                    val bmp = BitmapFactory.decodeByteArray(compressedBytes, 0, compressedBytes.size)
+                    if (bmp != null) {
+                        ImageLoader.preseedCache(context, uploadedUrl, bmp, circular = false, maxDimension = maxDimension.coerceAtLeast(800))
+                        ImageLoader.preseedCache(context, uploadedUrl, bmp, circular = true, maxDimension = 320)
+                    }
+                } catch (_: Throwable) {}
                 mainHandler.post {
                     onComplete(Result.success(uploadedUrl))
                 }
