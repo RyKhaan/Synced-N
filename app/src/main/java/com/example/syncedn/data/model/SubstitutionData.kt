@@ -12,6 +12,7 @@ data class SubstitutionData(
     val substituteUid: String = "",          // UID of the chosen substitute teammate
     val substituteName: String = "",         // Name of the chosen substitute teammate
     val reason: String = "",                 // Member's reason for substitution (1-500 chars)
+    val type: String = "Exclusion",          // "Exclusion" (step-out/relief) or "Inclusion" (step-in/volunteer)
     val status: String = "Pending",          // "Pending", "Accepted", "Declined", "Cancelled"
     val createdBy: String = "",              // UID of creator (matches requesterUid)
     val createdAt: Long = System.currentTimeMillis(),
@@ -29,6 +30,7 @@ data class SubstitutionData(
         "substituteUid" to substituteUid,
         "substituteName" to substituteName,
         "reason" to reason,
+        "type" to type,
         "status" to status,
         "createdBy" to createdBy,
         "createdAt" to createdAt,
@@ -49,6 +51,7 @@ data class SubstitutionData(
                 substituteUid = map["substituteUid"] as? String ?: "",
                 substituteName = map["substituteName"] as? String ?: "",
                 reason = map["reason"] as? String ?: "",
+                type = map["type"] as? String ?: "Exclusion",
                 status = map["status"] as? String ?: "Pending",
                 createdBy = map["createdBy"] as? String ?: "",
                 createdAt = parseTimestamp(map["createdAt"]),

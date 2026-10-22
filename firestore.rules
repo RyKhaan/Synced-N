@@ -39,6 +39,41 @@ rules_version = '2';
 //   - removedMembers: list (optional, max 200 items) - Member IDs or names removed by the leader
 //   - createdAt: number | timestamp (optional, >= 0, immutable) - Team creation timestamp
 //
+// Subcollection: teams/{teamCode}/services
+// Document ID: {serviceId} (matches id field)
+// Fields:
+//   - id: string (required, matches doc ID, immutable) - Unique service ID
+//   - teamCode: string (required, matches parent teamCode, immutable) - Team invite code
+//   - title: string (required, 1-100 chars) - Service title
+//   - date: string (required, 0-20 chars) - Service date
+//   - start: string (required, 0-10 chars) - Service start time
+//   - end: string (required, 0-10 chars) - Service end time
+//   - venue: string (required, 1-100 chars) - Service venue
+//   - status: string (required, allowed: 'Draft', 'Published') - Service publication status
+//   - coverImageUrl: string (optional, 0-1000 chars) - Service cover/flyer image URL
+//   - assignments: list (optional, max 50 items) - Role assignments
+//   - rehearsal: map (optional) - Rehearsal schedule details
+//   - songs: list (optional, max 50 items) - Songs in service setlist
+//   - createdBy: string (required, matches creator auth.uid, immutable) - Creator's UID
+//   - createdAt: number | timestamp (optional, >= 0, immutable) - Timestamp when created
+//   - updatedAt: number | timestamp (optional, >= 0) - Timestamp when last updated
+//
+// Subcollection: teams/{teamCode}/songs
+// Document ID: {songId} (matches id field)
+// Fields:
+//   - id: string (required, matches doc ID, immutable) - Unique song ID
+//   - teamCode: string (required, matches parent teamCode, immutable) - Team invite code
+//   - title: string (required, 1-120 chars) - Song title
+//   - artist: string (optional, 0-100 chars) - Song artist
+//   - key: string (required, 1-10 chars) - Musical key
+//   - bpm: number | string (optional) - Beats per minute
+//   - sheet: string (optional, 0-30000 chars) - Chord sheet / arrangement
+//   - lyrics: string (optional, 0-20000 chars) - Song lyrics
+//   - referenceUrl: string (optional, valid URL) - Audio/video reference URL
+//   - createdBy: string (required, matches creator auth.uid, immutable) - Creator's UID
+//   - createdAt: number | timestamp (optional, >= 0, immutable) - Timestamp when created
+//   - updatedAt: number | timestamp (optional, >= 0) - Last update timestamp
+//
 // Subcollection: teams/{teamCode}/announcements
 // Document ID: {announcementId} (matches id field)
 // Fields:
@@ -66,7 +101,8 @@ rules_version = '2';
 //   - substituteUid: string (required, 1-128 chars) - Proposed substitute teammate's UID
 //   - substituteName: string (required, 1-100 chars) - Full name of proposed substitute
 //   - reason: string (required, 1-500 chars) - Explanation for substitution request
-//   - status: string (required, allowed: 'Pending', 'Accepted', 'Declined', 'Cancelled') - Request state
+//   - type: string (optional, 0-50 chars) - Substitution request type
+//   - status: string (required, allowed: 'Pending', 'Substitute Accepted', 'Accepted', 'Approved', 'Declined', 'Cancelled') - Request state
 //   - createdBy: string (required, matches requesterUid, immutable) - Creator's UID
 //   - createdAt: number | timestamp (optional, >= 0, immutable) - Creation timestamp
 //   - updatedAt: number | timestamp (optional, >= 0) - Last update timestamp
@@ -330,7 +366,7 @@ service cloud.firestore {
     function isValidService(data, serviceId, teamCode) {
       return hasOnlyAllowedFields(data, [
         'id', 'teamCode', 'title', 'date', 'start', 'end', 'venue',
-        'status', 'assignments', 'rehearsal', 'songs', 'createdBy',
+        'status', 'coverImageUrl', 'assignments', 'rehearsal', 'songs', 'createdBy',
         'createdAt', 'updatedAt'
       ]) &&
       hasRequiredFields(data, ['id', 'teamCode', 'title', 'date', 'start', 'end', 'venue', 'status', 'createdBy']) &&
@@ -342,6 +378,7 @@ service cloud.firestore {
       data.end is string && data.end.size() <= 10 &&
       data.venue is string && data.venue.size() > 0 && data.venue.size() <= 100 &&
       data.status is string && data.status in ['Draft', 'Published'] &&
+      (!('coverImageUrl' in data) || (data.coverImageUrl is string && data.coverImageUrl.size() <= 1000)) &&
       (!('assignments' in data) || (data.assignments is list && data.assignments.size() <= 50)) &&
       (!('rehearsal' in data) || data.rehearsal is map) &&
       (!('songs' in data) || (data.songs is list && data.songs.size() <= 50)) &&
@@ -394,7 +431,7 @@ service cloud.firestore {
       return hasOnlyAllowedFields(data, [
         'id', 'teamCode', 'serviceId', 'serviceTitle', 'serviceDate',
         'requesterUid', 'requesterName', 'role', 'substituteUid',
-        'substituteName', 'reason', 'status', 'createdBy', 'createdAt', 'updatedAt'
+        'substituteName', 'reason', 'type', 'status', 'createdBy', 'createdAt', 'updatedAt'
       ]) &&
       hasRequiredFields(data, [
         'id', 'teamCode', 'serviceTitle', 'requesterUid', 'requesterName',
@@ -412,7 +449,8 @@ service cloud.firestore {
       data.requesterUid != data.substituteUid &&
       data.substituteName is string && data.substituteName.size() > 0 && data.substituteName.size() <= 100 &&
       data.reason is string && data.reason.size() > 0 && data.reason.size() <= 500 &&
-      data.status in ['Pending', 'Accepted', 'Declined', 'Cancelled'] &&
+      (!('type' in data) || (data.type is string && data.type.size() <= 50)) &&
+      data.status in ['Pending', 'Substitute Accepted', 'Accepted', 'Approved', 'Declined', 'Cancelled'] &&
       data.createdBy is string && data.createdBy.size() > 0 && data.createdBy.size() <= 128 &&
       (!('createdAt' in data) || (data.createdAt is number && data.createdAt >= 0) || (data.createdAt is timestamp)) &&
       (!('updatedAt' in data) || (data.updatedAt is number && data.updatedAt >= 0) || (data.updatedAt is timestamp));
@@ -568,7 +606,7 @@ service cloud.firestore {
                          ||
                          (isAuthenticated() && isSameTeam(teamCode) &&
                           isValidService(request.resource.data, serviceId, teamCode) &&
-                          areImmutableFieldsUnchanged(['id', 'teamCode', 'title', 'date', 'start', 'end', 'venue', 'status', 'rehearsal', 'songs', 'createdBy', 'createdAt']))
+                          areImmutableFieldsUnchanged(['id', 'teamCode', 'title', 'date', 'start', 'end', 'venue', 'status', 'rehearsal', 'songs', 'createdBy', 'createdAt', 'coverImageUrl']))
                        );
 
         allow delete: if isLeaderOfTeam(teamCode);

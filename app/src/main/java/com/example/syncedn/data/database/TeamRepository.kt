@@ -2524,17 +2524,22 @@ object TeamRepository {
      * Pure function that replaces the assignment matching the substitution request in a ServiceData record.
      */
     fun replaceAssignmentInService(service: ServiceData, sub: SubstitutionData): ServiceData {
+        val isInclusion = sub.type.equals("Inclusion", ignoreCase = true)
+        val targetUid = if (isInclusion) sub.substituteUid else sub.requesterUid
+        val targetName = if (isInclusion) sub.substituteName else sub.requesterName
+        val newUid = if (isInclusion) sub.requesterUid else sub.substituteUid
+        val newName = if (isInclusion) sub.requesterName else sub.substituteName
         var replaced = false
         val updatedAssignments = service.assignments.map { assignment ->
             val matchesRole = assignment.role.equals(sub.role, ignoreCase = true)
-            val matchesRequester = (sub.requesterUid.isNotBlank() && assignment.uid == sub.requesterUid) ||
-                    (sub.requesterName.isNotBlank() && assignment.name.equals(sub.requesterName, ignoreCase = true))
+            val matchesTarget = (targetUid.isNotBlank() && assignment.uid == targetUid) ||
+                    (targetName.isNotBlank() && assignment.name.equals(targetName, ignoreCase = true))
 
-            if (!replaced && matchesRole && matchesRequester) {
+            if (!replaced && (matchesTarget || (matchesRole && targetUid.isBlank()))) {
                 replaced = true
                 assignment.copy(
-                    uid = sub.substituteUid,
-                    name = sub.substituteName
+                    uid = newUid,
+                    name = newName
                 )
             } else {
                 assignment
@@ -2546,8 +2551,8 @@ object TeamRepository {
             if (roleIndex >= 0) {
                 val old = updatedAssignments[roleIndex]
                 updatedAssignments[roleIndex] = old.copy(
-                    uid = sub.substituteUid,
-                    name = sub.substituteName
+                    uid = newUid,
+                    name = newName
                 )
             }
         }
@@ -3022,11 +3027,25 @@ object TeamRepository {
         val substitutions = getCachedSubstitutions(code, preferences)
         for (sub in substitutions) {
             val ts = sub.updatedAt.takeIf { it > 0L } ?: sub.createdAt
+            val statusDisplay = when (sub.status) {
+                "Substitute Accepted" -> "Substitute Accepted"
+                "Accepted", "Approved" -> "Approved"
+                "Declined" -> "Declined"
+                "Cancelled" -> "Cancelled"
+                else -> "Pending"
+            }
+            val isInc = sub.type.equals("Inclusion", true) || sub.reason.startsWith("[Inclusion]")
+            val title = if (isInc) "Inclusion Request ($statusDisplay)" else "Substitution Request ($statusDisplay)"
+            val msg = if (isInc) {
+                "${sub.requesterName} offered to step in for ${sub.substituteName} (${sub.role}) in ${sub.serviceTitle}."
+            } else {
+                "${sub.requesterName} requested ${sub.substituteName} to cover ${sub.role} in ${sub.serviceTitle}."
+            }
             items.add(
                 TeamNotificationItem(
                     id = "notif_sub_${sub.id}",
-                    title = "Substitution ${sub.status}",
-                    message = "${sub.requesterName} requested ${sub.substituteName} for ${sub.role} (${sub.serviceTitle}).",
+                    title = title,
+                    message = msg,
                     timeLabel = formatRelativeNotificationTime(ts),
                     iconName = "people",
                     timestamp = ts

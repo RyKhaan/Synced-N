@@ -9,6 +9,7 @@ data class ServiceData(
     val end: String = "",               // "HH:mm"
     val venue: String = "",
     val status: String = "Draft",       // "Draft" or "Published"
+    val coverImageUrl: String = "",
     val assignments: List<ServiceAssignment> = emptyList(),
     val rehearsal: RehearsalData = RehearsalData(),
     val songs: List<ServiceSong> = emptyList(),
@@ -25,6 +26,7 @@ data class ServiceData(
         "end" to end,
         "venue" to venue,
         "status" to status,
+        "coverImageUrl" to coverImageUrl,
         "assignments" to assignments.map { it.toMap() },
         "rehearsal" to rehearsal.toMap(),
         "songs" to songs.map { it.toMap() },
@@ -64,6 +66,7 @@ data class ServiceData(
                 end = map["end"] as? String ?: "",
                 venue = map["venue"] as? String ?: "",
                 status = map["status"] as? String ?: "Draft",
+                coverImageUrl = map["coverImageUrl"] as? String ?: "",
                 assignments = assignmentsList,
                 rehearsal = RehearsalData.fromMap(rehearsalMap),
                 songs = songsList,
