@@ -93,6 +93,36 @@ open class MemberActivity : AppCompatActivity() {
     private var teamName = ""
     private var successFlow = "register"
 
+    private val notificationPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { isGranted ->
+        if (isGranted) {
+            val code = preferences.getString("teamCode", "").orEmpty()
+            com.example.syncedn.data.auth.SyncedFirebaseMessagingService.syncToken(this, preferences)
+            if (code.isNotBlank()) {
+                com.example.syncedn.data.auth.SyncedFirebaseMessagingService.subscribeToTeam(code)
+            }
+        }
+    }
+
+    private fun checkAndRequestNotificationPermission() {
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+            if (androidx.core.content.ContextCompat.checkSelfPermission(
+                    this,
+                    android.Manifest.permission.POST_NOTIFICATIONS
+                ) != android.content.pm.PackageManager.PERMISSION_GRANTED
+            ) {
+                notificationPermissionLauncher.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+                return
+            }
+        }
+        val code = preferences.getString("teamCode", "").orEmpty()
+        com.example.syncedn.data.auth.SyncedFirebaseMessagingService.syncToken(this, preferences)
+        if (code.isNotBlank()) {
+            com.example.syncedn.data.auth.SyncedFirebaseMessagingService.subscribeToTeam(code)
+        }
+    }
+
     private val googleSignInLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
@@ -212,6 +242,10 @@ open class MemberActivity : AppCompatActivity() {
             TeamRepository.cacheMember(member, preferences)
         }
         FirestoreManager.cacheUserRoleAndTeam(uid, emailLower, role, team, code)
+        if (code.isNotBlank()) {
+            com.example.syncedn.data.auth.SyncedFirebaseMessagingService.subscribeToTeam(code)
+            com.example.syncedn.data.auth.SyncedFirebaseMessagingService.syncToken(this, preferences)
+        }
         preferences.edit {
             putBoolean("leftTeam", false)
             putString("role", role)
@@ -242,6 +276,7 @@ open class MemberActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         WindowCompat.setDecorFitsSystemWindows(window, false)
         syncLocalTeamsToMemory()
+        checkAndRequestNotificationPermission()
         displayName = savedInstanceState?.getString("displayName") ?: preferences.getString(SessionManager.KEY_USERNAME, "").orEmpty()
         fullName = preferences.getString(SessionManager.KEY_FULL_NAME, "").orEmpty()
         profileReturnPage = savedInstanceState?.getString("profileReturnPage") ?: "settings"
@@ -3352,7 +3387,15 @@ open class MemberActivity : AppCompatActivity() {
                                     .setPositiveButton("Accept") { _, _ ->
                                         TeamRepository.acceptSubstitutionAndUpdateService(activeCode, sub, preferences) { res ->
                                             runOnUiThread {
-                                                if (res.isSuccess) toast("Substitution accepted!")
+                                                if (res.isSuccess) {
+                                                    toast("Substitution accepted!")
+                                                    com.example.syncedn.data.auth.SyncedMessagingService.dispatchSystemNotification(
+                                                        this@MemberActivity,
+                                                        preferences,
+                                                        "Substitution Accepted",
+                                                        "${sub.substituteName} accepted substitution for ${sub.role} in ${sub.serviceTitle}."
+                                                    )
+                                                }
                                                 else toast("Failed to accept substitution: ${res.exceptionOrNull()?.message ?: "Unknown error"}")
                                                 populateSubstitutions()
                                             }
@@ -3375,7 +3418,15 @@ open class MemberActivity : AppCompatActivity() {
                                     .setPositiveButton("Decline") { _, _ ->
                                         TeamRepository.updateSubstitutionStatus(activeCode, sub.id, "Declined", preferences) { res ->
                                             runOnUiThread {
-                                                if (res.isSuccess) toast("Substitution declined.")
+                                                if (res.isSuccess) {
+                                                    toast("Substitution declined.")
+                                                    com.example.syncedn.data.auth.SyncedMessagingService.dispatchSystemNotification(
+                                                        this@MemberActivity,
+                                                        preferences,
+                                                        "Substitution Declined",
+                                                        "${sub.substituteName} declined substitution for ${sub.role} in ${sub.serviceTitle}."
+                                                    )
+                                                }
                                                 else toast("Failed to decline substitution: ${res.exceptionOrNull()?.message ?: "Unknown error"}")
                                                 populateSubstitutions()
                                             }
@@ -4296,6 +4347,10 @@ open class MemberActivity : AppCompatActivity() {
                 .setMessage("Are you sure you want to leave this team?")
                 .setNegativeButton("Cancel", null).setPositiveButton("Leave") { _, _ ->
                     val uid = preferences.getString("userId", "").orEmpty()
+                    val activeCode = preferences.getString("teamCode", "").orEmpty()
+                    if (activeCode.isNotBlank()) {
+                        com.example.syncedn.data.auth.SyncedFirebaseMessagingService.unsubscribeFromTeam(activeCode)
+                    }
                     if (uid.isNotBlank()) {
                         TeamRepository.leaveTeam(uid) {}
                     }
