@@ -2343,4 +2343,25 @@ class ExampleUnitTest {
         assertTrue(fakePrefs.getBoolean("notifications", false))
         assertTrue(fakePrefs.getBoolean("teamUnmuted", false))
     }
+
+    @Test
+    fun testUserProfileFcmTokenSerializationAndDeserialization() {
+        val token = "fcm_mock_token_abc_123_xyz"
+        val profile = com.example.syncedn.data.model.UserProfile(
+            uid = "user_fcm_test",
+            username = "FcmUser",
+            email = "fcm@test.com",
+            fcmToken = token
+        )
+        val map = profile.toMap()
+        assertEquals(token, map["fcmToken"])
+
+        val restored = com.example.syncedn.data.model.UserProfile.fromMap(map)
+        assertEquals("user_fcm_test", restored.uid)
+        assertEquals(token, restored.fcmToken)
+
+        // Empty / absent fallback
+        val emptyRestored = com.example.syncedn.data.model.UserProfile.fromMap(emptyMap())
+        assertEquals("", emptyRestored.fcmToken)
+    }
 }

@@ -256,7 +256,7 @@ service cloud.firestore {
         'uid', 'username', 'email', 'role', 'teamName', 'teamCode',
         'resetPassword', 'fullName', 'phone', 'country', 'language',
         'ministryRole', 'unavailableRanges', 'notificationsEnabled', 'teamUnmuted',
-        'photoUri', 'createdAt', 'joinedAt'
+        'fcmToken', 'photoUri', 'createdAt', 'joinedAt'
       ]) &&
       hasRequiredFields(data, ['uid']) &&
       data.uid is string &&
@@ -277,6 +277,7 @@ service cloud.firestore {
       (!('unavailableRanges' in data) || (data.unavailableRanges is list && data.unavailableRanges.size() <= 100)) &&
       (!('notificationsEnabled' in data) || data.notificationsEnabled is bool) &&
       (!('teamUnmuted' in data) || data.teamUnmuted is bool) &&
+      (!('fcmToken' in data) || (data.fcmToken is string && data.fcmToken.size() <= 500)) &&
       (!('photoUri' in data) || (data.photoUri is string && data.photoUri.size() <= 500)) &&
       (!('createdAt' in data) || (data.createdAt is number && data.createdAt >= 0) || (data.createdAt is timestamp)) &&
       (!('joinedAt' in data) || (data.joinedAt is number && data.joinedAt >= 0) || (data.joinedAt is timestamp));
@@ -471,7 +472,7 @@ service cloud.firestore {
                           request.resource.data.teamCode == ''
                         )) ||
                        (isAuthenticated() && isUserSelf(userId, request.resource.data)) ||
-                       request.resource.data.keys().hasOnly(['unavailableRanges', 'notificationsEnabled', 'teamUnmuted', 'uid'])
+                       request.resource.data.keys().hasOnly(['unavailableRanges', 'notificationsEnabled', 'teamUnmuted', 'fcmToken', 'uid'])
                      );
 
       allow update: if isValidUser(request.resource.data, userId) &&
@@ -492,7 +493,7 @@ service cloud.firestore {
                          ) ||
                          // Context B: Availability or notification/mute preference update for member sync
                          (
-                           request.resource.data.diff(resource.data).affectedKeys().hasOnly(['unavailableRanges', 'notificationsEnabled', 'teamUnmuted', 'uid'])
+                           request.resource.data.diff(resource.data).affectedKeys().hasOnly(['unavailableRanges', 'notificationsEnabled', 'teamUnmuted', 'fcmToken', 'uid'])
                          ) ||
                          // Context C: Team Leader updates a member's ministryRole or resets team membership
                          (
