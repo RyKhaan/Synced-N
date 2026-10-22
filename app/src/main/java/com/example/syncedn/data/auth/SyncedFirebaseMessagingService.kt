@@ -88,6 +88,7 @@ class SyncedFirebaseMessagingService : FirebaseMessagingService() {
          */
         fun syncToken(context: Context, preferences: SharedPreferences) {
             try {
+                SyncedMessagingService.ensureChannel(context)
                 FirebaseMessaging.getInstance().token.addOnCompleteListener { task ->
                     if (task.isSuccessful && task.result != null) {
                         val token = task.result

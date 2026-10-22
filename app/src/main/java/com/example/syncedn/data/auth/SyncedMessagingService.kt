@@ -54,7 +54,7 @@ object SyncedMessagingService {
         return preferences?.getBoolean("teamUnmuted", true) ?: true
     }
 
-    private fun ensureChannel(context: Context): NotificationManager? {
+    fun ensureChannel(context: Context): NotificationManager? {
         return try {
             val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
             if (manager != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
