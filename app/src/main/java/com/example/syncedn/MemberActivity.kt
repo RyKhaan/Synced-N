@@ -383,23 +383,26 @@ open class MemberActivity : AppCompatActivity() {
                 .addSnapshotListener { snapshot, error ->
                     if (error != null || snapshot == null || !snapshot.exists()) return@addSnapshotListener
                     val removedByLeader = snapshot.getBoolean("removedByLeader") ?: false
-                    val tCode = snapshot.getString("teamCode").orEmpty()
-                    val curTeam = preferences.getString("teamCode", "").orEmpty().ifBlank { preferences.getString("teamName", "").orEmpty() }
-                    if (removedByLeader || (curTeam.isNotBlank() && tCode.isBlank() && !preferences.getBoolean("leftTeam", false))) {
+                    val removedTeamCode = snapshot.getString("removedTeamCode").orEmpty()
+                    val myActiveTeamCode = preferences.getString(SessionManager.KEY_TEAM_CODE, "").orEmpty()
+                        .ifBlank { preferences.getString("teamCode", "").orEmpty() }
+                    if (removedByLeader && (removedTeamCode.isBlank() || myActiveTeamCode.isBlank() || removedTeamCode.equals(myActiveTeamCode, ignoreCase = true))) {
                         preferences.edit()
-                            .putString("role", "")
+                            .putString("role", "Member")
                             .remove("teamName")
                             .remove("teamCode")
                             .remove("ministryRole")
                             .putBoolean("leftTeam", true)
                             .apply()
                         runOnUiThread {
-                            AlertDialog.Builder(this@MemberActivity)
-                                .setTitle("Removed from Team")
-                                .setMessage("You have been removed from the team by the Team Leader.")
-                                .setPositiveButton("OK") { _, _ -> navigate("teamChoice") }
-                                .setCancelable(false)
-                                .show()
+                            if (!isFinishing && !isDestroyed) {
+                                AlertDialog.Builder(this@MemberActivity)
+                                    .setTitle("Removed from Team")
+                                    .setMessage("You have been removed from the team by the Team Leader.")
+                                    .setPositiveButton("OK") { _, _ -> navigate("teamChoice") }
+                                    .setCancelable(false)
+                                    .show()
+                            }
                         }
                     }
                 }
@@ -645,9 +648,35 @@ open class MemberActivity : AppCompatActivity() {
                             if (isRemoved) {
                                 joinBtn?.isEnabled = true
                                 AlertDialog.Builder(this@MemberActivity)
-                                    .setTitle("Access Restricted")
-                                    .setMessage("You were removed from this team by the Team Leader and cannot rejoin without the Leader's approval.")
-                                    .setPositiveButton("OK", null)
+                                    .setTitle("Re-join Approval Required")
+                                    .setMessage("You were previously removed from this team by the Team Leader. Would you like to send a re-join request to the Team Leader for approval?")
+                                    .setPositiveButton("Send Request") { _, _ ->
+                                        val reqId = "rejoin_${System.currentTimeMillis()}_${uid.take(6)}"
+                                        val req = com.example.syncedn.data.model.RejoinRequestData(
+                                            id = reqId,
+                                            teamCode = enteredCode,
+                                            userUid = uid,
+                                            userName = fullName.ifBlank { displayName },
+                                            userEmail = emailStr,
+                                            reason = "Member requested to re-join the team",
+                                            status = "Pending"
+                                        )
+                                        TeamRepository.sendRejoinRequest(enteredCode, req) { sRes ->
+                                            runOnUiThread {
+                                                if (sRes.isSuccess) {
+                                                    toast("Re-join request sent to Team Leader!")
+                                                    AlertDialog.Builder(this@MemberActivity)
+                                                        .setTitle("Request Submitted")
+                                                        .setMessage("Your request to re-join has been sent to the Team Leader. You will be able to enter once the Leader approves your request.")
+                                                        .setPositiveButton("OK", null)
+                                                        .show()
+                                                } else {
+                                                    toast("Failed to send request: ${sRes.exceptionOrNull()?.message}")
+                                                }
+                                            }
+                                        }
+                                    }
+                                    .setNegativeButton("Cancel", null)
                                     .show()
                                 return@runOnUiThread
                             }
@@ -1858,7 +1887,11 @@ open class MemberActivity : AppCompatActivity() {
             val teamInfo=vertical().apply {
                 setPadding(dp(13),dp(32),dp(12),dp(12))
                 val titleRow=horizontal()
-                titleRow.add(image("team_badge","Worship Team badge"),50,50)
+                titleRow.add(ImageView(this@MemberActivity).apply {
+                    setImageResource(R.drawable.synced_n_logo_sharp)
+                    contentDescription = "Synced N Ministry Team Logo"
+                    scaleType = ImageView.ScaleType.FIT_CENTER
+                }, 50, 50)
                 titleRow.add(text("Worship\nTeam",18,Color.rgb(66,82,114),id=UI.teamTitle).apply {
                     setPadding(dp(16),0,0,0)
                 },0,-2,1f)
@@ -1885,24 +1918,44 @@ open class MemberActivity : AppCompatActivity() {
             }
             add(text("Upcoming",17,navy,true));space(12)
             val upcoming=horizontal().apply { gravity=Gravity.TOP }
-            val service=vertical().apply {
-                id=UI.scheduleCard;background=bg(Color.WHITE,24,Color.rgb(211,211,211))
-                elevation=dp(4).toFloat();setPadding(dp(10),dp(16),dp(10),dp(10))
+            val service=horizontal().apply {
+                id=UI.scheduleCard
+                background=bg(Color.WHITE,20,Color.rgb(226,232,240))
+                elevation=dp(3).toFloat();setPadding(dp(8),dp(10),dp(10),dp(10))
                 isClickable=true;isFocusable=true;minimumHeight=dp(104)
                 val secondRec = homeUpcomingSecondRecord()
                 if (secondRec != null) {
-                    val dateLabel = secondRec.optString("date").ifBlank { "Upcoming Service" }
+                    val dateRaw = secondRec.optString("date")
+                    val badgeDate = formatBadgeDate(dateRaw)
                     val serviceTitle = secondRec.optString("title").ifBlank { "Sunday Worship Service" }
                     val start = secondRec.optString("start")
                     val end = secondRec.optString("end")
                     val timeLabel = if(start.isNotBlank() && end.isNotBlank()) formatServiceTime(start) + " – " + formatServiceTime(end) else if (start.isNotBlank()) formatServiceTime(start) else ""
-                    contentDescription = "$dateLabel, $serviceTitle, $timeLabel. Open service details."
-                    add(text(dateLabel,13,navy,true));space(8)
-                    add(text(serviceTitle,13,Color.rgb(66,82,114),true));space(5)
-                    add(text(timeLabel,11,Color.rgb(66,82,114)))
+                    val venue = secondRec.optString("venue", "Main Sanctuary")
+                    contentDescription = "$dateRaw, $serviceTitle, $timeLabel. Open service details."
+
+                    add(text(badgeDate, 13, Color.WHITE, bold = true, centered = true).apply {
+                        background = GradientDrawable(GradientDrawable.Orientation.TL_BR,
+                            intArrayOf(purple, Color.rgb(167, 0, 214))).apply { cornerRadius = dp(12).toFloat() }
+                    }, 52, 62)
+                    add(vertical().apply {
+                        setPadding(dp(8), 0, dp(6), 0)
+                        add(text(serviceTitle, 12, navy, true)); space(3)
+                        add(text(timeLabel, 10, navy)); space(2)
+                        add(text(venue, 10, purple, true))
+                    }, 0, -2, 1f)
+                    add(Symbol(this@MemberActivity, "arrow", Color.GRAY), 14, 20)
                 } else {
-                    add(text("No upcoming services",13,navy,true));space(8)
-                    add(text("Check back soon for next scheduled lineup.",11,Color.rgb(66,82,114)))
+                    val fallbackBadge = formatBadgeDate(java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).format(java.util.Date()))
+                    add(text(fallbackBadge, 13, Color.WHITE, bold = true, centered = true).apply {
+                        background = GradientDrawable(GradientDrawable.Orientation.TL_BR,
+                            intArrayOf(purple, Color.rgb(167, 0, 214))).apply { cornerRadius = dp(12).toFloat() }
+                    }, 52, 62)
+                    add(vertical().apply {
+                        setPadding(dp(8), 0, dp(6), 0)
+                        add(text("No upcoming", 12, navy, true)); space(3)
+                        add(text("Check back soon.", 10, Color.GRAY))
+                    }, 0, -2, 1f)
                 }
             }
             upcoming.add(service,0,-2,0.63f)
@@ -4151,7 +4204,30 @@ space(48)
         col.add(text("Substitution Request", 15, purple, bold = true)); col.space(12)
         substitutionFeed(col)
         col.space(16)
-        col.add(text("Recent Notifications", 15, purple, bold = true)); col.space(12)
+        val notifHeader = horizontal().apply { gravity = Gravity.CENTER_VERTICAL }
+        notifHeader.add(text("Recent Notifications", 15, purple, bold = true), 0, -2, 1f)
+        val clearBtn = TextView(this@MemberActivity).apply {
+            text = "Clear All"
+            textSize = 12f
+            setTextColor(Color.rgb(180, 50, 50))
+            setTypeface(typeface, Typeface.BOLD)
+            setPadding(dp(8), dp(4), dp(8), dp(4))
+            isClickable = true
+            isFocusable = true
+            setOnClickListener {
+                AlertDialog.Builder(this@MemberActivity)
+                    .setTitle("Clear Notifications")
+                    .setMessage("Are you sure you want to clear all recent notifications?")
+                    .setPositiveButton("Clear All") { _, _ ->
+                        TeamRepository.clearAllNotifications(activeCode, preferences)
+                        navigate("notifications")
+                    }
+                    .setNegativeButton("Cancel", null)
+                    .show()
+            }
+        }
+        notifHeader.add(clearBtn)
+        col.add(notifHeader); col.space(12)
         recentNotificationsList(col)
 
         if (activeCode.isNotBlank()) {
@@ -4193,6 +4269,20 @@ space(48)
                 textCol.space(2)
                 textCol.add(text(notif.timeLabel, 10, Color.GRAY))
                 row.add(textCol, 0, -2, 1f)
+                val delBtn = TextView(this@MemberActivity).apply {
+                    text = "✕"
+                    textSize = 13f
+                    setTextColor(Color.rgb(156, 163, 175))
+                    setPadding(dp(8), dp(6), dp(8), dp(6))
+                    isClickable = true
+                    isFocusable = true
+                    contentDescription = "Delete notification"
+                    setOnClickListener {
+                        TeamRepository.deleteNotification(notif.id, preferences)
+                        navigate("notifications")
+                    }
+                }
+                row.add(delBtn)
                 add(row)
             }); col.space(12)
         }

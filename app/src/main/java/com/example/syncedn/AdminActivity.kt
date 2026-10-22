@@ -1778,7 +1778,11 @@ class AdminActivity : AppCompatActivity() {
             val teamInfo=vertical().apply {
                 setPadding(dp(13),dp(32),dp(12),dp(12))
                 val titleRow=horizontal()
-                titleRow.add(image("team_badge","Worship Team badge"),50,50)
+                titleRow.add(ImageView(this@AdminActivity).apply {
+                    setImageResource(R.drawable.synced_n_logo_sharp)
+                    contentDescription = "Synced N Ministry Team Logo"
+                    scaleType = ImageView.ScaleType.FIT_CENTER
+                }, 50, 50)
                 titleRow.add(text("Worship\nTeam",18,Color.rgb(66,82,114),id=UI.teamTitle).apply {
                     setPadding(dp(16),0,0,0)
                 },0,-2,1f)
@@ -1814,24 +1818,44 @@ class AdminActivity : AppCompatActivity() {
             }
             add(text("Upcoming",17,navy,true));space(12)
             val upcoming=horizontal().apply { gravity=Gravity.TOP }
-            val service=vertical().apply {
-                id=UI.scheduleCard;background=bg(Color.WHITE,24,Color.rgb(211,211,211))
-                elevation=dp(4).toFloat();setPadding(dp(10),dp(16),dp(10),dp(10))
+            val service=horizontal().apply {
+                id=UI.scheduleCard
+                background=bg(Color.WHITE,20,Color.rgb(226,232,240))
+                elevation=dp(3).toFloat();setPadding(dp(8),dp(10),dp(10),dp(10))
                 isClickable=true;isFocusable=true;minimumHeight=dp(104)
                 val secondRec = homeUpcomingSecondRecord()
                 if (secondRec != null) {
-                    val dateLabel = secondRec.optString("date").ifBlank { "Upcoming Service" }
+                    val dateRaw = secondRec.optString("date")
+                    val badgeDate = formatBadgeDate(dateRaw)
                     val serviceTitle = secondRec.optString("title").ifBlank { "Sunday Worship Service" }
                     val start = secondRec.optString("start")
                     val end = secondRec.optString("end")
                     val timeLabel = if(start.isNotBlank() && end.isNotBlank()) leaderTime(start) + " – " + leaderTime(end) else if (start.isNotBlank()) leaderTime(start) else ""
-                    contentDescription = "$dateLabel, $serviceTitle, $timeLabel. Open service details."
-                    add(text(dateLabel,13,navy,true));space(8)
-                    add(text(serviceTitle,13,Color.rgb(66,82,114),true));space(5)
-                    add(text(timeLabel,11,Color.rgb(66,82,114)))
+                    val venue = secondRec.optString("venue", "Main Sanctuary")
+                    contentDescription = "$dateRaw, $serviceTitle, $timeLabel. Open service details."
+
+                    add(text(badgeDate, 13, Color.WHITE, bold = true, centered = true).apply {
+                        background = GradientDrawable(GradientDrawable.Orientation.TL_BR,
+                            intArrayOf(purple, Color.rgb(167, 0, 214))).apply { cornerRadius = dp(12).toFloat() }
+                    }, 52, 62)
+                    add(vertical().apply {
+                        setPadding(dp(8), 0, dp(6), 0)
+                        add(text(serviceTitle, 12, navy, true)); space(3)
+                        add(text(timeLabel, 10, navy)); space(2)
+                        add(text(venue, 10, purple, true))
+                    }, 0, -2, 1f)
+                    add(Symbol(this@AdminActivity, "arrow", Color.GRAY), 14, 20)
                 } else {
-                    add(text("No upcoming services",13,navy,true));space(8)
-                    add(text("Check back soon for next scheduled lineup.",11,Color.rgb(66,82,114)))
+                    val fallbackBadge = formatBadgeDate(java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).format(java.util.Date()))
+                    add(text(fallbackBadge, 13, Color.WHITE, bold = true, centered = true).apply {
+                        background = GradientDrawable(GradientDrawable.Orientation.TL_BR,
+                            intArrayOf(purple, Color.rgb(167, 0, 214))).apply { cornerRadius = dp(12).toFloat() }
+                    }, 52, 62)
+                    add(vertical().apply {
+                        setPadding(dp(8), 0, dp(6), 0)
+                        add(text("No upcoming", 12, navy, true)); space(3)
+                        add(text("Check back soon.", 10, Color.GRAY))
+                    }, 0, -2, 1f)
                 }
             }
             upcoming.add(service,0,-2,if(isLeader) 1f else 0.63f)
@@ -2263,22 +2287,27 @@ class AdminActivity : AppCompatActivity() {
             try {
                 contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
             } catch (_: Exception) {}
-            val localUriStr = uri.toString()
-            leaderDraft.put("coverImageUrl", localUriStr)
-            saveLeaderDraft()
-            toast("Attaching cover photo...")
+
+            val progress = @Suppress("DEPRECATION") android.app.ProgressDialog(this).apply {
+                setMessage("Uploading cover photo to Cloudinary...")
+                setCancelable(false)
+                show()
+            }
+
             CloudinaryUploader.uploadProfileImage(this, uri, maxDimension = 1024) { result ->
-                result.onSuccess { remoteUrl ->
-                    leaderDraft.put("coverImageUrl", remoteUrl)
-                    saveLeaderDraft()
-                    toast("Cover photo uploaded!")
-                    if (page == "createService" || page == "reviewService" || page == "service") {
-                        navigate(page)
+                runOnUiThread {
+                    if (!isFinishing && !isDestroyed) {
+                        try { progress.dismiss() } catch (_: Throwable) {}
                     }
-                }.onFailure {
-                    toast("Saved cover photo locally.")
-                    if (page == "createService" || page == "reviewService" || page == "service") {
-                        navigate(page)
+                    result.onSuccess { remoteUrl ->
+                        leaderDraft.put("coverImageUrl", remoteUrl)
+                        saveLeaderDraft()
+                        toast("Cover photo uploaded to Cloudinary!")
+                        if (page == "createService" || page == "reviewService" || page == "service") {
+                            navigate(page)
+                        }
+                    }.onFailure { err ->
+                        toast("Upload failed: ${err.message ?: "Network error"}. Please try again.")
                     }
                 }
             }
@@ -5306,10 +5335,41 @@ class AdminActivity : AppCompatActivity() {
         val activeCode = preferences.getString(SessionManager.KEY_TEAM_CODE, "").orEmpty()
             .ifBlank { preferences.getString("teamCode", "").orEmpty() }
             .ifBlank { FirestoreManager.findCodeByTeamName(teamName).orEmpty() }
+
+        if (isLeader) {
+            col.add(text("Re-join Requests", 15, purple, bold = true)); col.space(12)
+            rejoinRequestsFeed(col)
+            col.space(16)
+        }
+
         col.add(text("Substitution Request", 15, purple, bold = true)); col.space(12)
         substitutionFeed(col)
         col.space(16)
-        col.add(text("Recent Notifications", 15, purple, bold = true)); col.space(12)
+
+        val notifHeader = horizontal().apply { gravity = Gravity.CENTER_VERTICAL }
+        notifHeader.add(text("Recent Notifications", 15, purple, bold = true), 0, -2, 1f)
+        val clearBtn = TextView(this@AdminActivity).apply {
+            text = "Clear All"
+            textSize = 12f
+            setTextColor(Color.rgb(180, 50, 50))
+            setTypeface(typeface, Typeface.BOLD)
+            setPadding(dp(8), dp(4), dp(8), dp(4))
+            isClickable = true
+            isFocusable = true
+            setOnClickListener {
+                AlertDialog.Builder(this@AdminActivity)
+                    .setTitle("Clear Notifications")
+                    .setMessage("Are you sure you want to clear all recent notifications?")
+                    .setPositiveButton("Clear All") { _, _ ->
+                        TeamRepository.clearAllNotifications(activeCode, preferences)
+                        navigate("notifications")
+                    }
+                    .setNegativeButton("Cancel", null)
+                    .show()
+            }
+        }
+        notifHeader.add(clearBtn)
+        col.add(notifHeader); col.space(12)
         recentNotificationsList(col)
 
         if (activeCode.isNotBlank()) {
@@ -5318,6 +5378,142 @@ class AdminActivity : AppCompatActivity() {
                     if (res.isSuccess && page == "notifications") {
                         // Fresh notifications and substitutions fetched
                     }
+                }
+            }
+            if (isLeader) {
+                TeamRepository.getRejoinRequests(activeCode) { res ->
+                    runOnUiThread {
+                        if (res.isSuccess && page == "notifications") {
+                            // Fresh rejoin requests fetched
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private fun rejoinRequestsFeed(col: LinearLayout) {
+        val activeCode = preferences.getString(SessionManager.KEY_TEAM_CODE, "").orEmpty()
+            .ifBlank { preferences.getString("teamCode", "").orEmpty() }
+            .ifBlank { FirestoreManager.findCodeByTeamName(teamName).orEmpty() }
+        if (activeCode.isBlank()) return
+
+        val feedContainer = vertical()
+        col.add(feedContainer)
+
+        fun populateRejoinRequests() {
+            feedContainer.removeAllViews()
+            val list = TeamRepository.getCachedRejoinRequests(activeCode).filter { it.status == "Pending" }
+            if (list.isEmpty()) {
+                feedContainer.add(panel().apply {
+                    add(text("No pending re-join requests.", 12, Color.GRAY, centered = true))
+                })
+                feedContainer.space(8)
+                return
+            }
+
+            for (req in list) {
+                feedContainer.add(panel().apply {
+                    val headerRow = horizontal().apply { gravity = Gravity.CENTER_VERTICAL }
+                    val iconBox = FrameLayout(this@AdminActivity).apply {
+                        addView(Symbol(this@AdminActivity, "profile", purple), dp(24), dp(24))
+                    }
+                    headerRow.add(iconBox, 32, 32)
+                    headerRow.space(10)
+                    val titleCol = vertical()
+                    titleCol.add(text(req.userName.ifBlank { "Team Member" }, 14, navy, true))
+                    if (req.userEmail.isNotBlank()) {
+                        titleCol.space(2)
+                        titleCol.add(text(req.userEmail, 11, Color.GRAY))
+                    }
+                    headerRow.add(titleCol, 0, -2, 1f)
+
+                    val statusBadge = text("Re-join Request", 10, Color.WHITE, bold = true, centered = true).apply {
+                        background = bg(Color.rgb(217, 119, 6), 6)
+                        setPadding(dp(8), dp(4), dp(8), dp(4))
+                    }
+                    headerRow.add(statusBadge)
+                    add(headerRow); space(10)
+
+                    val reasonText = if (req.reason.isNotBlank()) req.reason else "Requesting to re-join the team."
+                    add(text(reasonText, 12, Color.rgb(66, 82, 114))); space(14)
+
+                    val actions = horizontal().apply { gravity = Gravity.CENTER_VERTICAL }
+                    val approveBtn = Button(this@AdminActivity).apply {
+                        text = "Approve Re-join"
+                        isAllCaps = false
+                        background = bg(Color.rgb(46, 125, 50), 8)
+                        setTextColor(Color.WHITE)
+                        minimumHeight = dp(38)
+                        textSize = 12f
+                        setTypeface(typeface, Typeface.BOLD)
+                        setOnClickListener {
+                            AlertDialog.Builder(this@AdminActivity)
+                                .setTitle("Approve Re-join?")
+                                .setMessage("Allow ${req.userName} to re-join the team as an active member?")
+                                .setPositiveButton("Approve") { _, _ ->
+                                    TeamRepository.approveRejoinRequest(teamCode = activeCode, req = req, preferences = preferences) { res ->
+                                        runOnUiThread {
+                                            if (res.isSuccess) {
+                                                toast("${req.userName} re-joined the team!")
+                                                TeamRepository.getTeamRoster(teamCode = activeCode, force = true, preferences = preferences) {
+                                                    runOnUiThread {
+                                                        homeMemberCount?.text = "${getActiveRoster().size} Members"
+                                                    }
+                                                }
+                                                populateRejoinRequests()
+                                            } else {
+                                                toast("Failed: ${res.exceptionOrNull()?.message ?: "Error"}")
+                                            }
+                                        }
+                                    }
+                                }
+                                .setNegativeButton("Cancel", null)
+                                .show()
+                        }
+                    }
+                    val declineBtn = Button(this@AdminActivity).apply {
+                        text = "Decline"
+                        isAllCaps = false
+                        background = bg(Color.rgb(243, 244, 246), 8, Color.rgb(209, 213, 219))
+                        setTextColor(Color.rgb(180, 50, 50))
+                        minimumHeight = dp(38)
+                        textSize = 12f
+                        setTypeface(typeface, Typeface.BOLD)
+                        setOnClickListener {
+                            AlertDialog.Builder(this@AdminActivity)
+                                .setTitle("Decline Request?")
+                                .setMessage("Decline re-join request for ${req.userName}?")
+                                .setPositiveButton("Decline") { _, _ ->
+                                    TeamRepository.declineRejoinRequest(activeCode, req.id) { res ->
+                                        runOnUiThread {
+                                            if (res.isSuccess) {
+                                                toast("Re-join request declined.")
+                                                populateRejoinRequests()
+                                            } else {
+                                                toast("Failed: ${res.exceptionOrNull()?.message ?: "Error"}")
+                                            }
+                                        }
+                                    }
+                                }
+                                .setNegativeButton("Cancel", null)
+                                .show()
+                        }
+                    }
+                    actions.add(approveBtn, 0, 38, 1f)
+                    actions.add(View(this@AdminActivity), 10, 1)
+                    actions.add(declineBtn, 0, 38, 0.75f)
+                    add(actions)
+                }); feedContainer.space(12)
+            }
+        }
+
+        populateRejoinRequests()
+
+        TeamRepository.getRejoinRequests(activeCode) { res ->
+            runOnUiThread {
+                if (res.isSuccess && page == "notifications") {
+                    populateRejoinRequests()
                 }
             }
         }
@@ -5351,6 +5547,20 @@ class AdminActivity : AppCompatActivity() {
                 textCol.space(2)
                 textCol.add(text(notif.timeLabel, 10, Color.GRAY))
                 row.add(textCol, 0, -2, 1f)
+                val delBtn = TextView(this@AdminActivity).apply {
+                    text = "✕"
+                    textSize = 13f
+                    setTextColor(Color.rgb(156, 163, 175))
+                    setPadding(dp(8), dp(6), dp(8), dp(6))
+                    isClickable = true
+                    isFocusable = true
+                    contentDescription = "Delete notification"
+                    setOnClickListener {
+                        TeamRepository.deleteNotification(notif.id, preferences)
+                        navigate("notifications")
+                    }
+                }
+                row.add(delBtn)
                 add(row)
             }); col.space(12)
         }
