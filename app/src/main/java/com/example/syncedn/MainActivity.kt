@@ -8,6 +8,12 @@ class MainActivity : MemberActivity() {
 
     override fun onCreate(savedInstanceState: android.os.Bundle?) {
         super.onCreate(savedInstanceState)
+        val requestedStart = intent.getStringExtra("startPage")
+        if (!requestedStart.isNullOrBlank() && requestedStart in listOf("login", "start", "register")) {
+            navigate(requestedStart)
+            return
+        }
+
         val uid = preferences.getString("userId", "").orEmpty()
         val team = preferences.getString("teamName", "").orEmpty()
         val leftTeam = preferences.getBoolean("leftTeam", false)
@@ -23,7 +29,7 @@ class MainActivity : MemberActivity() {
                 finish()
             }
             return
-        } else if (savedInstanceState == null && uid.isNotBlank() && (team.isBlank() || leftTeam)) {
+        } else if (savedInstanceState == null && uid.isNotBlank() && team.isBlank()) {
             navigate("teamChoice")
             return
         }
@@ -31,9 +37,8 @@ class MainActivity : MemberActivity() {
 
     override fun navigate(next: String) {
         if (next == "home") {
-            val leftTeam = preferences.getBoolean("leftTeam", false)
             val userTeam = preferences.getString("teamName", "").orEmpty()
-            if (userTeam.isBlank() || leftTeam) {
+            if (userTeam.isBlank()) {
                 super.navigate("teamChoice")
                 return
             }
