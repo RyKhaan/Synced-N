@@ -112,6 +112,9 @@ object YouTubePlayerHelper {
                 javaScriptEnabled = true
                 domStorageEnabled = true
                 mediaPlaybackRequiresUserGesture = false
+                loadWithOverviewMode = true
+                useWideViewPort = true
+                allowContentAccess = true
                 allowFileAccess = true
                 mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
                 cacheMode = WebSettings.LOAD_DEFAULT
@@ -124,7 +127,12 @@ object YouTubePlayerHelper {
                 } catch (_: Throwable) {}
             }
 
-            webChromeClient = WebChromeClient()
+            webChromeClient = object : WebChromeClient() {
+                override fun onConsoleMessage(consoleMessage: android.webkit.ConsoleMessage?): Boolean {
+                    android.util.Log.d("YouTubePlayer", "WebView console: ${consoleMessage?.message()}")
+                    return super.onConsoleMessage(consoleMessage)
+                }
+            }
             webViewClient = object : WebViewClient() {
                 override fun onPageFinished(view: WebView?, url: String?) {
                     super.onPageFinished(view, url)
@@ -157,7 +165,7 @@ object YouTubePlayerHelper {
                     <iframe 
                         id="ytplayer"
                         type="text/html"
-                        src="https://www.youtube.com/embed/$videoId?playsinline=1&rel=0&modestbranding=1&enablejsapi=1&origin=https://www.youtube.com&widget_referrer=https://www.youtube.com" 
+                        src="https://www.youtube-nocookie.com/embed/$videoId?playsinline=1&controls=1&enablejsapi=1&rel=0&modestbranding=1" 
                         allowfullscreen 
                         allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture">
                     </iframe>
@@ -165,7 +173,7 @@ object YouTubePlayerHelper {
                 </html>
             """.trimIndent()
 
-            loadDataWithBaseURL("https://www.youtube.com", html, "text/html", "UTF-8", null)
+            loadDataWithBaseURL("https://www.youtube-nocookie.com", html, "text/html", "UTF-8", null)
         }
 
         frameContainer.addView(webView)
@@ -184,7 +192,7 @@ object YouTubePlayerHelper {
         }
 
         val inAppBtn = TextView(context).apply {
-            text = "▶ Play in In-App Player"
+            text = "\u25B6 Play in In-App Player"
             textSize = 12f
             setTextColor(Color.WHITE)
             typeface = Typeface.DEFAULT_BOLD

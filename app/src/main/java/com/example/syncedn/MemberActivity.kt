@@ -339,12 +339,28 @@ open class MemberActivity : AppCompatActivity() {
                         } else {
                             if (currentPref.equals("Substitute Leader", ignoreCase = true) ||
                                 preferences.getString("role", "").equals("Leader", true)) {
+                                val resolvedMinistry = myEntry.ministryRole.ifBlank { "Member" }
                                 preferences.edit {
                                     putString("role", "Member")
                                     putString(SessionManager.KEY_ROLE, "Member")
-                                    putString("ministryRole", myEntry.ministryRole.ifBlank { "Member" })
-                                    putString(SessionManager.KEY_MINISTRY_ROLE, myEntry.ministryRole.ifBlank { "Member" })
+                                    putString("ministryRole", resolvedMinistry)
+                                    putString(SessionManager.KEY_MINISTRY_ROLE, resolvedMinistry)
+                                    if (currentUid.isNotBlank()) {
+                                        putString("user_role_$currentUid", "Member")
+                                        putString("user_ministry_$currentUid", resolvedMinistry)
+                                    }
+                                    if (currentEmail.isNotBlank()) {
+                                        putString("email_role_$currentEmail", "Member")
+                                        putString("email_ministry_$currentEmail", resolvedMinistry)
+                                    }
+                                    try {
+                                        val map = org.json.JSONObject(preferences.getString(SessionManager.KEY_MEMBER_ROLES, "{}").orEmpty())
+                                        if (currentUid.isNotBlank()) map.put(currentUid, resolvedMinistry)
+                                        if (currentEmail.isNotBlank()) map.put(currentEmail, resolvedMinistry)
+                                        putString(SessionManager.KEY_MEMBER_ROLES, map.toString())
+                                    } catch (_: Throwable) {}
                                 }
+                                TeamRepository.updateMemberMinistryRole(currentUid, resolvedMinistry, memberEmail = currentEmail, preferences = preferences)
                             }
                         }
                     }
@@ -434,11 +450,16 @@ open class MemberActivity : AppCompatActivity() {
                 .collection("users").document(myCurrentUid)
                 .addSnapshotListener { snapshot, error ->
                     if (error != null || snapshot == null || !snapshot.exists()) return@addSnapshotListener
+                    val roleFromSnap = snapshot.getString("role").orEmpty()
                     val ministryRoleFromSnap = snapshot.getString("ministryRole").orEmpty()
-                    if (ministryRoleFromSnap.equals("Substitute Leader", ignoreCase = true)) {
-                        val currentPref = preferences.getString("ministryRole", "").orEmpty()
+                    val currentPref = preferences.getString("ministryRole", "").orEmpty()
+                    val currentRolePref = preferences.getString("role", "").orEmpty()
+                    val isSubLeaderSnap = ministryRoleFromSnap.equals("Substitute Leader", ignoreCase = true) && !roleFromSnap.equals("Member", true)
+                    if (isSubLeaderSnap) {
                         if (!currentPref.equals("Substitute Leader", ignoreCase = true)) {
                             preferences.edit {
+                                putString("role", "Leader")
+                                putString(SessionManager.KEY_ROLE, "Leader")
                                 putString("ministryRole", "Substitute Leader")
                                 putString(SessionManager.KEY_MINISTRY_ROLE, "Substitute Leader")
                             }
@@ -453,6 +474,48 @@ open class MemberActivity : AppCompatActivity() {
                                 }
                             }
                             return@addSnapshotListener
+                        }
+                    } else {
+                        val resolvedMinistry = if (ministryRoleFromSnap.isNotBlank() && !ministryRoleFromSnap.equals("Substitute Leader", ignoreCase = true)) {
+                            ministryRoleFromSnap
+                        } else "Member"
+                        val needsDemotion = currentPref.equals("Substitute Leader", ignoreCase = true) ||
+                                            currentRolePref.equals("Leader", ignoreCase = true) ||
+                                            (roleFromSnap.equals("Member", true) && (currentPref != resolvedMinistry || currentRolePref != "Member"))
+                        if (needsDemotion) {
+                            preferences.edit {
+                                putString("role", "Member")
+                                putString(SessionManager.KEY_ROLE, "Member")
+                                putString("ministryRole", resolvedMinistry)
+                                putString(SessionManager.KEY_MINISTRY_ROLE, resolvedMinistry)
+                                if (myCurrentUid.isNotBlank()) {
+                                    putString("user_role_$myCurrentUid", "Member")
+                                    putString("user_ministry_$myCurrentUid", resolvedMinistry)
+                                }
+                                if (myCurrentEmail.isNotBlank()) {
+                                    val emailLower = myCurrentEmail.trim().lowercase()
+                                    putString("email_role_$emailLower", "Member")
+                                    putString("email_ministry_$emailLower", resolvedMinistry)
+                                }
+                                try {
+                                    val map = org.json.JSONObject(preferences.getString(SessionManager.KEY_MEMBER_ROLES, "{}").orEmpty())
+                                    if (myCurrentUid.isNotBlank()) map.put(myCurrentUid, resolvedMinistry)
+                                    if (myCurrentEmail.isNotBlank()) map.put(myCurrentEmail.trim().lowercase(), resolvedMinistry)
+                                    putString(SessionManager.KEY_MEMBER_ROLES, map.toString())
+                                } catch (_: Throwable) {}
+                            }
+                            TeamRepository.updateMemberMinistryRole(myCurrentUid, resolvedMinistry, memberEmail = myCurrentEmail, preferences = preferences)
+                            val teamCode = preferences.getString("teamCode", "").orEmpty()
+                            if (teamCode.isNotBlank()) {
+                                TeamRepository.syncFromPreferences(preferences, teamCode)
+                            }
+                            runOnUiThread {
+                                if (!isFinishing && !isDestroyed) {
+                                    updateRosterViews()
+                                    setupHome()
+                                    if (page == "teams") navigate("teams")
+                                }
+                            }
                         }
                     }
                     val removedByLeader = snapshot.getBoolean("removedByLeader") ?: false
@@ -495,11 +558,16 @@ open class MemberActivity : AppCompatActivity() {
                 .addSnapshotListener { snapshot, error ->
                     if (error != null || snapshot == null || snapshot.isEmpty) return@addSnapshotListener
                     val doc = snapshot.documents.firstOrNull() ?: return@addSnapshotListener
+                    val roleFromDoc = doc.getString("role").orEmpty()
                     val ministryRoleFromDoc = doc.getString("ministryRole").orEmpty()
-                    if (ministryRoleFromDoc.equals("Substitute Leader", ignoreCase = true)) {
-                        val currentPref = preferences.getString("ministryRole", "").orEmpty()
+                    val currentPref = preferences.getString("ministryRole", "").orEmpty()
+                    val currentRolePref = preferences.getString("role", "").orEmpty()
+                    val isSubLeaderDoc = ministryRoleFromDoc.equals("Substitute Leader", ignoreCase = true) && !roleFromDoc.equals("Member", true)
+                    if (isSubLeaderDoc) {
                         if (!currentPref.equals("Substitute Leader", ignoreCase = true)) {
                             preferences.edit {
+                                putString("role", "Leader")
+                                putString(SessionManager.KEY_ROLE, "Leader")
                                 putString("ministryRole", "Substitute Leader")
                                 putString(SessionManager.KEY_MINISTRY_ROLE, "Substitute Leader")
                             }
@@ -514,6 +582,48 @@ open class MemberActivity : AppCompatActivity() {
                                 }
                             }
                             return@addSnapshotListener
+                        }
+                    } else {
+                        val resolvedMinistry = if (ministryRoleFromDoc.isNotBlank() && !ministryRoleFromDoc.equals("Substitute Leader", ignoreCase = true)) {
+                            ministryRoleFromDoc
+                        } else "Member"
+                        val needsDemotion = currentPref.equals("Substitute Leader", ignoreCase = true) ||
+                                            currentRolePref.equals("Leader", ignoreCase = true) ||
+                                            (roleFromDoc.equals("Member", true) && (currentPref != resolvedMinistry || currentRolePref != "Member"))
+                        if (needsDemotion) {
+                            preferences.edit {
+                                putString("role", "Member")
+                                putString(SessionManager.KEY_ROLE, "Member")
+                                putString("ministryRole", resolvedMinistry)
+                                putString(SessionManager.KEY_MINISTRY_ROLE, resolvedMinistry)
+                                if (myCurrentUid.isNotBlank()) {
+                                    putString("user_role_$myCurrentUid", "Member")
+                                    putString("user_ministry_$myCurrentUid", resolvedMinistry)
+                                }
+                                if (myCurrentEmail.isNotBlank()) {
+                                    val emailLower = myCurrentEmail.trim().lowercase()
+                                    putString("email_role_$emailLower", "Member")
+                                    putString("email_ministry_$emailLower", resolvedMinistry)
+                                }
+                                try {
+                                    val map = org.json.JSONObject(preferences.getString(SessionManager.KEY_MEMBER_ROLES, "{}").orEmpty())
+                                    if (myCurrentUid.isNotBlank()) map.put(myCurrentUid, resolvedMinistry)
+                                    if (myCurrentEmail.isNotBlank()) map.put(myCurrentEmail.trim().lowercase(), resolvedMinistry)
+                                    putString(SessionManager.KEY_MEMBER_ROLES, map.toString())
+                                } catch (_: Throwable) {}
+                            }
+                            TeamRepository.updateMemberMinistryRole(myCurrentUid, resolvedMinistry, memberEmail = myCurrentEmail, preferences = preferences)
+                            val teamCode = preferences.getString("teamCode", "").orEmpty()
+                            if (teamCode.isNotBlank()) {
+                                TeamRepository.syncFromPreferences(preferences, teamCode)
+                            }
+                            runOnUiThread {
+                                if (!isFinishing && !isDestroyed) {
+                                    updateRosterViews()
+                                    setupHome()
+                                    if (page == "teams") navigate("teams")
+                                }
+                            }
                         }
                     }
                     val removedByLeader = doc.getBoolean("removedByLeader") ?: false
@@ -692,13 +802,15 @@ open class MemberActivity : AppCompatActivity() {
         }
         val userMinistry = preferences.getString("ministryRole", "").orEmpty()
         val userEmail = preferences.getString("email", "").orEmpty().trim().lowercase()
+        val userRole = preferences.getString("role", "").orEmpty()
         val userTeamName = preferences.getString("teamName", "").orEmpty().trim().lowercase()
         val teamLeaderEmail = preferences.getString("team_leader_email_$userTeamName", "").orEmpty().trim().lowercase()
+        val isSubLeader = userMinistry.equals("Substitute Leader", ignoreCase = true) && !userRole.equals("Member", true)
         val isPrimaryLeader = userEmail == "ryanlloydgenturo@gmail.com" ||
-                              (teamLeaderEmail.isNotBlank() && teamLeaderEmail == userEmail) ||
+                              (!isSubLeader && teamLeaderEmail.isNotBlank() && teamLeaderEmail == userEmail) ||
                               userMinistry.equals("Worship Leader", ignoreCase = true)
         if (effectiveNext in listOf("home", "schedule", "teams", "announcements", "calendar", "songs", "service")) {
-            if (isPrimaryLeader || userMinistry.equals("Substitute Leader", ignoreCase = true)) {
+            if (isPrimaryLeader || isSubLeader) {
                 startActivity(Intent(this, AdminActivity::class.java).putExtra("startPage", effectiveNext))
                 finish()
                 return
@@ -2694,23 +2806,55 @@ space(48)
         fun applyOverrides(list: List<TeamMember>): List<TeamMember> {
             val selfPhoto = preferences.getString("photoUri", null)?.takeIf { it.isNotBlank() }
             val selfUid = preferences.getString(SessionManager.KEY_USER_ID, "").orEmpty()
+            val selfEmail = preferences.getString("email", "").orEmpty().trim().lowercase()
+            val selfMinistry = preferences.getString("ministryRole", "").orEmpty()
+            val selfRole = preferences.getString("role", "").orEmpty()
             return list.map { m ->
                 val emailLower = m.email.trim().lowercase()
-                val override = memberRolesMap.optString(m.uid).ifBlank {
-                    memberRolesMap.optString(emailLower).ifBlank {
-                        memberRolesMap.optString(m.fullName).ifBlank {
-                            memberRolesMap.optString(m.username).ifBlank {
-                                preferences.getString("email_ministry_$emailLower", "").orEmpty()
+                val isSelf = (selfUid.isNotBlank() && m.uid == selfUid) ||
+                             (selfEmail.isNotBlank() && emailLower == selfEmail) ||
+                             (fullName.isNotBlank() && m.fullName.equals(fullName, ignoreCase = true)) ||
+                             (displayName.isNotBlank() && (m.username.equals(displayName, ignoreCase = true) || m.fullName.equals(displayName, ignoreCase = true)))
+                val isPrimaryLeader = emailLower == "ryanlloydgenturo@gmail.com" ||
+                                      m.fullName.equals("Ryan Lloyd Genturo", ignoreCase = true)
+                val isExplicitlyMember = !isPrimaryLeader && (
+                    (isSelf && (selfRole.equals("Member", true) || !selfMinistry.equals("Substitute Leader", true))) ||
+                    preferences.getString("user_role_${m.uid}", "").equals("Member", true) ||
+                    preferences.getString("email_role_$emailLower", "").equals("Member", true)
+                )
+
+                val override = if (isSelf && selfMinistry.isNotBlank() && !selfMinistry.equals("Substitute Leader", ignoreCase = true)) {
+                    selfMinistry
+                } else {
+                    memberRolesMap.optString(m.uid).ifBlank {
+                        memberRolesMap.optString(emailLower).ifBlank {
+                            memberRolesMap.optString(m.fullName).ifBlank {
+                                memberRolesMap.optString(m.username).ifBlank {
+                                    preferences.getString("email_ministry_$emailLower", "").orEmpty()
+                                }
                             }
                         }
                     }
                 }
-                val liveRole = m.ministryRole.takeIf { it.isNotBlank() } ?: override
+                val rawLiveRole = if (isSelf && selfMinistry.isNotBlank() && !selfMinistry.equals("Substitute Leader", ignoreCase = true)) {
+                    selfMinistry
+                } else if (m.ministryRole.isNotBlank() && !m.ministryRole.equals("Substitute Leader", ignoreCase = true)) {
+                    m.ministryRole
+                } else {
+                    m.ministryRole.takeIf { it.isNotBlank() } ?: override
+                }
+                val liveRole = if (isExplicitlyMember && rawLiveRole.equals("Substitute Leader", ignoreCase = true)) {
+                    if (isSelf && selfMinistry.isNotBlank() && !selfMinistry.equals("Substitute Leader", true)) selfMinistry else "Member"
+                } else rawLiveRole
+
                 var updated = if (liveRole.isNotBlank()) {
-                    val isOverrideLeader = liveRole.equals("Substitute Leader", ignoreCase = true) ||
-                                           liveRole.equals("Worship Leader", ignoreCase = true) ||
-                                           emailLower == "ryanlloydgenturo@gmail.com" ||
-                                           m.fullName.equals("Ryan Lloyd Genturo", ignoreCase = true)
+                    val isOverrideLeader = when {
+                        isPrimaryLeader -> true
+                        isExplicitlyMember -> false
+                        isSelf && !selfRole.equals("Leader", true) && !selfMinistry.equals("Substitute Leader", true) -> false
+                        else -> liveRole.equals("Substitute Leader", ignoreCase = true) ||
+                                liveRole.equals("Worship Leader", ignoreCase = true)
+                    }
                     m.copy(ministryRole = liveRole, role = if (isOverrideLeader) "Leader" else "Member")
                 } else m
                 if (updated.photoUri.isBlank()) {
@@ -5281,12 +5425,16 @@ space(48)
                 val roster = getActiveRoster()
                 roster.forEach { member ->
                     val name = member.fullName.ifBlank { member.username.ifBlank { "Member" } }
-                    val role = member.ministryRole.ifBlank { if (member.role.equals("Leader", true)) "Worship Leader" else "Member" }
                     val isLeaderBadge = member.email.equals("ryanlloydgenturo@gmail.com", ignoreCase = true) ||
                                         member.fullName.equals("Ryan Lloyd Genturo", ignoreCase = true) ||
                                         member.ministryRole.equals("Worship Leader", ignoreCase = true) ||
-                                        member.ministryRole.equals("Substitute Leader", ignoreCase = true)
+                                        (member.ministryRole.equals("Substitute Leader", ignoreCase = true) && !member.role.equals("Member", true))
                     val badge = if (isLeaderBadge) "Leader" else "Member"
+                    val role = if (badge == "Member" && member.ministryRole.equals("Substitute Leader", ignoreCase = true)) {
+                        "Member"
+                    } else {
+                        member.ministryRole.ifBlank { if (member.role.equals("Leader", true)) "Worship Leader" else "Member" }
+                    }
                     col.add(memberRow(name, role, badge, photoUri = member.photoUri))
                     col.space(4)
                 }
@@ -5296,10 +5444,17 @@ space(48)
                 val roster = getActiveRoster()
                 val currentUid = preferences.getString(SessionManager.KEY_USER_ID, "").orEmpty()
                 val baseRoles = listOf("Worship Leader", "Keyboardist", "Bassist", "Vocalist", "Guitarist")
-                val activeRoles = (baseRoles + roster.map { it.ministryRole }).filter { it.isNotBlank() }.distinct()
+                val activeRoles = (baseRoles + roster.map { m ->
+                    if (m.role.equals("Member", true) && m.ministryRole.equals("Substitute Leader", true)) "Member" else m.ministryRole
+                }).filter {
+                    it.isNotBlank() && (!it.equals("Substitute Leader", true) || roster.any { m -> m.ministryRole.equals("Substitute Leader", true) && !m.role.equals("Member", true) })
+                }.distinct()
                 val roles = activeRoles
                 roles.forEach { role ->
-                    val people = roster.filter { it.ministryRole.equals(role, ignoreCase = true) }
+                    val people = roster.filter {
+                        val mRole = if (it.role.equals("Member", true) && it.ministryRole.equals("Substitute Leader", true)) "Member" else it.ministryRole
+                        mRole.equals(role, ignoreCase = true)
+                    }
                     col.add(horizontal().apply {
                         setPadding(dp(40), 0, dp(20), 0)
                         add(Symbol(this@MemberActivity, "music", Color.BLACK), 56, 52)
@@ -5385,16 +5540,21 @@ space(48)
                 @Suppress("DEPRECATION")
                 startActivityForResult(intent, 301)
             }
-            composer.add(text("+", 28, Color.BLACK, centered = true).apply {
-                contentDescription = "Add attachment"; isFocusable = true
+            val photoBtn = FrameLayout(this).apply {
+                background = bg(Color.rgb(241, 245, 249), 22)
+                addView(
+                    Symbol(this@MemberActivity, "photo", Color.rgb(71, 85, 105)),
+                    FrameLayout.LayoutParams(dp(24), dp(24), Gravity.CENTER)
+                )
+                contentDescription = "Attach photo"
+                isFocusable = true
+                isClickable = true
                 setOnClickListener { choosePhoto() }
-            }, 36, 44)
-            composer.add(FrameLayout(this).apply {
-                addView(Symbol(this@MemberActivity, "photo", Color.BLACK),
-                    FrameLayout.LayoutParams(dp(28), dp(28), Gravity.CENTER))
-                contentDescription = "Choose chat photo"; isFocusable = true
-                setOnClickListener { choosePhoto() }
-            }, 36, 44)
+            }
+            composer.addView(photoBtn, LinearLayout.LayoutParams(dp(44), dp(44)).apply {
+                marginEnd = dp(8)
+                gravity = Gravity.CENTER_VERTICAL
+            })
             val entry = horizontal().apply { background = bg(Color.rgb(217, 217, 217), 24) }
             val message = plainInput("Message").apply { background = null }
             entry.add(message, 0, 44, 1f)

@@ -2913,4 +2913,134 @@ class ExampleUnitTest {
         val transposedToA = com.example.syncedn.ChordSheet.render(sheetWithChords, 2, false, false)
         assertTrue("Transposed sheet must contain transposed chords line", transposedToA.contains("A") && transposedToA.contains("D"))
     }
+
+    @Test
+    fun testDemotionCleansSubstituteLeaderAndAdoptsMemberRole() {
+        val prefs = FakePreferences()
+        val uid = "sub_leader_user"
+        val email = "subleader@syncedn.church"
+
+        // 1. Initially assigned as Substitute Leader
+        val initialMap = org.json.JSONObject().apply {
+            put(uid, "Substitute Leader")
+            put(email, "Substitute Leader")
+        }
+        prefs.edit()
+            .putString(com.example.syncedn.data.auth.SessionManager.KEY_USER_ID, uid)
+            .putString(com.example.syncedn.data.auth.SessionManager.KEY_EMAIL, email)
+            .putString("role", "Leader")
+            .putString(com.example.syncedn.data.auth.SessionManager.KEY_ROLE, "Leader")
+            .putString("ministryRole", "Substitute Leader")
+            .putString(com.example.syncedn.data.auth.SessionManager.KEY_MINISTRY_ROLE, "Substitute Leader")
+            .putString("email_ministry_$email", "Substitute Leader")
+            .putString("user_ministry_$uid", "Substitute Leader")
+            .putString(com.example.syncedn.data.auth.SessionManager.KEY_MEMBER_ROLES, initialMap.toString())
+            .apply()
+
+        // 2. Leader revokes Substitute Leader, user's remote profile is updated to "Member"
+        val demotedProfile = com.example.syncedn.data.model.UserProfile(
+            uid = uid,
+            username = "SubLeader",
+            fullName = "Sub Leader Name",
+            email = email,
+            role = "Member",
+            teamName = "Praise Team",
+            teamCode = "DEMOTE01",
+            ministryRole = "Member"
+        )
+
+        // Session restoration / saveSessionProfile must clear Substitute Leader
+        com.example.syncedn.data.auth.SessionManager.saveSessionProfile(
+            prefs,
+            demotedProfile,
+            fallbackUsername = "SubLeader",
+            fallbackEmail = email
+        )
+
+        assertEquals("Member", prefs.getString("role", ""))
+        assertEquals("Member", prefs.getString(com.example.syncedn.data.auth.SessionManager.KEY_ROLE, ""))
+        assertEquals("Member", prefs.getString("ministryRole", ""))
+        assertEquals("Member", prefs.getString(com.example.syncedn.data.auth.SessionManager.KEY_MINISTRY_ROLE, ""))
+
+        // Map must no longer have Substitute Leader for this user
+        val updatedMap = org.json.JSONObject(prefs.getString(com.example.syncedn.data.auth.SessionManager.KEY_MEMBER_ROLES, "{}").orEmpty())
+        assertFalse(updatedMap.optString(uid).equals("Substitute Leader", ignoreCase = true))
+        assertFalse(updatedMap.optString(email).equals("Substitute Leader", ignoreCase = true))
+    }
+
+    @Test
+    fun testSyncFromPreferencesDoesNotResurrectSubstituteLeaderForDemotedMember() {
+        val prefs = FakePreferences()
+        val repo = com.example.syncedn.data.database.TeamRepository
+        val code = "SYNCROSTER01"
+        val uid = "user_yanyan"
+        val email = "yanyan@syncedn.church"
+
+        // Logged-in user is demoted to Member
+        prefs.edit()
+            .putString(com.example.syncedn.data.auth.SessionManager.KEY_USER_ID, uid)
+            .putString("userId", uid)
+            .putString("email", email)
+            .putString("role", "Member")
+            .putString(com.example.syncedn.data.auth.SessionManager.KEY_ROLE, "Member")
+            .putString("ministryRole", "Member")
+            .putString(com.example.syncedn.data.auth.SessionManager.KEY_MINISTRY_ROLE, "Member")
+            .putString("email_code_$email", code)
+            .putString("email_fullname_$email", "Yanyan Redoquerio")
+            .putString("email_role_$email", "Member")
+            .putString("email_ministry_$email", "Substitute Leader") // Stale legacy pref
+            .apply()
+
+        // syncFromPreferences runs (e.g. on clicking Teams tab)
+        repo.syncFromPreferences(prefs, code)
+
+        val roster = repo.getCachedRoster(code)
+        val member = roster.find { it.uid == uid || it.email.equals(email, true) }
+        assertNotNull("Member must be present in roster", member)
+        assertEquals("Role must be Member, not Leader", "Member", member!!.role)
+        assertEquals("Ministry role must not be resurrected to Substitute Leader", "Member", member.ministryRole)
+    }
+
+    @Test
+    fun testDefaultWorshipSeedSongsHaveValidYoutubeIds() {
+        val seeds = com.example.syncedn.data.database.TeamRepository.getDefaultSeedSongs("TESTTEAM")
+        assertEquals(8, seeds.size)
+        seeds.forEach { song ->
+            val vid = com.example.syncedn.data.model.SongData.extractYoutubeVideoId(song.referenceUrl)
+            assertNotNull("Song '${song.title}' must have a valid YouTube video ID", vid)
+            assertTrue("Video ID for '${song.title}' should be 11 characters", vid!!.length == 11)
+        }
+    }
+
+    @Test
+    fun testDeduplicateRosterPrefersMemberRoleOverStaleSubstituteLeader() {
+        val repo = com.example.syncedn.data.database.TeamRepository
+        val prefs = FakePreferences()
+
+        val staleSubLeader = com.example.syncedn.data.model.TeamMember(
+            uid = "user_rl",
+            fullName = "RL Member",
+            username = "rl",
+            email = "rl@syncedn.church",
+            role = "Leader",
+            ministryRole = "Substitute Leader",
+            teamCode = "TESTTEAM"
+        )
+        val latestDemoted = com.example.syncedn.data.model.TeamMember(
+            uid = "user_rl",
+            fullName = "RL Member",
+            username = "rl",
+            email = "rl@syncedn.church",
+            role = "Member",
+            ministryRole = "Member",
+            teamCode = "TESTTEAM"
+        )
+
+        // Merge stale + latest
+        val merged = repo.deduplicateRoster(listOf(staleSubLeader, latestDemoted), prefs)
+        assertEquals(1, merged.size)
+        val m = merged[0]
+        assertEquals("Role must be Member, not Leader", "Member", m.role)
+        assertEquals("Ministry role must be Member, not Substitute Leader", "Member", m.ministryRole)
+    }
 }

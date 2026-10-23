@@ -112,11 +112,36 @@ object SessionManager {
             byUid.ifBlank { byEmail }.ifBlank { byFull }.ifBlank { byUser }
         }?.takeIf { it.isNotBlank() }
 
-        val ministryRole = assignedRole
-            ?: preferences.getString("email_ministry_$emailLower", "").orEmpty().takeIf { it.isNotBlank() }
-            ?: (if (effectiveUid.isNotBlank()) preferences.getString("user_ministry_$effectiveUid", "").orEmpty().takeIf { it.isNotBlank() } else null)
-            ?: profile?.ministryRole?.takeIf { it.isNotBlank() }
-            ?: ""
+        val assignedRoleIsSubLeader = assignedRole?.equals("Substitute Leader", ignoreCase = true) == true ||
+            preferences.getString("email_ministry_$emailLower", "").equals("Substitute Leader", ignoreCase = true) ||
+            (effectiveUid.isNotBlank() && preferences.getString("user_ministry_$effectiveUid", "").equals("Substitute Leader", ignoreCase = true))
+        val profileSaysNotSubLeader = profile?.ministryRole?.isNotBlank() == true && !profile.ministryRole.equals("Substitute Leader", ignoreCase = true)
+
+        val ministryRole = if (assignedRoleIsSubLeader && profileSaysNotSubLeader) {
+            profile!!.ministryRole
+        } else {
+            assignedRole
+                ?: preferences.getString("email_ministry_$emailLower", "").orEmpty().takeIf { it.isNotBlank() }
+                ?: (if (effectiveUid.isNotBlank()) preferences.getString("user_ministry_$effectiveUid", "").orEmpty().takeIf { it.isNotBlank() } else null)
+                ?: profile?.ministryRole?.takeIf { it.isNotBlank() }
+                ?: ""
+        }
+
+        if (profile?.ministryRole?.isNotBlank() == true && !profile.ministryRole.equals("Substitute Leader", ignoreCase = true)) {
+            try {
+                val map = org.json.JSONObject(preferences.getString(KEY_MEMBER_ROLES, "{}").orEmpty())
+                var mapModified = false
+                listOf(effectiveUid, emailLower, fullName, username).forEach { key ->
+                    if (key.isNotBlank() && map.optString(key, "").equals("Substitute Leader", ignoreCase = true)) {
+                        map.put(key, profile.ministryRole)
+                        mapModified = true
+                    }
+                }
+                if (mapModified) {
+                    preferences.edit().putString(KEY_MEMBER_ROLES, map.toString()).apply()
+                }
+            } catch (_: Throwable) {}
+        }
 
         val photoUri = profile?.photoUri?.takeIf { it.isNotBlank() }
             ?: preferences.getString("email_photo_$emailLower", "").orEmpty().takeIf { it.isNotBlank() }
@@ -135,6 +160,13 @@ object SessionManager {
             putString(KEY_COUNTRY, country)
             putString(KEY_LANGUAGE, language)
             putString(KEY_MINISTRY_ROLE, ministryRole)
+            if (profile?.role?.isNotBlank() == true) {
+                val computedRole = if (emailLower == "ryanlloydgenturo@gmail.com") "Leader" else profile.role
+                putString(KEY_ROLE, computedRole)
+                putString("role", computedRole)
+                if (effectiveUid.isNotBlank()) putString("user_role_$effectiveUid", computedRole)
+                if (emailLower.isNotBlank()) putString("email_role_$emailLower", computedRole)
+            }
             if (photoUri.isNotBlank()) {
                 putString(KEY_PHOTO_URI, photoUri)
             } else {

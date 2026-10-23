@@ -248,10 +248,48 @@ object TeamRepository {
                     byUid.ifBlank { byEmail }.ifBlank { byFull }.ifBlank { byUser }
                 }?.takeIf { it.isNotBlank() }
 
-                val ministry = assignedRole
-                    ?: (all["email_ministry_$emailLower"] as? String).orEmpty().takeIf { it.isNotBlank() }
-                    ?: (all["user_ministry_$uid"] as? String).orEmpty().takeIf { it.isNotBlank() }
-                    ?: existingInRoster?.ministryRole.orEmpty()
+                val selfEmail = (all["email"] as? String).orEmpty().trim().lowercase()
+                val selfUid = (all[com.example.syncedn.data.auth.SessionManager.KEY_USER_ID] as? String).orEmpty()
+                val selfMinistry = (all["ministryRole"] as? String).orEmpty()
+                val selfRole = (all["role"] as? String).orEmpty()
+                val selfFullName = (all[com.example.syncedn.data.auth.SessionManager.KEY_FULL_NAME] as? String).orEmpty()
+                val selfUsername = (all[com.example.syncedn.data.auth.SessionManager.KEY_USERNAME] as? String).orEmpty()
+                val isSelf = (selfEmail.isNotBlank() && emailLower == selfEmail) ||
+                             (selfUid.isNotBlank() && uid == selfUid) ||
+                             (selfFullName.isNotBlank() && fullName.equals(selfFullName, true)) ||
+                             (selfUsername.isNotBlank() && username.equals(selfUsername, true))
+
+                val isDemotedMember = (role.equals("Member", true) && !emailLower.equals("ryanlloydgenturo@gmail.com", true)) ||
+                    (all["email_role_$emailLower"] as? String).equals("Member", true) ||
+                    (all["user_role_$uid"] as? String).equals("Member", true) ||
+                    (isSelf && (selfRole.equals("Member", true) || (selfMinistry.isNotBlank() && !selfMinistry.equals("Substitute Leader", true))))
+
+                var ministry = if (isDemotedMember) {
+                    val assignedNonSub = if (assignedRole?.equals("Substitute Leader", true) == true) null else assignedRole
+                    val prefNonSub = (all["email_ministry_$emailLower"] as? String)?.takeIf { !it.equals("Substitute Leader", true) }
+                        ?: (all["user_ministry_$uid"] as? String)?.takeIf { !it.equals("Substitute Leader", true) }
+                    val existingNonSub = existingInRoster?.ministryRole?.takeIf { !it.equals("Substitute Leader", true) }
+                    if (isSelf && selfMinistry.isNotBlank() && !selfMinistry.equals("Substitute Leader", true)) {
+                        selfMinistry
+                    } else {
+                        assignedNonSub ?: prefNonSub ?: existingNonSub ?: "Member"
+                    }
+                } else if (isSelf && selfMinistry.isNotBlank() && !selfMinistry.equals("Substitute Leader", ignoreCase = true)) {
+                    selfMinistry
+                } else if (existingInRoster != null && existingInRoster.ministryRole.isNotBlank() && !existingInRoster.ministryRole.equals("Substitute Leader", ignoreCase = true)) {
+                    existingInRoster.ministryRole
+                } else {
+                    assignedRole
+                        ?: (all["email_ministry_$emailLower"] as? String).orEmpty().takeIf { it.isNotBlank() }
+                        ?: (all["user_ministry_$uid"] as? String).orEmpty().takeIf { it.isNotBlank() }
+                        ?: existingInRoster?.ministryRole.orEmpty()
+                }
+
+                var effectiveRole = if (isDemotedMember) "Member" else role
+                if (isDemotedMember && memberRolesMap != null) {
+                    if (memberRolesMap.optString(uid).equals("Substitute Leader", true)) memberRolesMap.put(uid, ministry)
+                    if (memberRolesMap.optString(emailLower).equals("Substitute Leader", true)) memberRolesMap.put(emailLower, ministry)
+                }
 
                 val photo = (all["email_photo_$emailLower"] as? String).orEmpty().takeIf { it.isNotBlank() }
                     ?: (all["user_photo_$uid"] as? String).orEmpty().takeIf { it.isNotBlank() }
@@ -266,7 +304,7 @@ object TeamRepository {
                         fullName = memberName,
                         username = username,
                         email = emailLower,
-                        role = role,
+                        role = effectiveRole,
                         ministryRole = ministry,
                         teamCode = code,
                         photoUri = photo,
@@ -546,12 +584,37 @@ object TeamRepository {
                 }
                 val preferredUsername = existing.username.ifBlank { m.username }
 
-                // 4. Role
-                val isLeader = existing.role.equals("Leader", true) || m.role.equals("Leader", true)
-                val preferredRole = if (isLeader) "Leader" else existing.role.ifBlank { m.role }
+                val isPrimaryLeader = preferredEmail.trim().equals("ryanlloydgenturo@gmail.com", ignoreCase = true) ||
+                                      preferredFullName.trim().equals("Ryan Lloyd Genturo", ignoreCase = true)
+                val emailLower = preferredEmail.trim().lowercase()
+                val isExplicitlyMember = !isPrimaryLeader && (
+                    existing.role.equals("Member", true) ||
+                    m.role.equals("Member", true) ||
+                    (preferences != null && (
+                        preferences.getString("email_role_$emailLower", "").equals("Member", true) ||
+                        (preferredUid.isNotBlank() && preferences.getString("user_role_$preferredUid", "").equals("Member", true))
+                    ))
+                )
 
-                // 5. Ministry Role: prefer specific role over generic "Member" or blank
+                // 4. Role
+                val preferredRole = when {
+                    isPrimaryLeader -> "Leader"
+                    isExplicitlyMember -> "Member"
+                    existing.role.equals("Leader", true) || m.role.equals("Leader", true) -> "Leader"
+                    else -> existing.role.ifBlank { m.role }.ifBlank { "Member" }
+                }
+
+                // 5. Ministry Role: prefer specific role over generic "Member" or blank, but never resurrect Substitute Leader if demoted
                 val preferredMinistryRole = when {
+                    isPrimaryLeader -> "Worship Leader"
+                    isExplicitlyMember && (existing.ministryRole.equals("Substitute Leader", true) || m.ministryRole.equals("Substitute Leader", true)) -> {
+                        val nonSub = when {
+                            existing.ministryRole.isNotBlank() && !existing.ministryRole.equals("Substitute Leader", true) && !existing.ministryRole.equals("Member", true) -> existing.ministryRole
+                            m.ministryRole.isNotBlank() && !m.ministryRole.equals("Substitute Leader", true) && !m.ministryRole.equals("Member", true) -> m.ministryRole
+                            else -> "Member"
+                        }
+                        nonSub
+                    }
                     existing.ministryRole.isNotBlank() && !existing.ministryRole.equals("Member", true) -> existing.ministryRole
                     m.ministryRole.isNotBlank() && !m.ministryRole.equals("Member", true) -> m.ministryRole
                     existing.ministryRole.isNotBlank() -> existing.ministryRole
@@ -587,13 +650,24 @@ object TeamRepository {
                 ?: ""
             val mWithPhoto = if (m.photoUri.isBlank() && fallbackPhoto.isNotBlank()) m.copy(photoUri = fallbackPhoto) else m
 
-            if (mWithPhoto.email.trim().equals("ryanlloydgenturo@gmail.com", ignoreCase = true) ||
-                mWithPhoto.fullName.trim().equals("Ryan Lloyd Genturo", ignoreCase = true)) {
+            val isPrimary = mWithPhoto.email.trim().equals("ryanlloydgenturo@gmail.com", ignoreCase = true) ||
+                            mWithPhoto.fullName.trim().equals("Ryan Lloyd Genturo", ignoreCase = true)
+            val emailLower = mWithPhoto.email.trim().lowercase()
+            val prefRole = preferences?.let { p ->
+                p.getString("email_role_$emailLower", "")?.takeIf { it.isNotBlank() }
+                    ?: (if (mWithPhoto.uid.isNotBlank()) p.getString("user_role_${mWithPhoto.uid}", "")?.takeIf { it.isNotBlank() } else null)
+            }
+            val isDemotedMember = !isPrimary && (mWithPhoto.role.equals("Member", true) || prefRole.equals("Member", true))
+
+            if (isPrimary) {
                 if (m.role.isBlank()) {
                     mWithPhoto.copy(role = "Leader", ministryRole = "Worship Leader")
                 } else {
                     mWithPhoto
                 }
+            } else if (isDemotedMember) {
+                val cleanMinistry = if (mWithPhoto.ministryRole.equals("Substitute Leader", ignoreCase = true)) "Member" else mWithPhoto.ministryRole.ifBlank { "Member" }
+                mWithPhoto.copy(role = "Member", ministryRole = cleanMinistry)
             } else if (mWithPhoto.ministryRole.equals("Substitute Leader", ignoreCase = true)) {
                 mWithPhoto.copy(role = "Leader")
             } else if (mWithPhoto.role.equals("Leader", ignoreCase = true)) {
@@ -878,7 +952,7 @@ object TeamRepository {
         val computedRole = if (isTargetLeader) "Leader" else "Member"
 
         // Update in-memory caches
-        for ((_, roster) in cachedRosters) {
+        for ((codeKey, roster) in cachedRosters) {
             synchronized(roster) {
                 var modified = false
                 for (i in roster.indices) {
@@ -894,12 +968,21 @@ object TeamRepository {
                     val deduped = deduplicateRoster(roster.toList(), preferences)
                     roster.clear()
                     roster.addAll(deduped)
+                    if (preferences != null) {
+                        saveRosterLocally(codeKey, deduped, preferences)
+                    }
                 }
             }
         }
 
         if (preferences != null) {
             preferences.edit {
+                val currentSelfEmail = preferences.getString("email", "").orEmpty().trim().lowercase()
+                val currentSelfUid = preferences.getString(com.example.syncedn.data.auth.SessionManager.KEY_USER_ID, "").orEmpty()
+                val isTargetSelf = (cleanEmail.isNotBlank() && cleanEmail == currentSelfEmail) ||
+                                   (memberUid.isNotBlank() && memberUid == currentSelfUid) ||
+                                   (memberName.isNotBlank() && memberName.equals(preferences.getString(com.example.syncedn.data.auth.SessionManager.KEY_FULL_NAME, ""), true))
+
                 if (cleanEmail.isNotBlank()) {
                     putString("email_ministry_$cleanEmail", effectiveNewRole)
                     putString("email_role_$cleanEmail", computedRole)
@@ -907,6 +990,12 @@ object TeamRepository {
                 if (memberUid.isNotBlank()) {
                     putString("user_ministry_$memberUid", effectiveNewRole)
                     putString("user_role_$memberUid", computedRole)
+                }
+                if (isTargetSelf) {
+                    putString("role", computedRole)
+                    putString(com.example.syncedn.data.auth.SessionManager.KEY_ROLE, computedRole)
+                    putString("ministryRole", effectiveNewRole)
+                    putString(com.example.syncedn.data.auth.SessionManager.KEY_MINISTRY_ROLE, effectiveNewRole)
                 }
                 try {
                     val map = org.json.JSONObject(preferences.getString(com.example.syncedn.data.auth.SessionManager.KEY_MEMBER_ROLES, "{}").orEmpty())
@@ -2390,7 +2479,7 @@ object TeamRepository {
                 bpm = 72,
                 sheet = "[Verse 1]\n[G]Amazing grace, how [C]sweet the [G]sound\nThat saved a [D]wretch like me\n[G]I once was lost, but [C]now am [G]found\nWas blind, but [D]now I [G]see\n\n[Verse 2]\n'Twas [G]grace that taught my [C]heart to [G]fear\nAnd grace my [D]fears re[G]lieved\nHow [G]precious did that [C]grace ap[G]pear\nThe hour I [D]first be[G]lieved\n\n[Chorus]\nMy chains are [C]gone, I've been set [G]free\nMy God, my [C]Savior has ransomed [G]me\nAnd like a [C]flood His mercy [Em]reigns\nUnending [Am]love, a[D]mazing [G]grace\n\n[Verse 3]\nThe [G]Lord has promised [C]good to [G]me\nHis word my [D]hope se[G]cures\nHe [G]will my shield and [C]portion [G]be\nAs long as [D]life en[G]dures",
                 lyrics = "Amazing grace, how sweet the sound\nThat saved a wretch like me\nI once was lost, but now am found\nWas blind, but now I see\n\n'Twas grace that taught my heart to fear\nAnd grace my fears relieved\nHow precious did that grace appear\nThe hour I first believed\n\nMy chains are gone, I've been set free\nMy God, my Savior has ransomed me\nAnd like a flood His mercy reigns\nUnending love, amazing grace\n\nThe Lord has promised good to me\nHis word my hope secures\nHe will my shield and portion be\nAs long as life endures",
-                referenceUrl = "https://www.youtube.com/watch?v=Jbe7OruLk8I"
+                referenceUrl = "https://www.youtube.com/watch?v=oaSKxSL5orc"
             ),
             SongData(
                 id = "seed_build_my_life",
@@ -2401,7 +2490,7 @@ object TeamRepository {
                 bpm = 68,
                 sheet = "[Verse 1]\n[G]Worthy of every song we could [C]ever sing\n[G]Worthy of all the praise we could [C]ever bring\n[G]Worthy of every breath we could [C]ever breathe\nWe live for [Am]You, [D]we live for [G]You\n\n[Verse 2]\n[G]Jesus, the name above every [C]other name\n[G]Jesus, the only one who could [C]ever save\n[G]Worthy of every breath we could [C]ever breathe\nWe live for [Am]You, [D]we live for [G]You\n\n[Chorus]\n[C]Holy, there is no one like [Am]You\nThere is none beside [G]You\nOpen up my eyes in [Em]wonder\nAnd [C]show me who You are and [Am]fill me\nWith Your heart and lead [G]me\nIn Your love to those [Em]around me\n\n[Bridge]\n[C]I will build my [D]life upon Your [Em]love\nIt is a [G]firm foundation\n[C]I will put my [D]trust in You a[Em]lone\nAnd I will [G]not be shaken",
                 lyrics = "Worthy of every song we could ever sing\nWorthy of all the praise we could ever bring\nWorthy of every breath we could ever breathe\nWe live for You, we live for You\n\nJesus, the name above every other name\nJesus, the only one who could ever save\nWorthy of every breath we could ever breathe\nWe live for You, we live for You\n\nHoly, there is no one like You\nThere is none beside You\nOpen up my eyes in wonder\nAnd show me who You are and fill me\nWith Your heart and lead me\nIn Your love to those around me\n\nI will build my life upon Your love\nIt is a firm foundation\nI will put my trust in You alone\nAnd I will not be shaken",
-                referenceUrl = "https://www.youtube.com/watch?v=Z32HiCoFzlU"
+                referenceUrl = "https://www.youtube.com/watch?v=FR1p3pmRjEU"
             ),
             SongData(
                 id = "seed_goodness_of_god",
@@ -2423,7 +2512,7 @@ object TeamRepository {
                 bpm = 78,
                 sheet = "[Verse 1]\n[B]All my words fall short\n[E]I got nothing new\n[G#m]How could I express\n[F#]All my gratitude\n\n[Verse 2]\n[B]I could sing these songs\n[E]As I often do\n[G#m]But every song must end\n[F#]And You never do\n\n[Chorus]\n[B]So I throw up my hands and praise You again and again\n[G#m]'Cause all that I have is a hallelujah, [E]hallelujah\n[B]And I know it's not much, but I've nothing else fit for a King\n[G#m]Except for a heart singing hallelujah, [F#]hallelujah\n\n[Bridge]\nCome on, [B]my soul, don't you get shy on me\nLift up your [E]song, 'cause you've got a lion inside of those lungs\nGet up and [G#m]praise the [F#]Lord!",
                 lyrics = "All my words fall short\nI got nothing new\nHow could I express\nAll my gratitude\n\nI could sing these songs\nAs I often do\nBut every song must end\nAnd You never do\n\nSo I throw up my hands and praise You again and again\n'Cause all that I have is a hallelujah, hallelujah\nAnd I know it's not much, but I've nothing else fit for a King\nExcept for a heart singing hallelujah, hallelujah\n\nCome on, my soul, don't you get shy on me\nLift up your song, 'cause you've got a lion inside of those lungs\nGet up and praise the Lord!",
-                referenceUrl = "https://www.youtube.com/watch?v=dQdfs5S6jyA"
+                referenceUrl = "https://www.youtube.com/watch?v=UoHrBNTfzIs"
             ),
             SongData(
                 id = "seed_praise",
@@ -2456,7 +2545,7 @@ object TeamRepository {
                 bpm = 72,
                 sheet = "[Verse 1]\n[C]A thousand generations falling [F]down in [C]worship\nTo sing the [Am]song of ages to the [G]Lamb\nAnd [C]all who've gone before us and [F]all who will be[C]lieve\nWill sing the [Am]song of ages to the [G]Lamb\n\n[Chorus]\nYour name is the [F]highest, Your name is the [Am]greatest\nYour name stands a[G]bove them all\nAll thrones and do[F]minions, all powers and po[Am]sitions\nYour name stands a[G]bove them all\nAnd the angels cry, [F]Holy, [Am]all creation cries, [G]Holy\nYou are lifted high, [F]Holy, [G]holy for[C]ever",
                 lyrics = "A thousand generations falling down in worship\nTo sing the song of ages to the Lamb\nAnd all who've gone before us and all who will believe\nWill sing the song of ages to the Lamb\n\nYour name is the highest, Your name is the greatest\nYour name stands above them all\nAll thrones and dominions, all powers and positions\nYour name stands above them all\nAnd the angels cry, Holy, all creation cries, Holy\nYou are lifted high, Holy, holy forever",
-                referenceUrl = "https://www.youtube.com/watch?v=oOXvQz_gtfA"
+                referenceUrl = "https://www.youtube.com/watch?v=IkHgxKemCRk"
             ),
             SongData(
                 id = "seed_way_maker",
