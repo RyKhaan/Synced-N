@@ -759,6 +759,14 @@ object TeamRepository {
         }
 
         try {
+            if (memberUid.isNotBlank()) {
+                db.collection(USERS_COLLECTION)
+                    .document(memberUid)
+                    .update("ministryRole", newRole)
+                    .addOnFailureListener {
+                        android.util.Log.w("TeamRepository", "updateMemberMinistryRole doc update failed: ${it.message}")
+                    }
+            }
             if (cleanEmail.isNotBlank()) {
                 db.collection(USERS_COLLECTION)
                     .whereEqualTo("email", cleanEmail)
@@ -768,34 +776,12 @@ object TeamRepository {
                             for (doc in snap.documents) {
                                 doc.reference.update("ministryRole", newRole)
                             }
-                            onComplete(Result.success(Unit))
-                        } else if (memberUid.isNotBlank() && !memberUid.startsWith("user_")) {
-                            db.collection(USERS_COLLECTION)
-                                .document(memberUid)
-                                .update("ministryRole", newRole)
-                                .addOnSuccessListener { onComplete(Result.success(Unit)) }
-                                .addOnFailureListener { onComplete(Result.failure(it)) }
-                        } else {
-                            onComplete(Result.success(Unit))
                         }
+                        onComplete(Result.success(Unit))
                     }
                     .addOnFailureListener {
-                        if (memberUid.isNotBlank() && !memberUid.startsWith("user_")) {
-                            db.collection(USERS_COLLECTION)
-                                .document(memberUid)
-                                .update("ministryRole", newRole)
-                                .addOnSuccessListener { onComplete(Result.success(Unit)) }
-                                .addOnFailureListener { onComplete(Result.failure(it)) }
-                        } else {
-                            onComplete(Result.failure(it))
-                        }
+                        onComplete(Result.success(Unit))
                     }
-            } else if (memberUid.isNotBlank() && !memberUid.startsWith("user_")) {
-                db.collection(USERS_COLLECTION)
-                    .document(memberUid)
-                    .update("ministryRole", newRole)
-                    .addOnSuccessListener { onComplete(Result.success(Unit)) }
-                    .addOnFailureListener { onComplete(Result.failure(it)) }
             } else if (memberName.isNotBlank()) {
                 db.collection(USERS_COLLECTION)
                     .whereEqualTo("fullName", memberName)
