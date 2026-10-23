@@ -139,6 +139,15 @@ object SessionManager {
                 remove(KEY_PHOTO_URI)
             }
             remove(KEY_LEFT_TEAM)
+            val isRemoved = profile?.removedByLeader ?: preferences.getBoolean("removedByLeader", false)
+            val removedCode = profile?.removedTeamCode?.takeIf { it.isNotBlank() }
+                ?: preferences.getString("removedTeamCode", "").orEmpty()
+            putBoolean("removedByLeader", isRemoved)
+            if (removedCode.isNotBlank()) {
+                putString("removedTeamCode", removedCode)
+            } else {
+                remove("removedTeamCode")
+            }
 
             // Cache user-scoped copies to preserve data offline per email
             if (emailLower.isNotBlank()) {
@@ -151,11 +160,15 @@ object SessionManager {
                 if (ministryRole.isNotBlank()) putString("email_ministry_$emailLower", ministryRole)
                 if (photoUri.isNotBlank()) putString("email_photo_$emailLower", photoUri)
                 if (profileRangesJson.isNotBlank()) putString("email_unavailable_ranges_$emailLower", profileRangesJson)
+                putBoolean("email_removed_by_leader_$emailLower", isRemoved)
+                if (removedCode.isNotBlank()) putString("email_removed_team_code_$emailLower", removedCode) else remove("email_removed_team_code_$emailLower")
             }
             if (effectiveUid.isNotBlank()) {
                 if (ministryRole.isNotBlank()) putString("user_ministry_$effectiveUid", ministryRole)
                 if (photoUri.isNotBlank()) putString("user_photo_$effectiveUid", photoUri)
                 if (profileRangesJson.isNotBlank()) putString("user_unavailable_ranges_$effectiveUid", profileRangesJson)
+                putBoolean("user_removed_by_leader_$effectiveUid", isRemoved)
+                if (removedCode.isNotBlank()) putString("user_removed_team_code_$effectiveUid", removedCode) else remove("user_removed_team_code_$effectiveUid")
             }
         }
         if (effectiveUid.isNotBlank()) {
@@ -213,9 +226,54 @@ object SessionManager {
             .ifBlank { if (uid.isNotBlank()) preferences.getString("user_code_$uid", "").orEmpty() else "" }
             .ifBlank { preferences.getString(KEY_TEAM_CODE, "").orEmpty() }
 
+        val isLeadUser = emailLower == "ryanlloydgenturo@gmail.com"
         val remoteRole = profile?.role.orEmpty()
         val remoteTeam = profile?.teamName.orEmpty()
         val remoteCode = profile?.teamCode.orEmpty()
+
+        val isRemoved = !isLeadUser && (
+            (profile?.removedByLeader == true) ||
+            preferences.getBoolean("removedByLeader", false) ||
+            preferences.getBoolean("email_removed_by_leader_$emailLower", false) ||
+            (uid.isNotBlank() && preferences.getBoolean("user_removed_by_leader_$uid", false)) ||
+            (savedCode.isNotBlank() && preferences.getStringSet("team_removed_members_$savedCode", emptySet()).orEmpty().let { set ->
+                set.any { it.equals(emailLower, true) || (uid.isNotBlank() && it.equals(uid, true)) }
+            }) ||
+            preferences.getStringSet("removedMembers", emptySet()).orEmpty().let { set ->
+                set.any { it.equals(emailLower, true) || (uid.isNotBlank() && it.equals(uid, true)) }
+            }
+        )
+
+        val hasNoRemoteTeam = (profile != null && remoteTeam.isBlank() && remoteCode.isBlank())
+
+        if (isRemoved || hasNoRemoteTeam) {
+            preferences.edit {
+                remove(KEY_TEAM_NAME)
+                remove(KEY_TEAM_CODE)
+                remove(KEY_MINISTRY_ROLE)
+                remove("email_team_$emailLower")
+                remove("email_code_$emailLower")
+                if (uid.isNotBlank()) {
+                    remove("user_team_$uid")
+                    remove("user_code_$uid")
+                }
+                if (isRemoved) {
+                    val rCode = profile?.removedTeamCode?.ifBlank { savedCode } ?: savedCode
+                    putBoolean("removedByLeader", true)
+                    if (rCode.isNotBlank()) putString("removedTeamCode", rCode)
+                    if (emailLower.isNotBlank()) {
+                        putBoolean("email_removed_by_leader_$emailLower", true)
+                        if (rCode.isNotBlank()) putString("email_removed_team_code_$emailLower", rCode)
+                    }
+                    if (uid.isNotBlank()) {
+                        putBoolean("user_removed_by_leader_$uid", true)
+                        if (rCode.isNotBlank()) putString("user_removed_team_code_$uid", rCode)
+                    }
+                }
+            }
+            val finalRole = if (isLeadUser) "Leader" else "Member"
+            return Triple(finalRole, "", "")
+        }
 
         // Remote takes priority if local is empty (e.g. clean install/new device), or merges seamlessly
         val finalTeam = if (remoteTeam.isNotBlank()) remoteTeam else savedTeam
@@ -223,7 +281,6 @@ object SessionManager {
             .ifBlank { if (finalTeam.isNotBlank()) preferences.getString("team_leader_code_${finalTeam.trim().lowercase()}", "").orEmpty() else "" }
             .ifBlank { if (finalTeam.isNotBlank()) com.example.syncedn.data.database.FirestoreManager.findCodeByTeamName(finalTeam).orEmpty() else "" }
 
-        val isLeadUser = emailLower == "ryanlloydgenturo@gmail.com"
         val finalRole = when {
             isLeadUser -> "Leader"
             remoteRole.equals("Leader", ignoreCase = true) || savedRole.equals("Leader", ignoreCase = true) -> "Leader"
@@ -242,6 +299,18 @@ object SessionManager {
         }
 
         if (finalCode.isNotBlank() && finalTeam.isNotBlank()) {
+            preferences.edit {
+                putBoolean("removedByLeader", false)
+                remove("removedTeamCode")
+                if (emailLower.isNotBlank()) {
+                    putBoolean("email_removed_by_leader_$emailLower", false)
+                    remove("email_removed_team_code_$emailLower")
+                }
+                if (uid.isNotBlank()) {
+                    putBoolean("user_removed_by_leader_$uid", false)
+                    remove("user_removed_team_code_$uid")
+                }
+            }
             com.example.syncedn.data.database.FirestoreManager.registerLocalTeam(finalCode, finalTeam)
         }
 

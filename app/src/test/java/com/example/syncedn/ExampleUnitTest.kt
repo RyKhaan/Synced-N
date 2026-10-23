@@ -1871,7 +1871,7 @@ class ExampleUnitTest {
 
         override fun getAll(): MutableMap<String, *> = map
         override fun getString(key: String?, defValue: String?): String? = map[key] as? String ?: defValue
-        override fun getStringSet(key: String?, defValues: MutableSet<String>?): MutableSet<String>? = defValues
+        override fun getStringSet(key: String?, defValues: MutableSet<String>?): MutableSet<String>? = (map[key] as? Set<*>)?.mapNotNull { it?.toString() }?.toMutableSet() ?: defValues
         override fun getInt(key: String?, defValue: Int): Int = map[key] as? Int ?: defValue
         override fun getLong(key: String?, defValue: Long): Long = map[key] as? Long ?: defValue
         override fun getFloat(key: String?, defValue: Float): Float = map[key] as? Float ?: defValue
@@ -1887,7 +1887,7 @@ class ExampleUnitTest {
             private var clearAll = false
 
             override fun putString(key: String?, value: String?): android.content.SharedPreferences.Editor { key?.let { pending[it] = value }; return this }
-            override fun putStringSet(key: String?, values: MutableSet<String>?): android.content.SharedPreferences.Editor = this
+            override fun putStringSet(key: String?, values: MutableSet<String>?): android.content.SharedPreferences.Editor { key?.let { pending[it] = values }; return this }
             override fun putInt(key: String?, value: Int): android.content.SharedPreferences.Editor { key?.let { pending[it] = value }; return this }
             override fun putLong(key: String?, value: Long): android.content.SharedPreferences.Editor { key?.let { pending[it] = value }; return this }
             override fun putFloat(key: String?, value: Float): android.content.SharedPreferences.Editor { key?.let { pending[it] = value }; return this }
@@ -2537,5 +2537,70 @@ class ExampleUnitTest {
 
         assertEquals(1, activeNotifs.size)
         assertEquals("notif_2", activeNotifs[0].id)
+    }
+
+    @Test
+    fun testUserProfileRemovedByLeaderSerialization() {
+        val profile = com.example.syncedn.data.model.UserProfile(
+            uid = "user_test_123",
+            username = "YANYAN",
+            email = "yanyangenturo@gmail.com",
+            role = "Member",
+            teamName = "",
+            teamCode = "",
+            removedByLeader = true,
+            removedTeamCode = "NGK8VN"
+        )
+        val map = profile.toMap()
+        assertEquals(true, map["removedByLeader"])
+        assertEquals("NGK8VN", map["removedTeamCode"])
+        assertEquals("", map["teamName"])
+        assertEquals("", map["teamCode"])
+
+        val deserialized = com.example.syncedn.data.model.UserProfile.fromMap(map)
+        assertEquals("user_test_123", deserialized.uid)
+        assertEquals("YANYAN", deserialized.username)
+        assertEquals("yanyangenturo@gmail.com", deserialized.email)
+        assertTrue(deserialized.removedByLeader)
+        assertEquals("NGK8VN", deserialized.removedTeamCode)
+        assertEquals("", deserialized.teamName)
+        assertEquals("", deserialized.teamCode)
+    }
+
+    @Test
+    fun testSessionManagerRemovedUserSessionResolution() {
+        val prefs = FakePreferences()
+        prefs.edit()
+            .putString("email_team_yanyangenturo@gmail.com", "WISE MAN TEAM")
+            .putString("email_code_yanyangenturo@gmail.com", "NGK8VN")
+            .putString("teamName", "WISE MAN TEAM")
+            .putString("teamCode", "NGK8VN")
+            .apply()
+
+        // Profile with removedByLeader = true and blank team
+        val removedProfile = com.example.syncedn.data.model.UserProfile(
+            uid = "user_test_123",
+            username = "YANYAN",
+            email = "yanyangenturo@gmail.com",
+            role = "Member",
+            teamName = "",
+            teamCode = "",
+            removedByLeader = true,
+            removedTeamCode = "NGK8VN"
+        )
+
+        val (role, team, code) = com.example.syncedn.data.auth.SessionManager.resolveUserTeamSession(
+            prefs,
+            removedProfile,
+            "yanyangenturo@gmail.com"
+        )
+
+        assertEquals("Member", role)
+        assertEquals("", team)
+        assertEquals("", code)
+        assertTrue(prefs.getBoolean("removedByLeader", false))
+        assertEquals("NGK8VN", prefs.getString("removedTeamCode", ""))
+        assertEquals("", prefs.getString("teamName", ""))
+        assertEquals("", prefs.getString("teamCode", ""))
     }
 }

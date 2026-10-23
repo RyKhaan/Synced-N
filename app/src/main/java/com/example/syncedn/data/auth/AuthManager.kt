@@ -117,18 +117,24 @@ object AuthManager {
                         if (user != null) {
                             FirestoreManager.getUserProfile(user.uid) { profileResult ->
                                 val existing = profileResult.getOrNull()
-                                if (existing != null && existing.teamName.isNotBlank()) {
+                                if (existing != null && (existing.teamName.isNotBlank() || existing.removedByLeader)) {
                                     onComplete(Result.success(existing))
                                 } else {
                                     // Also check by email to recover any pre-existing team/profile
                                     FirestoreManager.getUserByEmail(cleanEmail) { emailProfileRes ->
                                         val emailProf = emailProfileRes.getOrNull()
+                                        val isRemoved = existing?.removedByLeader == true || emailProf?.removedByLeader == true
                                         val profile = (emailProf ?: existing ?: UserProfile(
                                             uid = user.uid,
                                             username = user.displayName ?: cleanEmail.substringBefore("@"),
                                             email = cleanEmail
-                                        )).copy(uid = user.uid)
-                                        if (emailProf != null && emailProf.teamName.isNotBlank()) {
+                                        )).copy(
+                                            uid = user.uid,
+                                            removedByLeader = isRemoved,
+                                            teamName = if (isRemoved) "" else (emailProf?.teamName ?: existing?.teamName).orEmpty(),
+                                            teamCode = if (isRemoved) "" else (emailProf?.teamCode ?: existing?.teamCode).orEmpty()
+                                        )
+                                        if (!isRemoved && emailProf != null && emailProf.teamName.isNotBlank()) {
                                             FirestoreManager.updateUserRoleAndTeam(
                                                 user.uid,
                                                 emailProf.role.ifBlank { "Member" },
