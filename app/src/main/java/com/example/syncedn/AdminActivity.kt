@@ -3815,23 +3815,38 @@ class AdminActivity : AppCompatActivity() {
         val artist = plainInput("Artist").apply { setText(currentSong?.artist ?: fallbackJson.optString("artist", songCatalog().find { it.first == selectedSong }?.second ?: "")) }
         val key = plainInput("Key, e.g. C").apply { setText(currentSong?.key ?: fallbackJson.optString("key", "C")) }
         val bpm = plainInput("BPM").apply { inputType = InputType.TYPE_CLASS_NUMBER; setText(currentSong?.bpm?.toString() ?: fallbackJson.optString("bpm", "74")) }
-        val lyrics = plainInput("Your licensed lyrics / chords", true, chordSheet = true).apply { 
+        val initialSheet = currentSong?.sheet?.ifBlank { currentSong.lyrics } ?: fallbackJson.optString("sheet", fallbackJson.optString("lyrics"))
+        val lyrics = plainInput("Paste or enter lyrics & chords...", true, chordSheet = true).apply { 
             setHorizontallyScrolling(true)
-            setText(currentSong?.sheet?.ifBlank { currentSong.lyrics } ?: fallbackJson.optString("sheet", fallbackJson.optString("lyrics"))) 
+            minLines = 8
+            setText(initialSheet)
         }
         val link = plainInput("Reference URL").apply { setText(currentSong?.referenceUrl ?: fallbackJson.optString("link")) }
+
         listOf("Title*" to title, "Artist*" to artist, "Key" to key, "BPM" to bpm).forEach { (label, field) ->
             col.add(text(label, 12, navy, true)); col.space(8); col.add(field, -1, 48); col.space(16)
         }
 
-        // Section Builder & Quick Chord Toolbar
-        val initialRaw = currentSong?.sheet?.ifBlank { currentSong.lyrics } ?: fallbackJson.optString("sheet", fallbackJson.optString("lyrics"))
-        val initialSections = ChordSheet.splitSections(initialRaw)
-
-        data class SectionEntry(var header: String, val input: EditText, val cardView: View)
-        val sectionList = mutableListOf<SectionEntry>()
-        val sectionsContainer = vertical()
-        var focusedSectionInput: EditText? = null
+        // Lyrics & Chords field with Auto-Arrange action
+        col.add(horizontal().apply {
+            add(text("Lyrics & Chords*", 12, navy, true), 0, -2, 1f)
+            add(text("Auto Arrange", 12, purple, bold = true).apply {
+                setPadding(dp(8), dp(4), dp(8), dp(4))
+                isClickable = true
+                isFocusable = true
+                setOnClickListener {
+                    val raw = lyrics.text.toString()
+                    if (raw.isNotBlank()) {
+                        val formatted = SheetPasteFormatter.format(raw)
+                        lyrics.setText(formatted)
+                        toast("Lyrics & chords automatically arranged")
+                    }
+                }
+            }, -2, -2)
+        })
+        col.space(8)
+        col.add(lyrics, -1, -2)
+        col.space(16)
 
         // Transpose Preview views & function
         val previewRoots = listOf("C", "Db", "D", "Eb", "E", "F")
@@ -3846,18 +3861,13 @@ class AdminActivity : AppCompatActivity() {
             setHorizontallyScrolling(false)
         }
 
-        fun getFullAssembledSheet(): String {
-            val pairs = sectionList.map { Pair(it.header, it.input.text.toString()) }
-            return ChordSheet.assembleSections(pairs)
-        }
-
         fun updateTransposePreview(targetChord: String) {
             activePreviewChord = targetChord
             val origKey = key.text.toString().trim().ifBlank { "C" }
             val basePitch = ChordSheet.keyPitch(origKey).coerceAtLeast(0)
             val targetPitch = ChordSheet.pitch(targetChord).coerceAtLeast(0)
             val offset = (targetPitch - basePitch + 12) % 12
-            val sourceText = getFullAssembledSheet().ifBlank {
+            val sourceText = lyrics.text.toString().ifBlank {
                 "[Verse 1]\n[C]Amazing grace how [G]sweet the sound\n[Am]That saved a wretch [F]like me\n\n[Chorus]\n[C]My chains are gone [G]I've been set free"
             }
             previewSheetText.text = ChordSheet.render(sourceText, offset, false, targetChord.contains('b') || targetChord == "F")
@@ -3868,211 +3878,13 @@ class AdminActivity : AppCompatActivity() {
             }
         }
 
-        // Quick Chord Accessory Toolbar (Diatonic chords for current key)
-        val chordPaletteRow = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            setPadding(0, dp(4), 0, dp(4))
-        }
-        val chordPaletteScroll = android.widget.HorizontalScrollView(this).apply {
-            isFillViewport = false
-            isHorizontalScrollBarEnabled = false
-            addView(chordPaletteRow)
-        }
-
-        fun refreshChordPalette() {
-            chordPaletteRow.removeAllViews()
-            val activeKey = key.text.toString().trim().ifBlank { "C" }
-            val chords = ChordSheet.getChordPalette(activeKey)
-            chords.forEachIndexed { idx, chord ->
-                val btn = text(chord, 12, navy, true, true).apply {
-                    background = bg(Color.rgb(228, 220, 235), 8)
-                    setPadding(dp(14), dp(6), dp(14), dp(6))
-                    isClickable = true
-                    isFocusable = true
-                    setOnClickListener {
-                        val target = focusedSectionInput ?: sectionList.firstOrNull()?.input
-                        target?.let { et ->
-                            val start = et.selectionStart.coerceAtLeast(0)
-                            val end = et.selectionEnd.coerceAtLeast(0)
-                            val tag = "[$chord]"
-                            et.text.replace(minOf(start, end), maxOf(start, end), tag)
-                            et.setSelection(minOf(start, end) + tag.length)
-                            et.requestFocus()
-                        }
-                    }
-                }
-                val lp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, dp(34)).apply {
-                    if (idx > 0) leftMargin = dp(6)
-                }
-                chordPaletteRow.addView(btn, lp)
+        lyrics.addTextChangedListener(object : android.text.TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
+            override fun afterTextChanged(s: android.text.Editable?) {
+                updateTransposePreview(activePreviewChord)
             }
-        }
-
-        fun addSectionCard(headerName: String, initialContent: String = "") {
-            var currentHeader = headerName.trim()
-            if (!currentHeader.startsWith("[")) currentHeader = "[$currentHeader"
-            if (!currentHeader.endsWith("]")) currentHeader = "$currentHeader]"
-
-            val sectionInput = plainInput("Enter lyrics & chords for this section (e.g. [Dm]lyrics...)", true).apply {
-                setText(initialContent)
-                minLines = 3
-                setOnFocusChangeListener { _, hasFocus ->
-                    if (hasFocus) focusedSectionInput = this
-                }
-                addTextChangedListener(object : android.text.TextWatcher {
-                    override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
-                    override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
-                    override fun afterTextChanged(s: android.text.Editable?) {
-                        updateTransposePreview(activePreviewChord)
-                    }
-                })
-            }
-
-            lateinit var cardPanel: View
-            val headerText = text(currentHeader, 13, purple, bold = true)
-
-            cardPanel = panel().apply {
-                add(horizontal().apply {
-                    add(headerText, 0, -2, 1f)
-                    add(text("Remove", 12, Color.RED).apply {
-                        setPadding(dp(8), dp(4), dp(8), dp(4))
-                        isClickable = true
-                        isFocusable = true
-                        setOnClickListener {
-                            sectionsContainer.removeView(cardPanel)
-                            sectionList.removeAll { it.cardView == cardPanel }
-                            if (focusedSectionInput == sectionInput) {
-                                focusedSectionInput = sectionList.firstOrNull()?.input
-                            }
-                            updateTransposePreview(activePreviewChord)
-                        }
-                    }, -2, -2)
-                })
-                space(8)
-                add(sectionInput, -1, -2)
-            }
-
-            val entry = SectionEntry(currentHeader, sectionInput, cardPanel)
-            sectionList.add(entry)
-            sectionsContainer.addView(cardPanel)
-            sectionsContainer.addView(View(this).apply { minimumHeight = dp(12) })
-            focusedSectionInput = sectionInput
-            updateTransposePreview(activePreviewChord)
-        }
-
-        // Section Picker Chips
-        val standardSections = listOf("Verse 1", "Chorus", "Verse 2", "Bridge", "Pre-Chorus", "Outro")
-        val sectionPickerRow = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            setPadding(0, dp(4), 0, dp(4))
-        }
-        val sectionPickerScroll = android.widget.HorizontalScrollView(this).apply {
-            isFillViewport = false
-            isHorizontalScrollBarEnabled = false
-            addView(sectionPickerRow)
-        }
-
-        standardSections.forEachIndexed { idx, secName ->
-            val chip = text("+ $secName", 12, purple, true, true).apply {
-                background = bg(Color.rgb(242, 237, 248), 8, purple)
-                setPadding(dp(10), dp(6), dp(10), dp(6))
-                isClickable = true
-                isFocusable = true
-                setOnClickListener {
-                    addSectionCard(secName)
-                }
-            }
-            val lp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, dp(34)).apply {
-                if (idx > 0) leftMargin = dp(6)
-            }
-            sectionPickerRow.addView(chip, lp)
-        }
-
-        val customChip = text("+ Custom", 12, navy, true, true).apply {
-            background = bg(Color.rgb(230, 230, 235), 8, navy)
-            setPadding(dp(10), dp(6), dp(10), dp(6))
-            isClickable = true
-            isFocusable = true
-            setOnClickListener {
-                val input = EditText(this@AdminActivity).apply { hint = "e.g. Refrain, Tag, Vamp" }
-                AlertDialog.Builder(this@AdminActivity)
-                    .setTitle("Add Custom Section")
-                    .setView(input)
-                    .setPositiveButton("Add") { _, _ ->
-                        val customName = input.text.toString().trim()
-                        if (customName.isNotBlank()) {
-                            addSectionCard(customName)
-                        }
-                    }
-                    .setNegativeButton("Cancel", null)
-                    .show()
-            }
-        }
-        val customLp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, dp(34)).apply {
-            leftMargin = dp(6)
-        }
-        sectionPickerRow.addView(customChip, customLp)
-
-        // UI Header for Song Sections
-        col.add(horizontal().apply {
-            add(text("Song Sections", 12, navy, true), 0, -2, 1f)
-            add(text("Paste Full Lyrics", 12, purple, bold = true).apply {
-                setPadding(dp(8), dp(4), dp(8), dp(4))
-                isClickable = true
-                isFocusable = true
-                setOnClickListener {
-                    val pasteInput = EditText(this@AdminActivity).apply {
-                        hint = "Paste lyrics with Verse/Chorus headers..."
-                        minLines = 6
-                        isSingleLine = false
-                    }
-                    AlertDialog.Builder(this@AdminActivity)
-                        .setTitle("Paste Full Lyrics")
-                        .setMessage("Sections will be auto-detected and split into cards.")
-                        .setView(pasteInput)
-                        .setPositiveButton("Import") { _, _ ->
-                            val pasted = pasteInput.text.toString()
-                            if (pasted.isNotBlank()) {
-                                sectionsContainer.removeAllViews()
-                                sectionList.clear()
-                                val parsed = ChordSheet.splitSections(pasted)
-                                if (parsed.isEmpty()) {
-                                    addSectionCard("Verse 1", pasted)
-                                } else {
-                                    parsed.forEach { (h, body) ->
-                                        addSectionCard(h, body)
-                                    }
-                                }
-                                toast("Imported ${sectionList.size} sections")
-                            }
-                        }
-                        .setNegativeButton("Cancel", null)
-                        .show()
-                }
-            }, -2, -2)
         })
-        col.space(6)
-        col.add(sectionPickerScroll, -1, dp(42))
-        col.space(12)
-
-        // Quick Insert Chords Header & Bar
-        col.add(text("Quick Insert Chord (Tap to insert at cursor)", 12, navy, true))
-        col.space(6)
-        col.add(chordPaletteScroll, -1, dp(42))
-        col.space(16)
-
-        // Add initial section cards
-        if (initialSections.isNotEmpty()) {
-            initialSections.forEach { (h, body) ->
-                addSectionCard(h, body)
-            }
-        } else {
-            addSectionCard("Verse 1")
-            addSectionCard("Chorus")
-        }
-
-        col.add(sectionsContainer)
-        col.space(16)
 
         col.add(text("Reference Link", 12, navy, true)); col.space(8); col.add(link, -1, 48); col.space(20)
 
@@ -4098,14 +3910,12 @@ class AdminActivity : AppCompatActivity() {
             add(previewSheetText, -1, -2)
         }); col.space(24)
 
-        refreshChordPalette()
         updateTransposePreview(activePreviewChord)
 
         key.addTextChangedListener(object : android.text.TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
             override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
             override fun afterTextChanged(s: android.text.Editable?) {
-                refreshChordPalette()
                 updateTransposePreview(activePreviewChord)
             }
         })
@@ -4115,7 +3925,7 @@ class AdminActivity : AppCompatActivity() {
             val artistName = artist.text.toString().trim()
             val tempo = bpm.text.toString().toIntOrNull()
             val songKey = key.text.toString().trim()
-            val sheetContent = getFullAssembledSheet()
+            val sheetContent = lyrics.text.toString().trim()
 
             val refUrl = link.text.toString().trim()
             val normalizedRef = SongData.normalizeReferenceUrl(refUrl)
@@ -4124,6 +3934,7 @@ class AdminActivity : AppCompatActivity() {
                 artistName.isBlank() -> invalid(artist, "Enter an artist.")
                 ChordSheet.keyPitch(songKey) < 0 -> invalid(key, "Enter a key such as C, Eb, F# or Am.")
                 tempo == null || tempo !in 1..400 -> invalid(bpm, "Enter BPM from 1 to 400.")
+                sheetContent.isBlank() -> invalid(lyrics, "Enter lyrics & chords.")
                 else -> {
                     val songId = currentSong?.id?.ifBlank { "song_${System.currentTimeMillis()}" } ?: "song_${System.currentTimeMillis()}"
                     val currentUid = preferences.getString("userId", "").orEmpty().ifBlank { AuthManager.currentUser?.uid.orEmpty() }
@@ -6082,8 +5893,13 @@ class AdminActivity : AppCompatActivity() {
             candidateSheet
         }
         val sheet = ChordSheet.formatStanzas(sheetRaw)
+        val assignedRole = preferences.getString(SessionManager.KEY_MINISTRY_ROLE, "").orEmpty()
+            .ifBlank { preferences.getString("ministryRole", "").orEmpty() }
+        val isVocalist = assignedRole.contains("vocal", ignoreCase = true) ||
+                assignedRole.contains("singer", ignoreCase = true) ||
+                (assignedRole.isNotBlank() && !ChordSheet.isInstrumentalist(assignedRole) && !assignedRole.contains("leader", ignoreCase = true))
         val hasChordsInSheet = ChordSheet.hasChords(sheet)
-        val showChords = hasChordsInSheet
+        val showChords = hasChordsInSheet && !isVocalist
         val tempo = currentSong?.bpm?.toString() ?: savedSong.optString("bpm", "74")
         var offset = ((preferences.getInt("chord_transpose_$selectedSong", 0) % 12) + 12) % 12
         val key = text("", 13, purple, true)
@@ -6103,7 +5919,7 @@ class AdminActivity : AppCompatActivity() {
             offset = (target - basePitch + 12) % 12
             val root = roots[target]
             key.text = "Key: $root${if(minor) "m" else ""}    •    $tempo BPM"
-            sheetText.text = ChordSheet.render(sheet, offset, !showChords, root.contains('b') || root == "F")
+            sheetText.text = ChordSheet.render(sheet, if (isVocalist) 0 else offset, !showChords, root.contains('b') || root == "F")
             keyButtons.forEach { (pitch, button) ->
                 val selected = pitch == target
                 button.setTextColor(if(selected) Color.WHITE else navy)
@@ -6111,7 +5927,6 @@ class AdminActivity : AppCompatActivity() {
                 button.isSelected = selected
             }
             preferences.edit().putInt("chord_transpose_$selectedSong", offset).apply()
-
         }
         if (isLeader) {
             col.add(memberButton("Edit Song", navy) { navigate("songEdit") }, -1, 48); col.space(16)
@@ -6122,37 +5937,40 @@ class AdminActivity : AppCompatActivity() {
             val artistDisplay = currentSong?.artist?.ifBlank { savedSong.optString("artist", seedMatch?.artist ?: defaultArtist) } ?: seedMatch?.artist ?: savedSong.optString("artist", defaultArtist)
             add(text("By $artistDisplay", 13, Color.GRAY))
             space(16)
-            add(key); space(16)
-            key.contentDescription = "Song key. Tap to choose any of twelve keys."
-            key.isFocusable = true
-            key.setOnClickListener {
-                AlertDialog.Builder(this@AdminActivity).setTitle("Transpose to key")
-                    .setSingleChoiceItems(roots.map { it + if(minor) "m" else "" }.toTypedArray(),
-                        (basePitch + offset) % 12) { dialog, position ->
-                        renderTarget(position); dialog.dismiss()
-                    }.setNeutralButton("Original") { _,_ -> renderTarget(basePitch) }
-                    .setNegativeButton("Cancel",null).show()
+            add(key)
+            if (!isVocalist) {
+                space(16)
+                key.contentDescription = "Song key. Tap to choose any of twelve keys."
+                key.isFocusable = true
+                key.setOnClickListener {
+                    AlertDialog.Builder(this@AdminActivity).setTitle("Transpose to key")
+                        .setSingleChoiceItems(roots.map { it + if(minor) "m" else "" }.toTypedArray(),
+                            (basePitch + offset) % 12) { dialog, position ->
+                            renderTarget(position); dialog.dismiss()
+                        }.setNeutralButton("Original") { _,_ -> renderTarget(basePitch) }
+                        .setNegativeButton("Cancel",null).show()
+                }
+                add(text("Transpose", 12, Color.GRAY)); space(8)
+                roots.chunked(6).forEachIndexed { rowIndex, row ->
+                    if(rowIndex > 0) space(8)
+                    add(horizontal().apply {
+                        row.forEach { chord ->
+                            val pitch = ChordSheet.pitch(chord)
+                            add(text(chord + if(minor) "m" else "", 12, navy, true, true).apply {
+                                background = SongControlStyle.background(resources)
+                                contentDescription = "Transpose to $text"
+                                setOnClickListener { renderTarget(pitch) }
+                                isFocusable = true
+                                keyButtons.add(pitch to this)
+                            }, 0, 48, 1f)
+                        }
+                    })
+                }
+                add(text("Original key", 12, purple).apply {
+                    isFocusable = true
+                    setOnClickListener { renderTarget(basePitch) }
+                }, -1, 36)
             }
-            add(text("Transpose", 12, Color.GRAY)); space(8)
-            roots.chunked(6).forEachIndexed { rowIndex, row ->
-                if(rowIndex > 0) space(8)
-                add(horizontal().apply {
-                    row.forEach { chord ->
-                        val pitch = ChordSheet.pitch(chord)
-                        add(text(chord + if(minor) "m" else "", 12, navy, true, true).apply {
-                            background = SongControlStyle.background(resources)
-                            contentDescription = "Transpose to $text"
-                            setOnClickListener { renderTarget(pitch) }
-                            isFocusable = true
-                            keyButtons.add(pitch to this)
-                        }, 0, 48, 1f)
-                    }
-                })
-            }
-            add(text("Original key", 12, purple).apply {
-                isFocusable = true
-                setOnClickListener { renderTarget(basePitch) }
-            }, -1, 36)
         }); col.space(24)
         col.add(panel().apply {
             val metronome = MetronomeView(this@AdminActivity, preferences, selectedSong, tempo.toIntOrNull() ?: 74)

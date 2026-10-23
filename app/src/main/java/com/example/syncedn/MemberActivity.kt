@@ -4857,8 +4857,12 @@ space(48)
             candidateSheet
         }
         val sheet = ChordSheet.formatStanzas(sheetRaw)
+        val assignedRole = songAssignedRoles().ifBlank { preferences.getString("ministryRole", "").orEmpty() }
+        val isVocalist = assignedRole.contains("vocal", ignoreCase = true) ||
+                assignedRole.contains("singer", ignoreCase = true) ||
+                (assignedRole.isNotBlank() && !ChordSheet.isInstrumentalist(assignedRole) && !assignedRole.contains("leader", ignoreCase = true))
         val hasChordsInSheet = ChordSheet.hasChords(sheet)
-        val showChords = hasChordsInSheet
+        val showChords = hasChordsInSheet && !isVocalist
         val tempo = currentSong?.bpm?.toString() ?: savedSong.optString("bpm", "74")
         var offset = ((preferences.getInt("chord_transpose_$selectedSong", 0) % 12) + 12) % 12
         val key = text("", 13, purple, true)
@@ -4878,7 +4882,7 @@ space(48)
             offset = (target - basePitch + 12) % 12
             val root = roots[target]
             key.text = "Key: $root${if(minor) "m" else ""}    •    $tempo BPM"
-            sheetText.text = ChordSheet.render(sheet, offset, !showChords, root.contains('b') || root == "F")
+            sheetText.text = ChordSheet.render(sheet, if (isVocalist) 0 else offset, !showChords, root.contains('b') || root == "F")
             keyButtons.forEach { (pitch, button) ->
                 val selected = pitch == target
                 button.setTextColor(if(selected) Color.WHITE else navy)
@@ -4886,7 +4890,6 @@ space(48)
                 button.isSelected = selected
             }
             preferences.edit().putInt("chord_transpose_$selectedSong", offset).apply()
-
         }
         
         col.add(panel().apply {
@@ -4895,37 +4898,40 @@ space(48)
             val artistDisplay = currentSong?.artist?.ifBlank { savedSong.optString("artist", seedMatch?.artist ?: defaultArtist) } ?: seedMatch?.artist ?: savedSong.optString("artist", defaultArtist)
             add(text("By $artistDisplay", 13, Color.GRAY))
             space(16)
-            add(key); space(16)
-            key.contentDescription = "Song key. Tap to choose any of twelve keys."
-            key.isFocusable = true
-            key.setOnClickListener {
-                AlertDialog.Builder(this@MemberActivity).setTitle("Transpose to key")
-                    .setSingleChoiceItems(roots.map { it + if(minor) "m" else "" }.toTypedArray(),
-                        (basePitch + offset) % 12) { dialog, position ->
-                        renderTarget(position); dialog.dismiss()
-                    }.setNeutralButton("Original") { _,_ -> renderTarget(basePitch) }
-                    .setNegativeButton("Cancel",null).show()
+            add(key)
+            if (!isVocalist) {
+                space(16)
+                key.contentDescription = "Song key. Tap to choose any of twelve keys."
+                key.isFocusable = true
+                key.setOnClickListener {
+                    AlertDialog.Builder(this@MemberActivity).setTitle("Transpose to key")
+                        .setSingleChoiceItems(roots.map { it + if(minor) "m" else "" }.toTypedArray(),
+                            (basePitch + offset) % 12) { dialog, position ->
+                            renderTarget(position); dialog.dismiss()
+                        }.setNeutralButton("Original") { _,_ -> renderTarget(basePitch) }
+                        .setNegativeButton("Cancel",null).show()
+                }
+                add(text("Transpose", 12, Color.GRAY)); space(8)
+                roots.chunked(6).forEachIndexed { rowIndex, row ->
+                    if(rowIndex > 0) space(8)
+                    add(horizontal().apply {
+                        row.forEach { chord ->
+                            val pitch = ChordSheet.pitch(chord)
+                            add(text(chord + if(minor) "m" else "", 12, navy, true, true).apply {
+                                background = SongControlStyle.background(resources)
+                                contentDescription = "Transpose to $text"
+                                setOnClickListener { renderTarget(pitch) }
+                                isFocusable = true
+                                keyButtons.add(pitch to this)
+                            }, 0, 48, 1f)
+                        }
+                    })
+                }
+                add(text("Original key", 12, purple).apply {
+                    isFocusable = true
+                    setOnClickListener { renderTarget(basePitch) }
+                }, -1, 36)
             }
-            add(text("Transpose", 12, Color.GRAY)); space(8)
-            roots.chunked(6).forEachIndexed { rowIndex, row ->
-                if(rowIndex > 0) space(8)
-                add(horizontal().apply {
-                    row.forEach { chord ->
-                        val pitch = ChordSheet.pitch(chord)
-                        add(text(chord + if(minor) "m" else "", 12, navy, true, true).apply {
-                            background = SongControlStyle.background(resources)
-                            contentDescription = "Transpose to $text"
-                            setOnClickListener { renderTarget(pitch) }
-                            isFocusable = true
-                            keyButtons.add(pitch to this)
-                        }, 0, 48, 1f)
-                    }
-                })
-            }
-            add(text("Original key", 12, purple).apply {
-                isFocusable = true
-                setOnClickListener { renderTarget(basePitch) }
-            }, -1, 36)
         }); col.space(24)
         col.add(panel().apply {
             val metronome = MetronomeView(this@MemberActivity, preferences, selectedSong, tempo.toIntOrNull() ?: 74)
