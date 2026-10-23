@@ -5044,14 +5044,44 @@ space(48)
             add(sheetText, -1, -2)
         }); col.space(24)
         renderTarget((basePitch + offset) % 12)
-        col.add(text("Reference Link", 13, navy, true)); col.space(10)
-        col.add(memberButton("Open in YouTube App", navy) {
-            val reference = currentSong?.referenceUrl.orEmpty().ifBlank { savedSong.optString("link") }
-            val url = if (reference.startsWith("https://") || reference.startsWith("http://")) reference
-                else "https://www.youtube.com/results?search_query=" + Uri.encode("$selectedSong worship")
-            try { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }
-            catch (_: Exception) { toast("No browser available.") }
-        }, -1, 48)
+        col.add(text("Reference Link", 13, navy, true)); col.space(8)
+        val reference = currentSong?.referenceUrl.orEmpty().ifBlank { savedSong.optString("link") }
+        val displayUrl = if (reference.startsWith("https://") || reference.startsWith("http://")) reference
+            else if (reference.isNotBlank()) "https://$reference"
+            else "https://www.youtube.com/results?search_query=" + Uri.encode("$selectedSong worship")
+        val linkCard = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            background = bg(Color.rgb(241, 245, 249), 12, Color.rgb(203, 213, 225))
+            setPadding(dp(14), dp(12), dp(14), dp(12))
+            isClickable = true
+            isFocusable = true
+            contentDescription = "Song Reference Link: $displayUrl"
+
+            addView(Symbol(this@MemberActivity, "music", Color.rgb(37, 99, 235)), dp(20), dp(20))
+            val urlText = text(displayUrl, 13, Color.rgb(37, 99, 235)).apply {
+                paintFlags = paintFlags or android.graphics.Paint.UNDERLINE_TEXT_FLAG
+                maxLines = 2
+                ellipsize = android.text.TextUtils.TruncateAt.MIDDLE
+                setPadding(dp(10), 0, 0, 0)
+            }
+            addView(urlText, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+
+            setOnClickListener {
+                try {
+                    val clipboard = getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                    val clip = android.content.ClipData.newPlainText("Reference Link", displayUrl)
+                    clipboard.setPrimaryClip(clip)
+                    toast("Link copied: $displayUrl")
+                } catch (_: Exception) {}
+                try {
+                    startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(displayUrl)))
+                } catch (_: Exception) {
+                    toast("No browser available.")
+                }
+            }
+        }
+        col.add(linkCard, -1, -2)
     }
 
     private fun lineupView(): View = memberPage("Song Lineup", "service") { col ->

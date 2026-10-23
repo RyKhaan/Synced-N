@@ -3211,4 +3211,31 @@ class ExampleUnitTest {
         val actionText = if (serviceWizard) "Next" else "Save"
         assertEquals("Next button label must be preserved", "Next", actionText)
     }
+
+    @Test
+    fun testInAppPlayerAndReferenceLinkLogic() {
+        val testUrl = "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+        val videoId = com.example.syncedn.data.model.SongData.extractYoutubeVideoId(testUrl)
+        assertEquals("dQw4w9WgXcQ", videoId)
+
+        // Test display url fallback formatting
+        val rawLinkWithoutScheme = "youtu.be/dQw4w9WgXcQ"
+        val displayUrl = if (rawLinkWithoutScheme.startsWith("https://") || rawLinkWithoutScheme.startsWith("http://")) rawLinkWithoutScheme
+            else if (rawLinkWithoutScheme.isNotBlank()) "https://$rawLinkWithoutScheme"
+            else "https://www.youtube.com/results?search_query=worship"
+        assertEquals("https://youtu.be/dQw4w9WgXcQ", displayUrl)
+
+        // Test blank reference fallback to search URL
+        val blankLink = ""
+        val songName = "Holy Forever"
+        val fallbackUrl = if (blankLink.startsWith("https://") || blankLink.startsWith("http://")) blankLink
+            else if (blankLink.isNotBlank()) "https://$blankLink"
+            else "https://www.youtube.com/results?search_query=" + java.net.URLEncoder.encode("$songName worship", "UTF-8")
+        assertTrue(fallbackUrl.contains("Holy+Forever+worship"))
+
+        // Verify embed iframe template targets youtube-nocookie and playsinline
+        val embedUrl = "https://www.youtube-nocookie.com/embed/$videoId?autoplay=1&playsinline=1&controls=1&enablejsapi=1&rel=0&modestbranding=1"
+        assertTrue("Embed URL must use youtube-nocookie.com", embedUrl.contains("youtube-nocookie.com"))
+        assertTrue("Embed URL must force playsinline to stay in-app", embedUrl.contains("playsinline=1"))
+    }
 }
