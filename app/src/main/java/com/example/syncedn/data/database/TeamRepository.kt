@@ -3,6 +3,7 @@ package com.example.syncedn.data.database
 import com.example.syncedn.data.model.AnnouncementData
 import com.example.syncedn.data.model.ChatMessage
 import com.example.syncedn.data.model.ServiceData
+import com.example.syncedn.data.model.ServiceAssignment
 import com.example.syncedn.data.model.SongData
 import com.example.syncedn.data.model.SubstitutionData
 import com.example.syncedn.data.model.TeamData
@@ -619,6 +620,59 @@ object TeamRepository {
     }
 
     /**
+     * Subscribes to real-time team roster updates from Cloud Firestore.
+     * Fires whenever a member joins, is removed, or updates their profile in /users.
+     */
+    fun subscribeToRoster(
+        teamCode: String,
+        preferences: android.content.SharedPreferences? = null,
+        onUpdate: (List<TeamMember>) -> Unit
+    ): ListenerRegistration? {
+        val code = teamCode.trim().uppercase()
+        if (code.isBlank()) return null
+
+        return try {
+            db.collection(USERS_COLLECTION)
+                .whereEqualTo("teamCode", code)
+                .addSnapshotListener { snapshot, error ->
+                    if (error != null) {
+                        android.util.Log.e("TeamRepository", "subscribeToRoster error: ${error.message}", error)
+                        return@addSnapshotListener
+                    }
+                    if (snapshot == null) return@addSnapshotListener
+
+                    val list = mutableListOf<TeamMember>()
+                    for (doc in snapshot.documents) {
+                        val data = doc.data ?: continue
+                        val mapWithId = data.toMutableMap()
+                        if (!mapWithId.containsKey("uid") || (mapWithId["uid"] as? String).isNullOrBlank()) {
+                            mapWithId["uid"] = doc.id
+                        }
+                        val member = TeamMember.fromMap(mapWithId)
+                        if (member.removedByLeader || member.teamCode.trim().uppercase() != code) {
+                            continue
+                        }
+                        list.add(member)
+                    }
+
+                    list.sortWith(compareByDescending<TeamMember> { it.role.equals("Leader", true) }
+                        .thenBy { it.fullName.ifBlank { it.username } })
+
+                    saveRosterLocally(code, list, preferences)
+                    val memList = cachedRosters.getOrPut(code) { java.util.Collections.synchronizedList(mutableListOf()) }
+                    synchronized(memList) {
+                        memList.clear()
+                        memList.addAll(list)
+                    }
+                    onUpdate(list)
+                }
+        } catch (e: Throwable) {
+            android.util.Log.e("TeamRepository", "subscribeToRoster exception: ${e.message}", e)
+            null
+        }
+    }
+
+    /**
      * Updates a member's ministry role (e.g. "Vocalist", "Guitarist") in Firestore and local cache.
      * Matches in-memory and Firestore records by memberUid, memberEmail, and/or memberName (fullName / username).
      * Automatically persists to SharedPreferences if preferences is provided.
@@ -1148,12 +1202,20 @@ object TeamRepository {
             if (curRemoved != null) {
                 curRemoved.remove(uid)
                 if (email.isNotBlank()) curRemoved.remove(email)
+                if (req.userName.isNotBlank()) {
+                    curRemoved.remove(req.userName)
+                    curRemoved.remove(req.userName.trim().lowercase())
+                }
                 prefs.edit().putStringSet("team_removed_members_$code", curRemoved).apply()
             }
             val genRemoved = prefs.getStringSet("removedMembers", null)?.toMutableSet()
             if (genRemoved != null) {
                 genRemoved.remove(uid)
                 if (email.isNotBlank()) genRemoved.remove(email)
+                if (req.userName.isNotBlank()) {
+                    genRemoved.remove(req.userName)
+                    genRemoved.remove(req.userName.trim().lowercase())
+                }
                 prefs.edit().putStringSet("removedMembers", genRemoved).apply()
             }
         }
@@ -2993,9 +3055,13 @@ object TeamRepository {
         val updatedAssignments = service.assignments.map { assignment ->
             val matchesRole = assignment.role.equals(sub.role, ignoreCase = true)
             val matchesTarget = (targetUid.isNotBlank() && assignment.uid == targetUid) ||
-                    (targetName.isNotBlank() && assignment.name.equals(targetName, ignoreCase = true))
+                    (targetName.isNotBlank() && (
+                        assignment.name.equals(targetName, ignoreCase = true) ||
+                        assignment.name.contains(targetName, ignoreCase = true) ||
+                        targetName.contains(assignment.name, ignoreCase = true)
+                    ))
 
-            if (!replaced && (matchesTarget || (matchesRole && targetUid.isBlank()))) {
+            if (!replaced && (matchesTarget || (matchesRole && (targetUid.isBlank() || targetName.isBlank())))) {
                 replaced = true
                 assignment.copy(
                     uid = newUid,
@@ -3013,6 +3079,14 @@ object TeamRepository {
                 updatedAssignments[roleIndex] = old.copy(
                     uid = newUid,
                     name = newName
+                )
+            } else {
+                updatedAssignments.add(
+                    ServiceAssignment(
+                        uid = newUid,
+                        name = newName,
+                        role = sub.role
+                    )
                 )
             }
         }
@@ -3197,7 +3271,10 @@ object TeamRepository {
                         val updated = replaceAssignmentInService(svc, acceptedSub)
                         saveServiceLocally(code, updated, preferences)
                         lastServicesFetchTimes[code] = 0L
-                        saveService(code, updated, preferences) { _ ->
+                        saveService(code, updated, preferences) { svcResult ->
+                            if (!svcResult.isSuccess) {
+                                android.util.Log.e("TeamRepository", "saveService failed on substitution accept", svcResult.exceptionOrNull())
+                            }
                             commitSubstitutionStatus()
                         }
                     } else {

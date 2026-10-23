@@ -2603,4 +2603,98 @@ class ExampleUnitTest {
         assertEquals("", prefs.getString("teamName", ""))
         assertEquals("", prefs.getString("teamCode", ""))
     }
+
+    @Test
+    fun testTeamMemberRemovedByLeaderSerialization() {
+        val member = com.example.syncedn.data.model.TeamMember(
+            uid = "m_uid_99",
+            fullName = "Joshua Doe",
+            username = "joshua",
+            email = "joshua@syncedn.org",
+            role = "Member",
+            ministryRole = "Vocalist",
+            teamCode = "NGK8VN",
+            removedByLeader = false
+        )
+        val map = member.toMap()
+        assertEquals(false, map["removedByLeader"])
+
+        val deserialized = com.example.syncedn.data.model.TeamMember.fromMap(map)
+        assertEquals("m_uid_99", deserialized.uid)
+        assertEquals("Joshua Doe", deserialized.fullName)
+        assertEquals(false, deserialized.removedByLeader)
+
+        val removedMap = map.toMutableMap()
+        removedMap["removedByLeader"] = true
+        val removedMember = com.example.syncedn.data.model.TeamMember.fromMap(removedMap)
+        assertEquals(true, removedMember.removedByLeader)
+    }
+
+    @Test
+    fun testReplaceAssignmentInServiceFuzzyNameMatching() {
+        val initialAssignments = listOf(
+            com.example.syncedn.data.model.ServiceAssignment(
+                uid = "u1",
+                name = "YANYAN",
+                role = "Worship Leader"
+            )
+        )
+        val service = com.example.syncedn.data.model.ServiceData(
+            id = "svc_test_fuzzy",
+            teamCode = "NGK8VN",
+            title = "Sunday Service",
+            assignments = initialAssignments
+        )
+        val sub = com.example.syncedn.data.model.SubstitutionData(
+            id = "sub_fuzzy",
+            teamCode = "NGK8VN",
+            serviceId = "svc_test_fuzzy",
+            serviceTitle = "Sunday Service",
+            requesterUid = "u1",
+            requesterName = "Yanyan Genturo",
+            role = "Worship Leader",
+            substituteUid = "u2",
+            substituteName = "Angelo Daniel",
+            status = "Pending",
+            type = "Exclusion"
+        )
+
+        val updated = com.example.syncedn.data.database.TeamRepository.replaceAssignmentInService(service, sub)
+        assertEquals(1, updated.assignments.size)
+        assertEquals("u2", updated.assignments[0].uid)
+        assertEquals("Angelo Daniel", updated.assignments[0].name)
+        assertEquals("Worship Leader", updated.assignments[0].role)
+    }
+
+    @Test
+    fun testApproveRejoinRequestClearsFullNameFromRemovedMembers() {
+        val prefs = FakePreferences()
+        val code = "NGK8VN"
+        val curRemoved = mutableSetOf("user_123", "yanyangenturo@gmail.com", "YANYAN", "yanyan")
+        prefs.edit()
+            .putStringSet("team_removed_members_$code", curRemoved)
+            .putStringSet("removedMembers", curRemoved)
+            .apply()
+
+        val req = com.example.syncedn.data.model.RejoinRequestData(
+            id = "req_1",
+            teamCode = code,
+            userUid = "user_123",
+            userName = "YANYAN",
+            userEmail = "yanyangenturo@gmail.com",
+            status = "Pending"
+        )
+
+        com.example.syncedn.data.database.TeamRepository.approveRejoinRequest(code, req, "WISE MAN TEAM", prefs)
+
+        val postTeamRemoved = prefs.getStringSet("team_removed_members_$code", mutableSetOf<String>()).orEmpty()
+        val postGenRemoved = prefs.getStringSet("removedMembers", mutableSetOf<String>()).orEmpty()
+
+        assertFalse(postTeamRemoved.contains("user_123"))
+        assertFalse(postTeamRemoved.contains("yanyangenturo@gmail.com"))
+        assertFalse(postTeamRemoved.contains("YANYAN"))
+        assertFalse(postGenRemoved.contains("user_123"))
+        assertFalse(postGenRemoved.contains("yanyangenturo@gmail.com"))
+        assertFalse(postGenRemoved.contains("YANYAN"))
+    }
 }
