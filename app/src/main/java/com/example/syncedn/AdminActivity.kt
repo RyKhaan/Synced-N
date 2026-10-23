@@ -369,8 +369,18 @@ class AdminActivity : AppCompatActivity() {
             .ifBlank { FirestoreManager.findCodeByTeamName(teamName).orEmpty() }
         if (teamName.isNotBlank()) {
             val userMinistry = preferences.getString("ministryRole", "").orEmpty()
-            val userRole = preferences.getString("role", if (isLeader) "Leader" else "Member").orEmpty()
-            val effectiveRole = if (emailLower == "ryanlloydgenturo@gmail.com" || userMinistry.equals("Substitute Leader", true) || userRole.equals("Leader", true)) "Leader" else "Member"
+            val cleanTeamLower = teamName.trim().lowercase()
+            val teamLeaderEmail = preferences.getString("team_leader_email_$cleanTeamLower", "").orEmpty().trim().lowercase()
+            val isPermanentLeader = emailLower == "ryanlloydgenturo@gmail.com" ||
+                                    (teamLeaderEmail.isNotBlank() && teamLeaderEmail == emailLower)
+            if (!isPermanentLeader && !userMinistry.equals("Substitute Leader", ignoreCase = true)) {
+                saveUserTeamState("Member", teamName, activeCode)
+                val intent = Intent(this, MemberActivity::class.java).putExtra("startPage", intent.getStringExtra("startPage") ?: "home")
+                startActivity(intent)
+                finish()
+                return
+            }
+            val effectiveRole = if (isPermanentLeader || userMinistry.equals("Substitute Leader", ignoreCase = true)) "Leader" else "Member"
             saveUserTeamState(effectiveRole, teamName, activeCode)
         }
         successFlow = savedInstanceState?.getString("successFlow") ?: "register"
@@ -429,8 +439,10 @@ class AdminActivity : AppCompatActivity() {
                     val currentEmail = preferences.getString("email", "").orEmpty().trim().lowercase()
                     val currentUid = com.example.syncedn.data.auth.AuthManager.currentUser?.uid?.takeIf { it.isNotBlank() }
                         ?: preferences.getString(SessionManager.KEY_USER_ID, "").orEmpty()
+                    val cleanTeamLower = teamName.trim().lowercase()
+                    val teamLeaderEmail = preferences.getString("team_leader_email_$cleanTeamLower", "").orEmpty().trim().lowercase()
                     val isPrimaryLeader = currentEmail == "ryanlloydgenturo@gmail.com" ||
-                                          preferences.getString("role", "").equals("Leader", true)
+                                          (teamLeaderEmail.isNotBlank() && teamLeaderEmail == currentEmail)
                     if (!isPrimaryLeader) {
                         val myEntry = list.find { m ->
                             (currentUid.isNotBlank() && m.uid == currentUid) ||
@@ -439,8 +451,12 @@ class AdminActivity : AppCompatActivity() {
                         if (myEntry != null && !myEntry.ministryRole.equals("Substitute Leader", ignoreCase = true)) {
                             val newRole = myEntry.ministryRole.ifBlank { "Member" }
                             preferences.edit {
+                                putString("role", "Member")
+                                putString(SessionManager.KEY_ROLE, "Member")
                                 putString("ministryRole", newRole)
                                 putString(SessionManager.KEY_MINISTRY_ROLE, newRole)
+                                if (currentUid.isNotBlank()) putString("user_role_$currentUid", "Member")
+                                if (currentEmail.isNotBlank()) putString("email_role_$currentEmail", "Member")
                             }
                             toast("Your Substitute Leader assignment has ended.")
                             val intent = Intent(this@AdminActivity, MemberActivity::class.java)
@@ -459,8 +475,10 @@ class AdminActivity : AppCompatActivity() {
                 preferences.getString("userId", "").orEmpty()
             }
         val myAdminEmail = preferences.getString("email", "").orEmpty().trim().lowercase()
+        val cleanTeamLower = teamName.trim().lowercase()
+        val teamLeaderEmail = preferences.getString("team_leader_email_$cleanTeamLower", "").orEmpty().trim().lowercase()
         val isAdminPrimary = myAdminEmail == "ryanlloydgenturo@gmail.com" ||
-                             preferences.getString("role", "").equals("Leader", true)
+                             (teamLeaderEmail.isNotBlank() && teamLeaderEmail == myAdminEmail)
         if (!isAdminPrimary && myAdminUid.isNotBlank()) {
             userMembershipListener = com.google.firebase.firestore.FirebaseFirestore.getInstance()
                 .collection("users").document(myAdminUid)
@@ -469,8 +487,12 @@ class AdminActivity : AppCompatActivity() {
                     val ministryRoleSnap = snapshot.getString("ministryRole").orEmpty()
                     if (!ministryRoleSnap.equals("Substitute Leader", ignoreCase = true)) {
                         preferences.edit {
+                            putString("role", "Member")
+                            putString(SessionManager.KEY_ROLE, "Member")
                             putString("ministryRole", ministryRoleSnap.ifBlank { "Member" })
                             putString(SessionManager.KEY_MINISTRY_ROLE, ministryRoleSnap.ifBlank { "Member" })
+                            if (myAdminUid.isNotBlank()) putString("user_role_$myAdminUid", "Member")
+                            if (myAdminEmail.isNotBlank()) putString("email_role_$myAdminEmail", "Member")
                         }
                         runOnUiThread {
                             if (!isFinishing && !isDestroyed) {
@@ -2501,12 +2523,13 @@ class AdminActivity : AppCompatActivity() {
                         }
                     }
                 }
-                var updated = if (override.isNotBlank()) {
-                    val isOverrideLeader = override.equals("Substitute Leader", ignoreCase = true) ||
-                                           override.equals("Worship Leader", ignoreCase = true) ||
+                val liveRole = m.ministryRole.takeIf { it.isNotBlank() } ?: override
+                var updated = if (liveRole.isNotBlank()) {
+                    val isOverrideLeader = liveRole.equals("Substitute Leader", ignoreCase = true) ||
+                                           liveRole.equals("Worship Leader", ignoreCase = true) ||
                                            emailLower == "ryanlloydgenturo@gmail.com" ||
                                            m.fullName.equals("Ryan Lloyd Genturo", ignoreCase = true)
-                    m.copy(ministryRole = override, role = if (isOverrideLeader) "Leader" else "Member")
+                    m.copy(ministryRole = liveRole, role = if (isOverrideLeader) "Leader" else "Member")
                 } else m
                 if (updated.photoUri.isBlank()) {
                     val p = preferences.getString("user_photo_${m.uid}", "").orEmpty().ifBlank {
@@ -6049,15 +6072,6 @@ class AdminActivity : AppCompatActivity() {
                 })
         }
         layoutParams = LinearLayout.LayoutParams(-1, dp(if (showDetails) 156 else 88))
-        addOnLayoutChangeListener { _, left, _, right, _, _, _, _, _ ->
-            val w = right - left
-            if (w > 0) {
-                val imageWidth = (w * (if (showDetails) 237f else 130f) / 360f).toInt()
-                if (photograph.layoutParams.width != imageWidth) {
-                    photograph.layoutParams = photograph.layoutParams.apply { width = imageWidth }
-                }
-            }
-        }
     }
     private fun teamTabs(): View = horizontal().apply {
         setPadding(dp(20), dp(10), dp(12), dp(10))
@@ -6160,7 +6174,7 @@ class AdminActivity : AppCompatActivity() {
                                             runOnUiThread {
                                                 if (res.isSuccess) {
                                                     val idx = chatMessages.indexOfFirst { it.id == msg.id }
-                                                    if (idx != -1) chatMessages[idx] = chatMessages[idx].copy(text = newTxt)
+                                                    if (idx != -1) chatMessages[idx] = chatMessages[idx].copy(text = newTxt, isEdited = true, editedAt = System.currentTimeMillis())
                                                     navigate("teams")
                                                 } else toast("Failed to edit message")
                                             }
@@ -6192,7 +6206,8 @@ class AdminActivity : AppCompatActivity() {
             }
 
             val timeStr = timeFormat.format(java.util.Date(msg.timestamp))
-            val caption = text("$timeStr  ✓✓ Delivered", 10, Color.rgb(148, 163, 184)).apply {
+            val statusLabel = if (msg.isEdited) "$timeStr  (edited)  ✓✓ Delivered" else "$timeStr  ✓✓ Delivered"
+            val caption = text(statusLabel, 10, Color.rgb(148, 163, 184)).apply {
                 setPadding(0, dp(2), dp(4), 0)
             }
             bubbleContainer.addView(caption, LinearLayout.LayoutParams(
@@ -6291,7 +6306,8 @@ class AdminActivity : AppCompatActivity() {
             ).apply { gravity = Gravity.START })
 
             val timeStr = timeFormat.format(java.util.Date(msg.timestamp))
-            val caption = text(timeStr, 10, Color.rgb(148, 163, 184)).apply {
+            val statusLabel = if (msg.isEdited) "$timeStr  (edited)" else timeStr
+            val caption = text(statusLabel, 10, Color.rgb(148, 163, 184)).apply {
                 setPadding(dp(4), dp(2), 0, 0)
             }
             bubbleContainer.addView(caption, LinearLayout.LayoutParams(
@@ -6334,12 +6350,37 @@ class AdminActivity : AppCompatActivity() {
                     runOnUiThread {
                         if (page == "teams" && teamTab == "Team Chat") {
                             val existingIds = chatMessages.map { it.id }.toSet()
+                            val newIds = msgs.map { it.id }.toSet()
+                            val hasDeleted = existingIds.any { it !in newIds }
                             val incoming = msgs.filter { it.id !in existingIds }
-                            val mediaUpdated = msgs.filter { m ->
+                            val hasEditedOrUpdated = msgs.any { m ->
                                 val cur = chatMessages.find { it.id == m.id }
-                                cur != null && cur.mediaUrl != m.mediaUrl && m.mediaUrl.isNotBlank()
+                                cur != null && (cur.text != m.text || cur.isEdited != m.isEdited || (cur.mediaUrl != m.mediaUrl && m.mediaUrl.isNotBlank()))
                             }
-                            if (incoming.isNotEmpty()) {
+                            if (hasDeleted || hasEditedOrUpdated) {
+                                chatMessages.clear()
+                                chatMessages.addAll(msgs)
+                                val col = chatMessagesCol
+                                if (col != null) {
+                                    col.removeAllViews()
+                                    chatEmptyView = null
+                                    val myUid = AuthManager.currentUser?.uid?.takeIf { it.isNotBlank() }
+                                        ?: preferences.getString(SessionManager.KEY_USER_ID, "").orEmpty()
+                                    if (chatMessages.isEmpty()) {
+                                        val empty = text("No messages yet. Say hello to your team!", 13, Color.rgb(100, 116, 139), centered = true).apply {
+                                            setPadding(0, dp(40), 0, dp(40))
+                                        }
+                                        chatEmptyView = empty
+                                        col.add(empty, -1, -2)
+                                    } else {
+                                        chatMessages.forEach { msg ->
+                                            col.addView(buildChatMessageBubble(msg, myUid))
+                                        }
+                                    }
+                                } else {
+                                    navigate("teams")
+                                }
+                            } else if (incoming.isNotEmpty()) {
                                 val map = LinkedHashMap<String, ChatMessage>()
                                 chatMessages.forEach { map[it.id] = it }
                                 msgs.forEach { map[it.id] = it }
@@ -6355,14 +6396,13 @@ class AdminActivity : AppCompatActivity() {
                                 } else {
                                     navigate("teams")
                                 }
-                            } else if (mediaUpdated.isNotEmpty()) {
-                                val map = LinkedHashMap<String, ChatMessage>()
-                                chatMessages.forEach { map[it.id] = it }
-                                msgs.forEach { map[it.id] = it }
-                                chatMessages.clear()
-                                chatMessages.addAll(map.values.sortedBy { it.timestamp })
-                                navigate("teams")
                             }
+                        } else {
+                            val map = LinkedHashMap<String, ChatMessage>()
+                            chatMessages.forEach { map[it.id] = it }
+                            msgs.forEach { map[it.id] = it }
+                            chatMessages.clear()
+                            chatMessages.addAll(map.values.sortedBy { it.timestamp })
                         }
                     }
                 }
