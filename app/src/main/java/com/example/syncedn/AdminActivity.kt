@@ -368,7 +368,10 @@ class AdminActivity : AppCompatActivity() {
             .ifBlank { preferences.getString("team_leader_code_${teamName.trim().lowercase()}", "").orEmpty() }
             .ifBlank { FirestoreManager.findCodeByTeamName(teamName).orEmpty() }
         if (teamName.isNotBlank()) {
-            saveUserTeamState("Leader", teamName, activeCode)
+            val userMinistry = preferences.getString("ministryRole", "").orEmpty()
+            val userRole = preferences.getString("role", if (isLeader) "Leader" else "Member").orEmpty()
+            val effectiveRole = if (emailLower == "ryanlloydgenturo@gmail.com" || userMinistry.equals("Substitute Leader", true) || userRole.equals("Leader", true)) "Leader" else "Member"
+            saveUserTeamState(effectiveRole, teamName, activeCode)
         }
         successFlow = savedInstanceState?.getString("successFlow") ?: "register"
         savedInstanceState?.let { state ->
@@ -2498,7 +2501,13 @@ class AdminActivity : AppCompatActivity() {
                         }
                     }
                 }
-                var updated = if (override.isNotBlank()) m.copy(ministryRole = override) else m
+                var updated = if (override.isNotBlank()) {
+                    val isOverrideLeader = override.equals("Substitute Leader", ignoreCase = true) ||
+                                           override.equals("Worship Leader", ignoreCase = true) ||
+                                           emailLower == "ryanlloydgenturo@gmail.com" ||
+                                           m.fullName.equals("Ryan Lloyd Genturo", ignoreCase = true)
+                    m.copy(ministryRole = override, role = if (isOverrideLeader) "Leader" else "Member")
+                } else m
                 if (updated.photoUri.isBlank()) {
                     val p = preferences.getString("user_photo_${m.uid}", "").orEmpty().ifBlank {
                         preferences.getString("email_photo_${emailLower}", "").orEmpty().ifBlank {
@@ -3152,7 +3161,10 @@ class AdminActivity : AppCompatActivity() {
                 m.fullName.equals(name, ignoreCase = true) ||
                 m.username.equals(name, ignoreCase = true)
             }
-            val isLeaderBadge = rosterMatch?.role.equals("Leader", ignoreCase = true) || name.equals("Ryan Lloyd Genturo", ignoreCase = true)
+            val isLeaderBadge = rosterMatch?.ministryRole.equals("Worship Leader", ignoreCase = true) ||
+                                rosterMatch?.ministryRole.equals("Substitute Leader", ignoreCase = true) ||
+                                name.equals("Ryan Lloyd Genturo", ignoreCase = true) ||
+                                rosterMatch?.email.equals("ryanlloydgenturo@gmail.com", ignoreCase = true)
             col.add(memberRow(name, role, if (isLeaderBadge) "Leader" else "Member", photoUri = photoUri, uid = uid))
         }
         col.space(20)
@@ -4398,17 +4410,29 @@ class AdminActivity : AppCompatActivity() {
                 if (targetMember?.fullName.orEmpty().isNotBlank()) map.put(targetMember!!.fullName, selectedRole)
                 if (targetMember?.username.orEmpty().isNotBlank()) map.put(targetMember!!.username, selectedRole)
 
+                val isTargetLeader = selectedRole.equals("Substitute Leader", ignoreCase = true) ||
+                                     selectedRole.equals("Worship Leader", ignoreCase = true) ||
+                                     targetEmail == "ryanlloydgenturo@gmail.com" ||
+                                     roleMember.equals("Ryan Lloyd Genturo", ignoreCase = true)
+                val targetRole = if (isTargetLeader) "Leader" else "Member"
+
                 preferences.edit {
                     putString(SessionManager.KEY_MEMBER_ROLES, map.toString())
-                    if (targetEmail.isNotBlank()) putString("email_ministry_$targetEmail", selectedRole)
-                    if (targetUid.isNotBlank()) putString("user_ministry_$targetUid", selectedRole)
+                    if (targetEmail.isNotBlank()) {
+                        putString("email_ministry_$targetEmail", selectedRole)
+                        putString("email_role_$targetEmail", targetRole)
+                    }
+                    if (targetUid.isNotBlank()) {
+                        putString("user_ministry_$targetUid", selectedRole)
+                        putString("user_role_$targetUid", targetRole)
+                    }
                 }
 
                 teamRoster = teamRoster.map {
                     if ((targetUid.isNotBlank() && it.uid == targetUid) ||
                         (targetEmail.isNotBlank() && it.email.equals(targetEmail, ignoreCase = true)) ||
                         it.fullName == roleMember || it.username == roleMember) {
-                        it.copy(ministryRole = selectedRole)
+                        it.copy(ministryRole = selectedRole, role = targetRole)
                     } else it
                 }
 
@@ -6360,7 +6384,11 @@ class AdminActivity : AppCompatActivity() {
                 roster.forEach { member ->
                     val name = member.fullName.ifBlank { member.username.ifBlank { "Member" } }
                     val role = member.ministryRole.ifBlank { if (member.role.equals("Leader", true)) "Worship Leader" else "Member" }
-                    val badge = if (member.role.equals("Leader", true)) "Leader" else "Member"
+                    val isLeaderBadge = member.email.equals("ryanlloydgenturo@gmail.com", ignoreCase = true) ||
+                                        member.fullName.equals("Ryan Lloyd Genturo", ignoreCase = true) ||
+                                        member.ministryRole.equals("Worship Leader", ignoreCase = true) ||
+                                        member.ministryRole.equals("Substitute Leader", ignoreCase = true)
+                    val badge = if (isLeaderBadge) "Leader" else "Member"
                     col.add(memberRow(name, role, badge, if (isLeader) ({
                         roleMember = name
                         roleMemberUid = member.uid
