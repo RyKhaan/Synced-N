@@ -53,13 +53,19 @@ object FirestoreManager {
             if (completed.compareAndSet(false, true)) {
                 val emailKey = profile?.email?.trim()?.lowercase().orEmpty()
                 val cachedRoleTeam = localUserRoleTeam[uid] ?: localUserRoleTeamByEmail[emailKey]
-                val merged = if (profile != null && cachedRoleTeam != null) {
-                    profile.copy(
-                        role = cachedRoleTeam.first,
-                        teamName = cachedRoleTeam.second,
-                        teamCode = cachedRoleTeam.third
-                    )
-                } else if (profile == null && cachedRoleTeam != null) {
+                val merged = if (profile != null) {
+                    if (profile.removedByLeader || (profile.teamName.isBlank() && profile.teamCode.isBlank())) {
+                        profile
+                    } else if (cachedRoleTeam != null && profile.teamName.isBlank()) {
+                        profile.copy(
+                            role = cachedRoleTeam.first,
+                            teamName = cachedRoleTeam.second,
+                            teamCode = cachedRoleTeam.third
+                        )
+                    } else {
+                        profile
+                    }
+                } else if (cachedRoleTeam != null) {
                     UserProfile(
                         uid = uid,
                         role = cachedRoleTeam.first,
@@ -67,7 +73,7 @@ object FirestoreManager {
                         teamCode = cachedRoleTeam.third
                     )
                 } else {
-                    profile
+                    null
                 }
                 onComplete(Result.success(merged))
             }
@@ -173,6 +179,16 @@ object FirestoreManager {
     /**
      * Clears local in-memory teams (used in unit tests).
      */
+    fun clearUserRoleAndTeam(uid: String = "", email: String = "") {
+        if (uid.isNotBlank()) {
+            localUserRoleTeam.remove(uid)
+        }
+        val cleanEmail = email.trim().lowercase()
+        if (cleanEmail.isNotBlank()) {
+            localUserRoleTeamByEmail.remove(cleanEmail)
+        }
+    }
+
     fun clearLocalTeams() {
         localTeams.clear()
         localUserRoleTeam.clear()
@@ -488,13 +504,19 @@ object FirestoreManager {
             if (completed.compareAndSet(false, true)) {
                 val cached = localUserRoleTeamByEmail[cleanEmail.lowercase()]
                     ?: profile?.uid?.let { localUserRoleTeam[it] }
-                val merged = if (profile != null && cached != null) {
-                    profile.copy(
-                        role = cached.first,
-                        teamName = cached.second,
-                        teamCode = cached.third
-                    )
-                } else if (profile == null && cached != null) {
+                val merged = if (profile != null) {
+                    if (profile.removedByLeader || (profile.teamName.isBlank() && profile.teamCode.isBlank())) {
+                        profile
+                    } else if (cached != null && profile.teamName.isBlank()) {
+                        profile.copy(
+                            role = cached.first,
+                            teamName = cached.second,
+                            teamCode = cached.third
+                        )
+                    } else {
+                        profile
+                    }
+                } else if (cached != null) {
                     val realUid = com.example.syncedn.data.auth.AuthManager.currentUser?.uid
                         ?.takeIf { it.isNotBlank() } ?: "user_${cleanEmail.hashCode()}"
                     UserProfile(

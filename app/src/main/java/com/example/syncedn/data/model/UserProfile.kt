@@ -20,6 +20,8 @@ data class UserProfile(
     val photoUri: String = "",
     val unavailableRanges: List<UnavailableRange> = emptyList(),
     val fcmToken: String = "",
+    val removedByLeader: Boolean = false,
+    val removedTeamCode: String = "",
     val createdAt: Long = System.currentTimeMillis()
 ) {
     fun toMap(): Map<String, Any> = mapOf(
@@ -38,6 +40,8 @@ data class UserProfile(
         "photoUri" to photoUri,
         "unavailableRanges" to unavailableRanges.map { it.toMap() },
         "fcmToken" to fcmToken,
+        "removedByLeader" to removedByLeader,
+        "removedTeamCode" to removedTeamCode,
         "createdAt" to createdAt
     )
 
@@ -61,6 +65,8 @@ data class UserProfile(
                 photoUri = map["photoUri"] as? String ?: "",
                 unavailableRanges = ranges,
                 fcmToken = map["fcmToken"] as? String ?: "",
+                removedByLeader = map["removedByLeader"] as? Boolean ?: false,
+                removedTeamCode = map["removedTeamCode"] as? String ?: "",
                 createdAt = (map["createdAt"] as? Number)?.toLong() ?: System.currentTimeMillis()
             )
         }

@@ -806,15 +806,48 @@ object TeamRepository {
             }
         }
 
-        // Store into preferences removed set
-        if (preferences != null && code.isNotBlank()) {
-            val set = preferences.getStringSet("team_removed_members_$code", null)?.toMutableSet() ?: mutableSetOf()
-            set.add(memberUid)
-            if (emailLower.isNotBlank()) set.add(emailLower)
-            preferences.edit().putStringSet("team_removed_members_$code", set).apply()
+        FirestoreManager.clearUserRoleAndTeam(memberUid, emailLower)
 
-            val currentRoster = getCachedRoster(code, preferences)
-            saveRosterLocally(code, currentRoster, preferences)
+        // Store into preferences removed set
+        if (preferences != null) {
+            if (code.isNotBlank()) {
+                val set = preferences.getStringSet("team_removed_members_$code", null)?.toMutableSet() ?: mutableSetOf()
+                set.add(memberUid)
+                if (emailLower.isNotBlank()) set.add(emailLower)
+                preferences.edit().putStringSet("team_removed_members_$code", set).apply()
+
+                val currentRoster = getCachedRoster(code, preferences)
+                saveRosterLocally(code, currentRoster, preferences)
+            }
+            val genRemoved = preferences.getStringSet("removedMembers", null)?.toMutableSet() ?: mutableSetOf()
+            genRemoved.add(memberUid)
+            if (emailLower.isNotBlank()) genRemoved.add(emailLower)
+            val editor = preferences.edit().putStringSet("removedMembers", genRemoved)
+            if (emailLower.isNotBlank()) {
+                editor.remove("email_team_$emailLower")
+                editor.remove("email_code_$emailLower")
+                editor.remove("email_ministry_$emailLower")
+                editor.putBoolean("email_removed_by_leader_$emailLower", true)
+                if (code.isNotBlank()) editor.putString("email_removed_team_code_$emailLower", code)
+            }
+            if (memberUid.isNotBlank()) {
+                editor.remove("user_team_$memberUid")
+                editor.remove("user_code_$memberUid")
+                editor.remove("user_ministry_$memberUid")
+                editor.putBoolean("user_removed_by_leader_$memberUid", true)
+                if (code.isNotBlank()) editor.putString("user_removed_team_code_$memberUid", code)
+            }
+            val activeUserEmail = preferences.getString("email", "").orEmpty().trim().lowercase()
+            val activeUserId = preferences.getString("userId", "").orEmpty()
+            if (activeUserEmail == emailLower || (memberUid.isNotBlank() && activeUserId == memberUid)) {
+                editor.remove("teamName")
+                editor.remove("teamCode")
+                editor.remove("ministryRole")
+                editor.putString("role", "Member")
+                editor.putBoolean("removedByLeader", true)
+                if (code.isNotBlank()) editor.putString("removedTeamCode", code)
+            }
+            editor.apply()
         }
 
         val updates = mutableMapOf<String, Any>(
@@ -837,9 +870,35 @@ object TeamRepository {
             }
             db.collection(USERS_COLLECTION)
                 .document(memberUid)
-                .update(updates)
-                .addOnSuccessListener { onComplete(Result.success(Unit)) }
-                .addOnFailureListener { onComplete(Result.failure(it)) }
+                .set(updates, com.google.firebase.firestore.SetOptions.merge())
+                .addOnSuccessListener {
+                    if (emailLower.isNotBlank()) {
+                        db.collection(USERS_COLLECTION).whereEqualTo("email", emailLower).get()
+                            .addOnSuccessListener { qSnap ->
+                                qSnap.documents.forEach { doc ->
+                                    doc.reference.set(updates, com.google.firebase.firestore.SetOptions.merge())
+                                }
+                                onComplete(Result.success(Unit))
+                            }
+                            .addOnFailureListener { onComplete(Result.success(Unit)) }
+                    } else {
+                        onComplete(Result.success(Unit))
+                    }
+                }
+                .addOnFailureListener {
+                    if (emailLower.isNotBlank()) {
+                        db.collection(USERS_COLLECTION).whereEqualTo("email", emailLower).get()
+                            .addOnSuccessListener { qSnap ->
+                                qSnap.documents.forEach { doc ->
+                                    doc.reference.set(updates, com.google.firebase.firestore.SetOptions.merge())
+                                }
+                                onComplete(Result.success(Unit))
+                            }
+                            .addOnFailureListener { onComplete(Result.failure(it)) }
+                    } else {
+                        onComplete(Result.failure(it))
+                    }
+                }
         } catch (e: Exception) {
             onComplete(Result.failure(e))
         }
@@ -918,6 +977,20 @@ object TeamRepository {
         val emailLower = email.trim().lowercase()
 
         preferences?.let { prefs ->
+            if (emailLower.isNotBlank() && prefs.getBoolean("email_removed_by_leader_$emailLower", false)) {
+                val rCode = prefs.getString("email_removed_team_code_$emailLower", "").orEmpty()
+                if (rCode.isBlank() || rCode.equals(code, ignoreCase = true)) {
+                    onResult(true)
+                    return
+                }
+            }
+            if (uid.isNotBlank() && prefs.getBoolean("user_removed_by_leader_$uid", false)) {
+                val rCode = prefs.getString("user_removed_team_code_$uid", "").orEmpty()
+                if (rCode.isBlank() || rCode.equals(code, ignoreCase = true)) {
+                    onResult(true)
+                    return
+                }
+            }
             prefs.getStringSet("team_removed_members_$code", null)?.let { set ->
                 val lowerSet = set.map { it.trim().lowercase() }
                 if (lowerSet.contains(uidLower) || (emailLower.isNotBlank() && lowerSet.contains(emailLower))) {
@@ -1085,6 +1158,25 @@ object TeamRepository {
             }
         }
 
+        preferences?.let { prefs ->
+            val editor = prefs.edit()
+            if (email.isNotBlank()) {
+                editor.putBoolean("email_removed_by_leader_$email", false)
+                editor.remove("email_removed_team_code_$email")
+            }
+            if (uid.isNotBlank()) {
+                editor.putBoolean("user_removed_by_leader_$uid", false)
+                editor.remove("user_removed_team_code_$uid")
+            }
+            val activeUserEmail = prefs.getString("email", "").orEmpty().trim().lowercase()
+            val activeUserId = prefs.getString("userId", "").orEmpty()
+            if (activeUserEmail == email || (uid.isNotBlank() && activeUserId == uid)) {
+                editor.putBoolean("removedByLeader", false)
+                editor.remove("removedTeamCode")
+            }
+            editor.apply()
+        }
+
         // 3. Update user doc to restore membership
         val userUpdates = mutableMapOf<String, Any>(
             "removedByLeader" to false,
@@ -1094,7 +1186,15 @@ object TeamRepository {
         )
         if (teamName.isNotBlank()) userUpdates["teamName"] = teamName
         try {
-            db.collection(USERS_COLLECTION).document(uid).update(userUpdates)
+            db.collection(USERS_COLLECTION).document(uid).set(userUpdates, com.google.firebase.firestore.SetOptions.merge())
+            if (email.isNotBlank()) {
+                db.collection(USERS_COLLECTION).whereEqualTo("email", email).get()
+                    .addOnSuccessListener { qSnap ->
+                        qSnap.documents.forEach { doc ->
+                            doc.reference.set(userUpdates, com.google.firebase.firestore.SetOptions.merge())
+                        }
+                    }
+            }
         } catch (_: Throwable) {}
 
         // 4. Update request status in Firestore
@@ -2946,7 +3046,30 @@ object TeamRepository {
 
         return try {
             finalQuery.addSnapshotListener { snapshot, error ->
-                if (error != null || snapshot == null) return@addSnapshotListener
+                if (error != null) {
+                    if (error.code == com.google.firebase.firestore.FirebaseFirestoreException.Code.PERMISSION_DENIED && !isLeader && preferences != null) {
+                        val uid = preferences.getString("userId", "").orEmpty()
+                        val email = preferences.getString("email", "").orEmpty().trim().lowercase()
+                        val isLead = email == "ryanlloydgenturo@gmail.com"
+                        if (!isLead) {
+                            preferences.edit()
+                                .remove("teamName")
+                                .remove("teamCode")
+                                .remove("ministryRole")
+                                .putString("role", "Member")
+                                .remove("email_team_$email")
+                                .remove("email_code_$email")
+                                .remove("user_team_$uid")
+                                .remove("user_code_$uid")
+                                .putBoolean("leftTeam", true)
+                                .putBoolean("removedByLeader", true)
+                                .putString("removedTeamCode", code)
+                                .apply()
+                        }
+                    }
+                    return@addSnapshotListener
+                }
+                if (snapshot == null) return@addSnapshotListener
                 val list = mutableListOf<ServiceData>()
                 for (doc in snapshot.documents) {
                     val data = doc.data ?: continue
@@ -2991,7 +3114,30 @@ object TeamRepository {
                 .document(code)
                 .collection(SUBSTITUTIONS_SUBCOLLECTION)
                 .addSnapshotListener { snapshot, error ->
-                    if (error != null || snapshot == null) return@addSnapshotListener
+                    if (error != null) {
+                        if (error.code == com.google.firebase.firestore.FirebaseFirestoreException.Code.PERMISSION_DENIED && preferences != null) {
+                            val uid = preferences.getString("userId", "").orEmpty()
+                            val email = preferences.getString("email", "").orEmpty().trim().lowercase()
+                            val isLead = email == "ryanlloydgenturo@gmail.com"
+                            if (!isLead) {
+                                preferences.edit()
+                                    .remove("teamName")
+                                    .remove("teamCode")
+                                    .remove("ministryRole")
+                                    .putString("role", "Member")
+                                    .remove("email_team_$email")
+                                    .remove("email_code_$email")
+                                    .remove("user_team_$uid")
+                                    .remove("user_code_$uid")
+                                    .putBoolean("leftTeam", true)
+                                    .putBoolean("removedByLeader", true)
+                                    .putString("removedTeamCode", code)
+                                    .apply()
+                            }
+                        }
+                        return@addSnapshotListener
+                    }
+                    if (snapshot == null) return@addSnapshotListener
                     val list = mutableListOf<SubstitutionData>()
                     for (doc in snapshot.documents) {
                         val data = doc.data ?: continue
