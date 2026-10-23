@@ -3043,4 +3043,40 @@ class ExampleUnitTest {
         assertEquals("Role must be Member, not Leader", "Member", m.role)
         assertEquals("Ministry role must be Member, not Substitute Leader", "Member", m.ministryRole)
     }
+
+    @Test
+    fun testHolyForeverSongSheetEnrichmentAndTransposeKeyAvailability() {
+        val repo = com.example.syncedn.data.database.TeamRepository
+        val prefs = FakePreferences()
+
+        // 1. Simulate an old cached Holy Forever song with plain lyrics and no chords
+        val chordlessHolyForever = com.example.syncedn.data.model.SongData(
+            id = "seed_holy_forever",
+            teamCode = "TESTTEAM",
+            title = "Holy Forever",
+            artist = "Chris Tomlin",
+            key = "C",
+            bpm = 74,
+            sheet = "[Verse]\nA thousand generations falling down in worship\nTo sing the song of ages to the Lamb",
+            lyrics = "A thousand generations falling down in worship\nTo sing the song of ages to the Lamb",
+            referenceUrl = "https://www.youtube.com/watch?v=IkHgxKemCRk"
+        )
+        assertFalse("Initial cached Holy Forever should not have chord tags", com.example.syncedn.ChordSheet.hasChords(chordlessHolyForever.sheet))
+
+        repo.saveSongLocally("TESTTEAM", chordlessHolyForever, prefs)
+
+        // 2. Fetch cached songs - should automatically enrich sheet with chords from default seed
+        val cachedSongs = repo.getCachedSongs("TESTTEAM", prefs)
+        val holyForever = cachedSongs.find { it.title.equals("Holy Forever", ignoreCase = true) }
+        assertNotNull("Holy Forever must be present", holyForever)
+        assertTrue("Enriched Holy Forever sheet must have chords", com.example.syncedn.ChordSheet.hasChords(holyForever!!.sheet))
+        assertTrue("Holy Forever sheet must contain [C] chord", holyForever.sheet.contains("[C]"))
+        assertTrue("Holy Forever sheet must contain [F] chord", holyForever.sheet.contains("[F]"))
+
+        // 3. Verify Key and Transpose calculations
+        val pitch = com.example.syncedn.ChordSheet.keyPitch(holyForever.key)
+        assertEquals("Key C pitch must be 0", 0, pitch)
+        val transposedD = com.example.syncedn.ChordSheet.transposeChord("C", 2, false)
+        assertEquals("C transposed up 2 semitones must be D", "D", transposedD)
+    }
 }
