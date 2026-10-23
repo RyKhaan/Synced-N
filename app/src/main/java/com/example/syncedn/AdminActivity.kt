@@ -1518,14 +1518,15 @@ class AdminActivity : AppCompatActivity() {
         val today = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).apply { timeZone = phtZone }.format(java.util.Date())
         val published = localServices.filter { it.optString("status") == "Published" }
         val upcoming = published.filter { it.optString("date") >= today }.sortedWith(compareBy({ it.optString("date") }, { it.optString("start") }))
-        if (upcoming.isNotEmpty()) {
-            val first = upcoming.first()
-            if (first.optString("coverImageUrl").isBlank() && leaderDraft.optString("id") == first.optString("id") && leaderDraft.optString("coverImageUrl").isNotBlank()) {
-                first.put("coverImageUrl", leaderDraft.optString("coverImageUrl"))
+        val rec = if (upcoming.isNotEmpty()) upcoming.first() else published.maxByOrNull { it.optString("date") + it.optString("start") }
+        if (rec != null) {
+            val draftId = leaderDraft.optString("id")
+            val draftCover = leaderDraft.optString("coverImageUrl")
+            if (draftCover.isNotBlank() && (draftId.isBlank() || draftId == rec.optString("id"))) {
+                rec.put("coverImageUrl", draftCover)
             }
-            return first
         }
-        return published.maxByOrNull { it.optString("date") + it.optString("start") }
+        return rec
     }
     private fun formatHeroDateSubtitle(rawDate: String?, start: String?, end: String?): String {
         if (rawDate.isNullOrBlank()) return "Sunday, May 18, 2025 - 9:00 AM"
@@ -2335,13 +2336,24 @@ class AdminActivity : AppCompatActivity() {
                     }
                     result.onSuccess { remoteUrl ->
                         leaderDraft.put("coverImageUrl", remoteUrl)
-                        saveLeaderDraft()
-                        if (leaderDraft.optString("id").isNotBlank()) {
-                            storeService(leaderDraft.optString("status").ifBlank { "Published" }, navigateAfter = false)
+                        val srvId = leaderDraft.optString("id").ifBlank { "srv_" + System.currentTimeMillis() }
+                        leaderDraft.put("id", srvId)
+                        val record = org.json.JSONObject(leaderDraft.toString())
+                        val existingIdx = localServices.indexOfFirst { it.optString("id") == srvId }
+                        if (existingIdx >= 0) {
+                            localServices[existingIdx] = record
+                            activeServiceIndex = existingIdx
+                        } else {
+                            localServices.add(record)
+                            activeServiceIndex = localServices.lastIndex
                         }
+                        val records = org.json.JSONArray()
+                        localServices.forEach { records.put(it) }
+                        preferences.edit().putString("leaderServices", records.toString()).apply()
                         saveLeaderDraft()
+                        storeService(leaderDraft.optString("status").ifBlank { "Published" }, navigateAfter = false)
                         toast("Cover photo uploaded to Cloudinary!")
-                        if (page == "createService" || page == "reviewService" || page == "service") {
+                        if (page == "createService" || page == "reviewService" || page == "service" || page == "home") {
                             navigate(page)
                         }
                     }.onFailure { err ->
@@ -2701,7 +2713,7 @@ class AdminActivity : AppCompatActivity() {
         val legacyEnd = preferences.getString("unavailableEnd", "").orEmpty()
         val legacyReason = preferences.getString("unavailableReason", "").orEmpty()
 
-        return roster.filter { !it.removedByLeader && (it.uid.isBlank() || it.uid !in removed) }.map { member ->
+        return roster.filter { !it.removedByLeader }.map { member ->
             val name = member.fullName.ifBlank { member.username.ifBlank { "Member" } }
             val role = member.ministryRole.ifBlank { if (member.role.equals("Leader", true)) "Worship Leader" else "Member" }
             val ranges = (member.unavailableRanges + TeamRepository.getMemberUnavailableRanges(
@@ -2747,6 +2759,18 @@ class AdminActivity : AppCompatActivity() {
         }
     }
     private fun serviceSummary(canEdit: Boolean = true): View = panel().apply {
+        val coverUrl = leaderDraft.optString("coverImageUrl").orEmpty()
+        if (coverUrl.isNotBlank()) {
+            val heroImg = ImageView(this@AdminActivity).apply {
+                scaleType = ImageView.ScaleType.CENTER_CROP
+                background = bg(Color.rgb(240, 240, 245), 12)
+                clipToOutline = true
+                outlineProvider = ViewOutlineProvider.BACKGROUND
+                com.example.syncedn.data.storage.ImageLoader.loadProfilePhoto(this, coverUrl, placeholderResId = R.drawable.worship_hero_bg, circular = false, maxDimension = 800)
+            }
+            add(heroImg, -1, dp(140))
+            space(12)
+        }
         add(horizontal().apply {
             add(vertical().apply {
                 add(text(leaderDraft.optString("title", "Sunday Worship Service").ifBlank { "New Service" }, 15, navy, true))
