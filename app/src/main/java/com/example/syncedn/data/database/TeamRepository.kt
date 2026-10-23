@@ -291,24 +291,10 @@ object TeamRepository {
         val code = teamCode.trim().uppercase()
         if (code.isBlank()) return emptyList()
 
-        val removedSet = mutableSetOf<String>()
-        if (preferences != null) {
-            preferences.getStringSet("team_removed_members_$code", null)?.let { s ->
-                removedSet.addAll(s.map { it.trim().lowercase() })
-            }
-            preferences.getStringSet("removedMembers", null)?.let { s ->
-                removedSet.addAll(s.map { it.trim().lowercase() })
-            }
-        }
-
         val list = cachedRosters[code]
         if (!list.isNullOrEmpty()) {
             return synchronized(list) {
-                if (removedSet.isEmpty()) list.toList()
-                else list.filter { m ->
-                    m.uid.trim().lowercase() !in removedSet &&
-                    (m.email.isBlank() || m.email.trim().lowercase() !in removedSet)
-                }.toList()
+                list.filter { !it.removedByLeader }.toList()
             }
         }
         if (preferences != null) {
@@ -326,11 +312,11 @@ object TeamRepository {
                             map[k] = obj.opt(k)
                         }
                         val parsedMember = TeamMember.fromMap(map)
-                        val mUid = parsedMember.uid.trim().lowercase()
-                        val mEmail = parsedMember.email.trim().lowercase()
-                        if (removedSet.isNotEmpty() && (mUid in removedSet || (mEmail.isNotBlank() && mEmail in removedSet))) {
+                        if (parsedMember.removedByLeader) {
                             continue
                         }
+                        val mUid = parsedMember.uid.trim().lowercase()
+                        val mEmail = parsedMember.email.trim().lowercase()
                         if (parsedMember.unavailableRanges.isNotEmpty()) {
                             if (parsedMember.uid.isNotBlank()) {
                                 cachedUserRanges[parsedMember.uid] = java.util.Collections.synchronizedList(parsedMember.unavailableRanges.toMutableList())
@@ -388,6 +374,31 @@ object TeamRepository {
 
         if (preferences != null) {
             try {
+                val teamRemovedKey = "team_removed_members_$code"
+                val curTeamRemoved = preferences.getStringSet(teamRemovedKey, null)?.toMutableSet()
+                val genRemoved = preferences.getStringSet("removedMembers", null)?.toMutableSet()
+                var prefsModified = false
+
+                for (m in sorted) {
+                    if (m.removedByLeader) continue
+                    val mUid = m.uid.trim()
+                    val mEmail = m.email.trim().lowercase()
+                    val mFull = m.fullName.trim()
+                    val mUser = m.username.trim()
+
+                    if (curTeamRemoved != null) {
+                        if (mUid.isNotBlank() && curTeamRemoved.remove(mUid)) prefsModified = true
+                        if (mEmail.isNotBlank() && curTeamRemoved.remove(mEmail)) prefsModified = true
+                        if (mFull.isNotBlank() && curTeamRemoved.remove(mFull)) prefsModified = true
+                        if (mUser.isNotBlank() && curTeamRemoved.remove(mUser)) prefsModified = true
+                    }
+                    if (genRemoved != null) {
+                        if (mUid.isNotBlank() && genRemoved.remove(mUid)) prefsModified = true
+                        if (mEmail.isNotBlank() && genRemoved.remove(mEmail)) prefsModified = true
+                        if (mFull.isNotBlank() && genRemoved.remove(mFull)) prefsModified = true
+                        if (mUser.isNotBlank() && genRemoved.remove(mUser)) prefsModified = true
+                    }
+                }
                 val arr = org.json.JSONArray()
                 for (m in sorted) {
                     val obj = org.json.JSONObject()
@@ -403,9 +414,23 @@ object TeamRepository {
                     arr.put(obj)
                 }
                 preferences.edit().apply {
+                    if (prefsModified) {
+                        if (curTeamRemoved != null) putStringSet(teamRemovedKey, curTeamRemoved)
+                        if (genRemoved != null) putStringSet("removedMembers", genRemoved)
+                    }
                     putString("$PREFS_KEY_ROSTER_PREFIX$code", arr.toString())
                     for (m in sorted) {
+                        if (m.removedByLeader) continue
+                        val mUid = m.uid.trim()
                         val emailLower = m.email.trim().lowercase()
+                        if (mUid.isNotBlank()) {
+                            remove("user_removed_by_leader_$mUid")
+                            remove("user_removed_team_code_$mUid")
+                        }
+                        if (emailLower.isNotBlank()) {
+                            remove("email_removed_by_leader_$emailLower")
+                            remove("email_removed_team_code_$emailLower")
+                        }
                         if (emailLower.isNotBlank() && m.uid.isNotBlank()) {
                             putString("email_uid_$emailLower", m.uid)
                         }
@@ -547,6 +572,7 @@ object TeamRepository {
                         .get()
                         .addOnSuccessListener { snapshot ->
                             val rawMembers = mutableListOf<TeamMember>()
+                            val uidsToPruneFromTeam = mutableListOf<String>()
                             if (snapshot != null) {
                                 for (doc in snapshot.documents) {
                                     val data = doc.data ?: continue
@@ -559,13 +585,22 @@ object TeamRepository {
                                     if (isRemovedByLeader && (rTeam.isBlank() || rTeam.equals(code, ignoreCase = true))) {
                                         continue
                                     }
+                                    if (teamRemovedSet.contains(uidFromDoc.trim().lowercase())) {
+                                        uidsToPruneFromTeam.add(uidFromDoc)
+                                    }
                                     val memberEmailLower = (data["email"] as? String).orEmpty().trim().lowercase()
-                                    if (uidFromDoc.trim().lowercase() in teamRemovedSet || (memberEmailLower.isNotBlank() && memberEmailLower in teamRemovedSet)) {
-                                        continue
+                                    if (memberEmailLower.isNotBlank() && teamRemovedSet.contains(memberEmailLower)) {
+                                        uidsToPruneFromTeam.add(memberEmailLower)
                                     }
 
                                     rawMembers.add(TeamMember.fromMap(mapWithId))
                                 }
+                            }
+                            if (uidsToPruneFromTeam.isNotEmpty()) {
+                                try {
+                                    db.collection(TEAMS_COLLECTION).document(code)
+                                        .update("removedMembers", com.google.firebase.firestore.FieldValue.arrayRemove(*uidsToPruneFromTeam.distinct().toTypedArray()))
+                                } catch (_: Throwable) {}
                             }
                             // Merge any duplicate documents for the same email/uid so unavailableRanges and ministryRole are never lost
                             val mergedByIdentity = LinkedHashMap<String, TeamMember>()
@@ -1030,6 +1065,86 @@ object TeamRepository {
         val uidLower = uid.trim().lowercase()
         val emailLower = email.trim().lowercase()
 
+        // Check Firestore first as single source of truth for membership status
+        if (uid.isNotBlank()) {
+            db.collection(USERS_COLLECTION).document(uid).get()
+                .addOnSuccessListener { snap ->
+                    if (snap.exists()) {
+                        val removed = snap.getBoolean("removedByLeader") ?: false
+                        val rTeamCode = snap.getString("removedTeamCode").orEmpty()
+                        val curTeam = snap.getString("teamCode").orEmpty()
+                        if (curTeam.equals(code, ignoreCase = true) && !removed) {
+                            onResult(false)
+                            return@addOnSuccessListener
+                        }
+                        if (removed && (rTeamCode.isBlank() || rTeamCode.equals(code, ignoreCase = true))) {
+                            onResult(true)
+                            return@addOnSuccessListener
+                        }
+                    }
+                    if (emailLower.isNotBlank()) {
+                        db.collection(USERS_COLLECTION).whereEqualTo("email", emailLower).get()
+                            .addOnSuccessListener { qSnap ->
+                                val doc = qSnap.documents.firstOrNull()
+                                if (doc != null) {
+                                    val removed = doc.getBoolean("removedByLeader") ?: false
+                                    val rTeamCode = doc.getString("removedTeamCode").orEmpty()
+                                    val curTeam = doc.getString("teamCode").orEmpty()
+                                    if (curTeam.equals(code, ignoreCase = true) && !removed) {
+                                        onResult(false)
+                                        return@addOnSuccessListener
+                                    }
+                                    if (removed && (rTeamCode.isBlank() || rTeamCode.equals(code, ignoreCase = true))) {
+                                        onResult(true)
+                                        return@addOnSuccessListener
+                                    }
+                                }
+                                checkPreferencesFallback(code, uidLower, emailLower, preferences, onResult)
+                            }
+                            .addOnFailureListener {
+                                checkPreferencesFallback(code, uidLower, emailLower, preferences, onResult)
+                            }
+                    } else {
+                        checkPreferencesFallback(code, uidLower, emailLower, preferences, onResult)
+                    }
+                }
+                .addOnFailureListener {
+                    checkPreferencesFallback(code, uidLower, emailLower, preferences, onResult)
+                }
+        } else if (emailLower.isNotBlank()) {
+            db.collection(USERS_COLLECTION).whereEqualTo("email", emailLower).get()
+                .addOnSuccessListener { qSnap ->
+                    val doc = qSnap.documents.firstOrNull()
+                    if (doc != null) {
+                        val removed = doc.getBoolean("removedByLeader") ?: false
+                        val rTeamCode = doc.getString("removedTeamCode").orEmpty()
+                        val curTeam = doc.getString("teamCode").orEmpty()
+                        if (curTeam.equals(code, ignoreCase = true) && !removed) {
+                            onResult(false)
+                            return@addOnSuccessListener
+                        }
+                        if (removed && (rTeamCode.isBlank() || rTeamCode.equals(code, ignoreCase = true))) {
+                            onResult(true)
+                            return@addOnSuccessListener
+                        }
+                    }
+                    checkPreferencesFallback(code, uidLower, emailLower, preferences, onResult)
+                }
+                .addOnFailureListener {
+                    checkPreferencesFallback(code, uidLower, emailLower, preferences, onResult)
+                }
+        } else {
+            checkPreferencesFallback(code, uidLower, emailLower, preferences, onResult)
+        }
+    }
+
+    private fun checkPreferencesFallback(
+        code: String,
+        uidLower: String,
+        emailLower: String,
+        preferences: android.content.SharedPreferences?,
+        onResult: (Boolean) -> Unit
+    ) {
         preferences?.let { prefs ->
             if (emailLower.isNotBlank() && prefs.getBoolean("email_removed_by_leader_$emailLower", false)) {
                 val rCode = prefs.getString("email_removed_team_code_$emailLower", "").orEmpty()
@@ -1038,63 +1153,15 @@ object TeamRepository {
                     return
                 }
             }
-            if (uid.isNotBlank() && prefs.getBoolean("user_removed_by_leader_$uid", false)) {
-                val rCode = prefs.getString("user_removed_team_code_$uid", "").orEmpty()
+            if (uidLower.isNotBlank() && prefs.getBoolean("user_removed_by_leader_$uidLower", false)) {
+                val rCode = prefs.getString("user_removed_team_code_$uidLower", "").orEmpty()
                 if (rCode.isBlank() || rCode.equals(code, ignoreCase = true)) {
                     onResult(true)
                     return
                 }
             }
-            prefs.getStringSet("team_removed_members_$code", null)?.let { set ->
-                val lowerSet = set.map { it.trim().lowercase() }
-                if (lowerSet.contains(uidLower) || (emailLower.isNotBlank() && lowerSet.contains(emailLower))) {
-                    onResult(true)
-                    return
-                }
-            }
-            prefs.getStringSet("removedMembers", null)?.let { set ->
-                val lowerSet = set.map { it.trim().lowercase() }
-                if (lowerSet.contains(uidLower) || (emailLower.isNotBlank() && lowerSet.contains(emailLower))) {
-                    onResult(true)
-                    return
-                }
-            }
         }
-
-        if (uid.isNotBlank()) {
-            db.collection(USERS_COLLECTION).document(uid).get()
-                .addOnSuccessListener { snap ->
-                    val removed = snap.getBoolean("removedByLeader") ?: false
-                    val rTeamCode = snap.getString("removedTeamCode").orEmpty()
-                    if (removed && (rTeamCode.isBlank() || rTeamCode.equals(code, ignoreCase = true))) {
-                        onResult(true)
-                        return@addOnSuccessListener
-                    }
-
-                    db.collection(TEAMS_COLLECTION).document(code).get()
-                        .addOnSuccessListener { tSnap ->
-                            val list = (tSnap.get("removedMembers") as? List<*>)?.mapNotNull { it?.toString()?.trim()?.lowercase() }.orEmpty()
-                            val isRemoved = list.contains(uidLower) || (emailLower.isNotBlank() && list.contains(emailLower))
-                            onResult(isRemoved)
-                        }
-                        .addOnFailureListener {
-                            onResult(false)
-                        }
-                }
-                .addOnFailureListener {
-                    onResult(false)
-                }
-        } else {
-            db.collection(TEAMS_COLLECTION).document(code).get()
-                .addOnSuccessListener { tSnap ->
-                    val list = (tSnap.get("removedMembers") as? List<*>)?.mapNotNull { it?.toString()?.trim()?.lowercase() }.orEmpty()
-                    val isRemoved = emailLower.isNotBlank() && list.contains(emailLower)
-                    onResult(isRemoved)
-                }
-                .addOnFailureListener {
-                    onResult(false)
-                }
-        }
+        onResult(false)
     }
 
     /**
