@@ -418,6 +418,12 @@ class AdminActivity : AppCompatActivity() {
                     }
                 }
             }
+            rosterListener = TeamRepository.subscribeToRoster(activeCode, preferences) { list ->
+                runOnUiThread {
+                    teamRoster = list
+                    updateRosterViews()
+                }
+            }
         }
 
         navigate(savedInstanceState?.getString("page") ?: intent.getStringExtra("startPage") ?: "home")
@@ -515,6 +521,16 @@ class AdminActivity : AppCompatActivity() {
     override fun onStop() {
         songMetronome?.stop()
         super.onStop()
+    }
+
+    override fun onDestroy() {
+        servicesListener?.remove()
+        substitutionsListener?.remove()
+        rosterListener?.remove()
+        servicesListener = null
+        substitutionsListener = null
+        rosterListener = null
+        super.onDestroy()
     }
 
     private fun navigate(next: String, triggerRefresh: Boolean = true) {
@@ -2382,6 +2398,7 @@ class AdminActivity : AppCompatActivity() {
     private var serviceWizard = false
     private var servicesListener: com.google.firebase.firestore.ListenerRegistration? = null
     private var substitutionsListener: com.google.firebase.firestore.ListenerRegistration? = null
+    private var rosterListener: com.google.firebase.firestore.ListenerRegistration? = null
     private var activeServiceIndex = -1
     private var roleMember = "Angelo Daniel"
     private var roleMemberUid = ""
@@ -2684,7 +2701,7 @@ class AdminActivity : AppCompatActivity() {
         val legacyEnd = preferences.getString("unavailableEnd", "").orEmpty()
         val legacyReason = preferences.getString("unavailableReason", "").orEmpty()
 
-        return roster.filter { it.fullName !in removed && it.username !in removed }.map { member ->
+        return roster.filter { !it.removedByLeader && (it.uid.isBlank() || it.uid !in removed) }.map { member ->
             val name = member.fullName.ifBlank { member.username.ifBlank { "Member" } }
             val role = member.ministryRole.ifBlank { if (member.role.equals("Leader", true)) "Worship Leader" else "Member" }
             val ranges = (member.unavailableRanges + TeamRepository.getMemberUnavailableRanges(
@@ -5250,11 +5267,11 @@ class AdminActivity : AppCompatActivity() {
                     add(text("Proposed Substitute: ${sub.substituteName}", 12, Color.BLACK, bold = true)); space(4)
                     add(text("Reason: ${sub.reason}", 12, Color.rgb(30, 41, 59)))
 
-                    if (isSubAccepted && isLeader) {
+                    if ((isSubAccepted || isPending) && isLeader) {
                         space(16)
                         val actions = horizontal()
                         val approveBtn = Button(this@AdminActivity).apply {
-                            text = "Approve & Update Lineup"
+                            text = if (isSubAccepted) "Approve & Update Lineup" else "Direct Approve & Update"
                             isAllCaps = false
                             background = bg(Color.rgb(46, 125, 50), 8)
                             setTextColor(Color.WHITE)
@@ -5320,9 +5337,10 @@ class AdminActivity : AppCompatActivity() {
                         actions.add(View(this@AdminActivity), 10, 1)
                         actions.add(declineBtn, 0, 38, 0.65f)
                         add(actions)
-                    } else if (isPending && isLeader) {
-                        space(12)
-                        add(text("⏳ Waiting for ${sub.substituteName} to accept before Leader approval", 11, Color.rgb(100, 116, 139)))
+                        if (isPending) {
+                            space(6)
+                            add(text("⏳ Waiting for confirmation from ${sub.substituteName}, or tap above to approve directly.", 10, Color.rgb(100, 116, 139)))
+                        }
                     }
                 }); subCol.space(16)
             }
@@ -5409,25 +5427,6 @@ class AdminActivity : AppCompatActivity() {
         notifHeader.add(clearBtn, -2, -2)
         col.add(notifHeader); col.space(12)
         recentNotificationsList(col)
-
-        if (activeCode.isNotBlank()) {
-            TeamRepository.getSubstitutions(activeCode, true, preferences) { res ->
-                runOnUiThread {
-                    if (res.isSuccess && page == "notifications") {
-                        // Fresh notifications and substitutions fetched
-                    }
-                }
-            }
-            if (isLeader) {
-                TeamRepository.getRejoinRequests(activeCode) { res ->
-                    runOnUiThread {
-                        if (res.isSuccess && page == "notifications") {
-                            // Fresh rejoin requests fetched
-                        }
-                    }
-                }
-            }
-        }
     }
 
     private fun rejoinRequestsFeed(col: LinearLayout) {

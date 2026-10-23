@@ -147,6 +147,7 @@ open class MemberActivity : AppCompatActivity() {
     private var substitutionType = "Exclusion"
     private var servicesListener: com.google.firebase.firestore.ListenerRegistration? = null
     private var substitutionsListener: com.google.firebase.firestore.ListenerRegistration? = null
+    private var rosterListener: com.google.firebase.firestore.ListenerRegistration? = null
     private var userMembershipListener: com.google.firebase.firestore.ListenerRegistration? = null
     private val chatScrollRunnable = Runnable { chatScrollView?.fullScroll(View.FOCUS_DOWN) }
     protected open val initialPage: String = "home"
@@ -305,6 +306,12 @@ open class MemberActivity : AppCompatActivity() {
                     if (page in listOf("notifications", "announcements")) {
                         navigate(page, triggerRefresh = false)
                     }
+                }
+            }
+            rosterListener = TeamRepository.subscribeToRoster(currentTeamCode, preferences) { updatedRoster ->
+                runOnUiThread {
+                    teamRoster = updatedRoster
+                    updateRosterViews()
                 }
             }
         }
@@ -532,6 +539,8 @@ open class MemberActivity : AppCompatActivity() {
         servicesListener = null
         substitutionsListener?.remove()
         substitutionsListener = null
+        rosterListener?.remove()
+        rosterListener = null
         super.onDestroy()
         chatListener?.remove()
         chatListener = null
@@ -752,10 +761,36 @@ open class MemberActivity : AppCompatActivity() {
                                     if (result.isSuccess) {
                                         val (validCode, foundTeamName) = result.getOrNull()!!
                                         teamName = foundTeamName
+                                        val curRem = preferences.getStringSet("team_removed_members_$validCode", null)?.toMutableSet()
+                                        if (curRem != null) {
+                                            curRem.remove(uid)
+                                            curRem.remove(emailStr)
+                                            curRem.remove(displayName)
+                                            curRem.remove(fullName)
+                                        }
+                                        val genRem = preferences.getStringSet("removedMembers", null)?.toMutableSet()
+                                        if (genRem != null) {
+                                            genRem.remove(uid)
+                                            genRem.remove(emailStr)
+                                            genRem.remove(displayName)
+                                            genRem.remove(fullName)
+                                        }
                                         preferences.edit {
                                             putString("userId", uid)
                                             putString("email", emailStr)
                                             putBoolean("leftTeam", false)
+                                            putBoolean("removedByLeader", false)
+                                            remove("removedTeamCode")
+                                            if (emailStr.isNotBlank()) {
+                                                putBoolean("email_removed_by_leader_$emailStr", false)
+                                                remove("email_removed_team_code_$emailStr")
+                                            }
+                                            if (uid.isNotBlank()) {
+                                                putBoolean("user_removed_by_leader_$uid", false)
+                                                remove("user_removed_team_code_$uid")
+                                            }
+                                            if (curRem != null) putStringSet("team_removed_members_$validCode", curRem)
+                                            if (genRem != null) putStringSet("removedMembers", genRem)
                                         }
                                         val isLeadUser = emailStr.equals("ryanlloydgenturo@gmail.com", ignoreCase = true)
                                         val resolvedRole = if (isLeadUser) "Leader" else "Member"
@@ -4301,16 +4336,6 @@ space(48)
         notifHeader.add(clearBtn, -2, -2)
         col.add(notifHeader); col.space(12)
         recentNotificationsList(col)
-
-        if (activeCode.isNotBlank()) {
-            TeamRepository.getSubstitutions(activeCode, true, preferences) { res ->
-                runOnUiThread {
-                    if (res.isSuccess && page == "notifications") {
-                        // fresh
-                    }
-                }
-            }
-        }
     }
 
     private fun recentNotificationsList(col: LinearLayout) {
