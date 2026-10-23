@@ -14,7 +14,8 @@ data class TeamMember(
     val teamCode: String = "",
     val photoUri: String = "",
     val unavailableRanges: List<UnavailableRange> = emptyList(),
-    val joinedAt: Long = System.currentTimeMillis()
+    val joinedAt: Long = System.currentTimeMillis(),
+    val removedByLeader: Boolean = false
 ) {
     fun toMap(): Map<String, Any> = mapOf(
         "uid" to uid,
@@ -26,7 +27,8 @@ data class TeamMember(
         "teamCode" to teamCode,
         "photoUri" to photoUri,
         "unavailableRanges" to unavailableRanges.map { it.toMap() },
-        "joinedAt" to joinedAt
+        "joinedAt" to joinedAt,
+        "removedByLeader" to removedByLeader
     )
 
     companion object {
@@ -43,7 +45,8 @@ data class TeamMember(
                 teamCode = map["teamCode"] as? String ?: "",
                 photoUri = map["photoUri"] as? String ?: "",
                 unavailableRanges = ranges,
-                joinedAt = (map["joinedAt"] as? Number)?.toLong() ?: System.currentTimeMillis()
+                joinedAt = (map["joinedAt"] as? Number)?.toLong() ?: System.currentTimeMillis(),
+                removedByLeader = map["removedByLeader"] as? Boolean ?: false
             )
         }
     }
