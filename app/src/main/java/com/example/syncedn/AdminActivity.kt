@@ -422,8 +422,65 @@ class AdminActivity : AppCompatActivity() {
                 runOnUiThread {
                     teamRoster = list
                     updateRosterViews()
+
+                    val currentEmail = preferences.getString("email", "").orEmpty().trim().lowercase()
+                    val currentUid = com.example.syncedn.data.auth.AuthManager.currentUser?.uid?.takeIf { it.isNotBlank() }
+                        ?: preferences.getString(SessionManager.KEY_USER_ID, "").orEmpty()
+                    val isPrimaryLeader = currentEmail == "ryanlloydgenturo@gmail.com" ||
+                                          preferences.getString("role", "").equals("Leader", true)
+                    if (!isPrimaryLeader) {
+                        val myEntry = list.find { m ->
+                            (currentUid.isNotBlank() && m.uid == currentUid) ||
+                            (currentEmail.isNotBlank() && m.email.trim().lowercase() == currentEmail)
+                        }
+                        if (myEntry != null && !myEntry.ministryRole.equals("Substitute Leader", ignoreCase = true)) {
+                            val newRole = myEntry.ministryRole.ifBlank { "Member" }
+                            preferences.edit {
+                                putString("ministryRole", newRole)
+                                putString(SessionManager.KEY_MINISTRY_ROLE, newRole)
+                            }
+                            toast("Your Substitute Leader assignment has ended.")
+                            val intent = Intent(this@AdminActivity, MemberActivity::class.java)
+                                .putExtra("startPage", "home")
+                                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                            startActivity(intent)
+                            finish()
+                        }
+                    }
                 }
             }
+        }
+
+        val myAdminUid = com.example.syncedn.data.auth.AuthManager.currentUser?.uid?.takeIf { it.isNotBlank() }
+            ?: preferences.getString(SessionManager.KEY_USER_ID, "").orEmpty().ifBlank {
+                preferences.getString("userId", "").orEmpty()
+            }
+        val myAdminEmail = preferences.getString("email", "").orEmpty().trim().lowercase()
+        val isAdminPrimary = myAdminEmail == "ryanlloydgenturo@gmail.com" ||
+                             preferences.getString("role", "").equals("Leader", true)
+        if (!isAdminPrimary && myAdminUid.isNotBlank()) {
+            userMembershipListener = com.google.firebase.firestore.FirebaseFirestore.getInstance()
+                .collection("users").document(myAdminUid)
+                .addSnapshotListener { snapshot, error ->
+                    if (error != null || snapshot == null || !snapshot.exists()) return@addSnapshotListener
+                    val ministryRoleSnap = snapshot.getString("ministryRole").orEmpty()
+                    if (!ministryRoleSnap.equals("Substitute Leader", ignoreCase = true)) {
+                        preferences.edit {
+                            putString("ministryRole", ministryRoleSnap.ifBlank { "Member" })
+                            putString(SessionManager.KEY_MINISTRY_ROLE, ministryRoleSnap.ifBlank { "Member" })
+                        }
+                        runOnUiThread {
+                            if (!isFinishing && !isDestroyed) {
+                                toast("Your Substitute Leader assignment has ended.")
+                                val intent = Intent(this@AdminActivity, MemberActivity::class.java)
+                                    .putExtra("startPage", "home")
+                                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                                startActivity(intent)
+                                finish()
+                            }
+                        }
+                    }
+                }
         }
 
         navigate(savedInstanceState?.getString("page") ?: intent.getStringExtra("startPage") ?: "home")
@@ -527,9 +584,11 @@ class AdminActivity : AppCompatActivity() {
         servicesListener?.remove()
         substitutionsListener?.remove()
         rosterListener?.remove()
+        userMembershipListener?.remove()
         servicesListener = null
         substitutionsListener = null
         rosterListener = null
+        userMembershipListener = null
         super.onDestroy()
     }
 
@@ -2411,6 +2470,7 @@ class AdminActivity : AppCompatActivity() {
     private var servicesListener: com.google.firebase.firestore.ListenerRegistration? = null
     private var substitutionsListener: com.google.firebase.firestore.ListenerRegistration? = null
     private var rosterListener: com.google.firebase.firestore.ListenerRegistration? = null
+    private var userMembershipListener: com.google.firebase.firestore.ListenerRegistration? = null
     private var activeServiceIndex = -1
     private var roleMember = "Angelo Daniel"
     private var roleMemberUid = ""
@@ -4269,7 +4329,11 @@ class AdminActivity : AppCompatActivity() {
             .ifBlank { preferences.getString("ministryRole", "").orEmpty() }
         val isSubLeader = myMinistryRole.equals("Substitute Leader", ignoreCase = true)
         val assignableRoles = if (isSubLeader) {
-            leaderRoles.filter { !it.equals("Substitute Leader", ignoreCase = true) && !it.equals("Leader", ignoreCase = true) }
+            leaderRoles.filter {
+                !it.equals("Substitute Leader", ignoreCase = true) &&
+                !it.equals("Worship Leader", ignoreCase = true) &&
+                !it.equals("Leader", ignoreCase = true)
+            }
         } else {
             leaderRoles
         }
@@ -5911,10 +5975,16 @@ class AdminActivity : AppCompatActivity() {
     private fun teamHeader(showDetails: Boolean = false): View = FrameLayout(this).apply {
         background = GradientDrawable(GradientDrawable.Orientation.TL_BR,
             intArrayOf(Color.rgb(8, 7, 32), navy))
+        val screenW = resources.displayMetrics.widthPixels
+        val exactImageWidth = if (screenW > 0) {
+            ((screenW * (if (showDetails) 237f else 130f)) / 360f).toInt()
+        } else {
+            dp(if (showDetails) 237 else 130)
+        }
         val photograph = image("team_sunset", "Sunset and cross").apply {
             scaleType = ImageView.ScaleType.CENTER_CROP
         }
-        addView(photograph, FrameLayout.LayoutParams(dp(if (showDetails) 237 else 130), -1, Gravity.END))
+        addView(photograph, FrameLayout.LayoutParams(exactImageWidth, -1, Gravity.END))
         addView(View(this@AdminActivity).apply {
             background = bg(Color.argb(70, 0, 0, 20))
         }, FrameLayout.LayoutParams(-1, -1))
@@ -5956,12 +6026,11 @@ class AdminActivity : AppCompatActivity() {
         }
         layoutParams = LinearLayout.LayoutParams(-1, dp(if (showDetails) 156 else 88))
         addOnLayoutChangeListener { _, left, _, right, _, _, _, _, _ ->
-            val imageWidth = ((right - left) * (if (showDetails) 237f else 130f) / 360f).toInt()
-            if (photograph.layoutParams.width != imageWidth) {
-                photograph.post {
-                    if (photograph.layoutParams.width != imageWidth) {
-                        photograph.layoutParams = photograph.layoutParams.apply { width = imageWidth }
-                    }
+            val w = right - left
+            if (w > 0) {
+                val imageWidth = (w * (if (showDetails) 237f else 130f) / 360f).toInt()
+                if (photograph.layoutParams.width != imageWidth) {
+                    photograph.layoutParams = photograph.layoutParams.apply { width = imageWidth }
                 }
             }
         }
