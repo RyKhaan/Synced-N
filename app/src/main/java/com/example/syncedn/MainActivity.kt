@@ -31,7 +31,7 @@ class MainActivity : MemberActivity() {
                 finish()
             }
             return
-        } else if (savedInstanceState == null && uid.isNotBlank() && team.isBlank()) {
+        } else if (savedInstanceState == null && uid.isNotBlank() && (team.isBlank() || removed)) {
             navigate("teamChoice")
             return
         }
@@ -40,7 +40,8 @@ class MainActivity : MemberActivity() {
     override fun navigate(next: String) {
         if (next == "home") {
             val userTeam = preferences.getString("teamName", "").orEmpty()
-            if (userTeam.isBlank()) {
+            val removed = preferences.getBoolean("removedByLeader", false)
+            if (userTeam.isBlank() || removed) {
                 super.navigate("teamChoice")
                 return
             }

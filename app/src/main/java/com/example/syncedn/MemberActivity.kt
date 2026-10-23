@@ -207,23 +207,31 @@ open class MemberActivity : AppCompatActivity() {
                                 displayName = profile?.username ?: account.displayName ?: "Member"
                                 val emailStr = account.email.orEmpty().trim()
                                 val uid = profile?.uid.orEmpty()
+                                SessionManager.clearPreferencesOnly(preferences)
                                 val (userRole, userTeam, userTeamCode) = resolveUserTeamSession(profile, emailStr)
                                 teamName = userTeam
                                 SessionManager.saveSessionProfile(preferences, profile, displayName, emailStr)
                                 fullName = preferences.getString(SessionManager.KEY_FULL_NAME, "").orEmpty()
                                 displayName = preferences.getString(SessionManager.KEY_USERNAME, displayName).orEmpty()
-                                if (userTeam.isNotBlank()) {
+                                val isRemoved = profile?.removedByLeader == true || preferences.getBoolean("removedByLeader", false)
+                                if (userTeam.isNotBlank() && !isRemoved) {
                                     saveUserTeamState(userRole, userTeam, userTeamCode)
                                     FirestoreManager.updateUserRoleAndTeam(uid, userRole, userTeam, userTeamCode, emailStr)
                                 } else {
                                     preferences.edit {
-                                        putString("role", "")
+                                        putString("role", "Member")
                                         putString("teamName", "")
                                         putString("teamCode", "")
+                                        putString("ministryRole", "")
+                                        putBoolean("removedByLeader", isRemoved)
+                                        if (isRemoved) {
+                                            val rCode = profile?.removedTeamCode?.ifBlank { userTeamCode }.orEmpty()
+                                            if (rCode.isNotBlank()) putString("removedTeamCode", rCode)
+                                        }
                                     }
                                 }
                                 toast("Welcome, $displayName!")
-                                if (userTeam.isBlank()) {
+                                if (userTeam.isBlank() || isRemoved) {
                                     navigate("teamChoice")
                                 } else if (userRole.equals("Leader", ignoreCase = true)) {
                                     startActivity(Intent(this@MemberActivity, AdminActivity::class.java).putExtra("startPage", "home"))
@@ -386,16 +394,65 @@ open class MemberActivity : AppCompatActivity() {
                     val removedTeamCode = snapshot.getString("removedTeamCode").orEmpty()
                     val myActiveTeamCode = preferences.getString(SessionManager.KEY_TEAM_CODE, "").orEmpty()
                         .ifBlank { preferences.getString("teamCode", "").orEmpty() }
-                    if (removedByLeader && (removedTeamCode.isBlank() || myActiveTeamCode.isBlank() || removedTeamCode.equals(myActiveTeamCode, ignoreCase = true))) {
+                    val isLeadUser = myCurrentEmail.equals("ryanlloydgenturo@gmail.com", ignoreCase = true)
+                    if (!isLeadUser && removedByLeader && (removedTeamCode.isBlank() || myActiveTeamCode.isBlank() || removedTeamCode.equals(myActiveTeamCode, ignoreCase = true))) {
+                        val emailLower = myCurrentEmail.trim().lowercase()
                         preferences.edit()
                             .putString("role", "Member")
                             .remove("teamName")
                             .remove("teamCode")
                             .remove("ministryRole")
+                            .remove("email_team_$emailLower")
+                            .remove("email_code_$emailLower")
+                            .remove("user_team_$myCurrentUid")
+                            .remove("user_code_$myCurrentUid")
                             .putBoolean("leftTeam", true)
+                            .putBoolean("removedByLeader", true)
+                            .putString("removedTeamCode", removedTeamCode.ifBlank { myActiveTeamCode })
                             .apply()
+                        teamName = ""
                         runOnUiThread {
-                            if (!isFinishing && !isDestroyed) {
+                            if (!isFinishing && !isDestroyed && page != "teamChoice") {
+                                AlertDialog.Builder(this@MemberActivity)
+                                    .setTitle("Removed from Team")
+                                    .setMessage("You have been removed from the team by the Team Leader.")
+                                    .setPositiveButton("OK") { _, _ -> navigate("teamChoice") }
+                                    .setCancelable(false)
+                                    .show()
+                            }
+                        }
+                    }
+                }
+        }
+        if (myCurrentEmail.isNotBlank()) {
+            com.google.firebase.firestore.FirebaseFirestore.getInstance()
+                .collection("users").whereEqualTo("email", myCurrentEmail)
+                .addSnapshotListener { snapshot, error ->
+                    if (error != null || snapshot == null || snapshot.isEmpty) return@addSnapshotListener
+                    val doc = snapshot.documents.firstOrNull() ?: return@addSnapshotListener
+                    val removedByLeader = doc.getBoolean("removedByLeader") ?: false
+                    val removedTeamCode = doc.getString("removedTeamCode").orEmpty()
+                    val myActiveTeamCode = preferences.getString(SessionManager.KEY_TEAM_CODE, "").orEmpty()
+                        .ifBlank { preferences.getString("teamCode", "").orEmpty() }
+                    val isLeadUser = myCurrentEmail.equals("ryanlloydgenturo@gmail.com", ignoreCase = true)
+                    if (!isLeadUser && removedByLeader && (removedTeamCode.isBlank() || myActiveTeamCode.isBlank() || removedTeamCode.equals(myActiveTeamCode, ignoreCase = true))) {
+                        val emailLower = myCurrentEmail.trim().lowercase()
+                        preferences.edit()
+                            .putString("role", "Member")
+                            .remove("teamName")
+                            .remove("teamCode")
+                            .remove("ministryRole")
+                            .remove("email_team_$emailLower")
+                            .remove("email_code_$emailLower")
+                            .remove("user_team_$myCurrentUid")
+                            .remove("user_code_$myCurrentUid")
+                            .putBoolean("leftTeam", true)
+                            .putBoolean("removedByLeader", true)
+                            .putString("removedTeamCode", removedTeamCode.ifBlank { myActiveTeamCode })
+                            .apply()
+                        teamName = ""
+                        runOnUiThread {
+                            if (!isFinishing && !isDestroyed && page != "teamChoice") {
                                 AlertDialog.Builder(this@MemberActivity)
                                     .setTitle("Removed from Team")
                                     .setMessage("You have been removed from the team by the Team Leader.")
@@ -522,6 +579,14 @@ open class MemberActivity : AppCompatActivity() {
     }
 
     protected open fun navigate(next: String, triggerRefresh: Boolean) {
+        val isRemovedUser = preferences.getBoolean("removedByLeader", false)
+        val myTeam = preferences.getString("teamName", "").orEmpty()
+        val isLeadUser = preferences.getString("email", "").orEmpty().trim().lowercase() == "ryanlloydgenturo@gmail.com"
+        val effectiveNext = if (!isLeadUser && (isRemovedUser || myTeam.isBlank()) && next in listOf("home", "schedule", "teams", "announcements", "calendar", "songs", "service")) {
+            "teamChoice"
+        } else {
+            next
+        }
         if (next in listOf("start", "login") && javaClass == MemberActivity::class.java) {
             startActivity(Intent(this, MainActivity::class.java).putExtra("startPage", next))
             finish()
@@ -531,7 +596,7 @@ open class MemberActivity : AppCompatActivity() {
         sheetAutoScroll = null
         songMetronome?.close()
         songMetronome = null
-        page = next
+        page = effectiveNext
         homeMemberCount = null
         val root = buildScreen(page)
         screenRoot = root
@@ -814,24 +879,31 @@ open class MemberActivity : AppCompatActivity() {
                                 val uid = com.example.syncedn.data.auth.AuthManager.currentUser?.uid?.takeIf { it.isNotBlank() }
                                     ?: profile?.uid.orEmpty()
                                 displayName = profile?.username?.ifBlank { emailStr.substringBefore("@") } ?: "Member"
+                                SessionManager.clearPreferencesOnly(preferences)
                                 val (userRole, userTeam, userTeamCode) = resolveUserTeamSession(profile, emailStr)
                                 teamName = userTeam
-                                SessionManager.clearPreferencesOnly(preferences)
                                 SessionManager.saveSessionProfile(preferences, profile, displayName, emailStr)
                                 fullName = preferences.getString(SessionManager.KEY_FULL_NAME, "").orEmpty()
                                 displayName = preferences.getString(SessionManager.KEY_USERNAME, displayName).orEmpty()
-                                if (userTeam.isNotBlank()) {
+                                val isRemoved = profile?.removedByLeader == true || preferences.getBoolean("removedByLeader", false)
+                                if (userTeam.isNotBlank() && !isRemoved) {
                                     saveUserTeamState(userRole, userTeam, userTeamCode)
                                     FirestoreManager.updateUserRoleAndTeam(uid, userRole, userTeam, userTeamCode, emailStr)
                                 } else {
                                     preferences.edit {
-                                        putString("role", "")
+                                        putString("role", "Member")
                                         putString("teamName", "")
                                         putString("teamCode", "")
+                                        putString("ministryRole", "")
+                                        putBoolean("removedByLeader", isRemoved)
+                                        if (isRemoved) {
+                                            val rCode = profile?.removedTeamCode?.ifBlank { userTeamCode }.orEmpty()
+                                            if (rCode.isNotBlank()) putString("removedTeamCode", rCode)
+                                        }
                                     }
                                 }
                                 toast("Welcome, $displayName!")
-                                if (userTeam.isBlank()) {
+                                if (userTeam.isBlank() || isRemoved) {
                                     navigate("teamChoice")
                                 } else if (userRole.equals("Leader", ignoreCase = true)) {
                                     startActivity(Intent(this@MemberActivity, AdminActivity::class.java).putExtra("startPage", "home"))

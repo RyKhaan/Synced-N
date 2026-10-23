@@ -4137,7 +4137,7 @@ class AdminActivity : AppCompatActivity() {
                     if (selectedMember.email.isNotBlank()) removed.add(selectedMember.email.trim().lowercase())
                     preferences.edit().putStringSet("removedMembers", removed).apply()
                     if (selectedMember.uid.isNotBlank()) {
-                        TeamRepository.removeMemberFromTeam(selectedMember.uid, activeCode, selectedMember.email) { result ->
+                        TeamRepository.removeMemberFromTeam(selectedMember.uid, activeCode, selectedMember.email, preferences) { result ->
                             runOnUiThread {
                                 if (result.isSuccess) {
                                     toast("$name removed from team.")
@@ -6788,7 +6788,7 @@ class AdminActivity : AppCompatActivity() {
                                         if (member.email.isNotBlank()) removed.add(member.email.trim().lowercase())
                                         preferences.edit().putStringSet("removedMembers", removed).apply()
                                         if (member.uid.isNotBlank()) {
-                                            TeamRepository.removeMemberFromTeam(member.uid, activeCode, member.email) { result ->
+                                            TeamRepository.removeMemberFromTeam(member.uid, activeCode, member.email, preferences) { result ->
                                                 runOnUiThread {
                                                     if (result.isSuccess) {
                                                         toast("$mName removed from team.")
