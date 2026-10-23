@@ -547,14 +547,14 @@ object FirestoreManager {
         try {
             db.collection(USERS_COLLECTION)
                 .whereEqualTo("email", cleanEmail)
-                .limit(1)
                 .get()
                 .addOnSuccessListener { querySnap ->
                     if (querySnap != null && !querySnap.isEmpty) {
-                        val doc = querySnap.documents[0]
-                        val data = doc.data
-                        if (data != null) {
-                            finishOnce(UserProfile.fromMap(data))
+                        val profiles = querySnap.documents.mapNotNull { it.data?.let { d -> UserProfile.fromMap(d) } }
+                        val canonical = profiles.find { !it.uid.startsWith("user_") && it.uid.isNotBlank() }
+                            ?: profiles.firstOrNull()
+                        if (canonical != null) {
+                            finishOnce(canonical)
                             return@addOnSuccessListener
                         }
                     }

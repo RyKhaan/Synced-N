@@ -294,7 +294,7 @@ object TeamRepository {
         val list = cachedRosters[code]
         if (!list.isNullOrEmpty()) {
             return synchronized(list) {
-                list.filter { !it.removedByLeader }.toList()
+                deduplicateRoster(list.filter { !it.removedByLeader }, preferences)
             }
         }
         if (preferences != null) {
@@ -328,9 +328,9 @@ object TeamRepository {
                         result.add(parsedMember)
                     }
                     if (result.isNotEmpty()) {
-                        sortRoster(result)
-                        cachedRosters[code] = java.util.Collections.synchronizedList(result)
-                        return result.toList()
+                        val deduplicated = deduplicateRoster(result, preferences)
+                        cachedRosters[code] = java.util.Collections.synchronizedList(deduplicated.toMutableList())
+                        return deduplicated
                     }
                 } catch (_: Exception) {}
             }
@@ -345,7 +345,8 @@ object TeamRepository {
     ) {
         val code = teamCode.trim().uppercase()
         if (code.isBlank()) return
-        val sorted = members.map { m ->
+        val deduplicated = deduplicateRoster(members, preferences)
+        val sorted = deduplicated.map { m ->
             val emailLower = m.email.trim().lowercase()
             val effectiveRanges = if (m.unavailableRanges.isNotEmpty()) {
                 m.unavailableRanges
@@ -459,9 +460,154 @@ object TeamRepository {
         }
     }
 
-    private fun sortRoster(list: MutableList<TeamMember>) {
+    fun sortRoster(list: MutableList<TeamMember>) {
         list.sortWith(compareByDescending<TeamMember> { it.role.equals("Leader", ignoreCase = true) }
             .thenBy { it.fullName.ifBlank { it.username } })
+    }
+
+    /**
+     * Deduplicates and canonicalizes a team roster by combining duplicate records for the same member
+     * (e.g. separate documents from synthetic vs authentic UIDs, or email vs name registrations).
+     * Preserves profile pictures, ministry roles, availability ranges, and leader authority.
+     */
+    fun deduplicateRoster(
+        members: List<TeamMember>,
+        preferences: android.content.SharedPreferences? = null
+    ): List<TeamMember> {
+        if (members.isEmpty()) return emptyList()
+        val merged = LinkedHashMap<String, TeamMember>()
+
+        for (m in members) {
+            if (m.removedByLeader) continue
+
+            val emailLower = m.email.trim().lowercase().takeIf { it.isNotBlank() }
+            val nameLower = m.fullName.trim().lowercase().takeIf { it.isNotBlank() }
+            val userLower = m.username.trim().lowercase().takeIf { it.isNotBlank() }
+            val uid = m.uid.trim().takeIf { it.isNotBlank() }
+
+            // Match if same UID, same email, or same name/username without email conflicts
+            val existingEntry = merged.entries.find { (_, existing) ->
+                val exEmail = existing.email.trim().lowercase().takeIf { it.isNotBlank() }
+                val exName = existing.fullName.trim().lowercase().takeIf { it.isNotBlank() }
+                val exUser = existing.username.trim().lowercase().takeIf { it.isNotBlank() }
+                val exUid = existing.uid.trim().takeIf { it.isNotBlank() }
+
+                // If both have different non-blank emails, they cannot be the same user
+                if (emailLower != null && exEmail != null && emailLower != exEmail) {
+                    return@find false
+                }
+
+                // If both have non-blank, non-synthetic UIDs and they are different, they cannot be the same user
+                val isRealUid = uid != null && !uid.startsWith("user_")
+                val isExRealUid = exUid != null && !exUid.startsWith("user_")
+                if (isRealUid && isExRealUid && uid != exUid) {
+                    return@find false
+                }
+
+                // Match by exact same UID
+                val uidMatch = (uid != null && exUid == uid)
+
+                // Match by exact same email
+                val emailMatch = (emailLower != null && exEmail == emailLower)
+
+                // Match by exact same full name
+                val nameMatch = (nameLower != null && exName != null && nameLower == exName)
+
+                // Match by username if neither has conflicting name/email
+                val userMatch = (userLower != null && exUser != null && userLower == exUser)
+
+                uidMatch || emailMatch || nameMatch || userMatch
+            }
+
+            if (existingEntry == null) {
+                val primaryKey = emailLower ?: nameLower ?: userLower ?: uid ?: java.util.UUID.randomUUID().toString()
+                merged[primaryKey] = m
+            } else {
+                val key = existingEntry.key
+                val existing = existingEntry.value
+
+                // 1. Preferred UID (prefer real auth UID over synthetic user_*)
+                val preferredUid = when {
+                    !existing.uid.startsWith("user_") && existing.uid.isNotBlank() -> existing.uid
+                    !m.uid.startsWith("user_") && m.uid.isNotBlank() -> m.uid
+                    existing.uid.isNotBlank() -> existing.uid
+                    else -> m.uid
+                }
+
+                // 2. Preferred Email
+                val preferredEmail = existing.email.ifBlank { m.email }
+
+                // 3. Preferred FullName & Username
+                val preferredFullName = when {
+                    existing.fullName.isNotBlank() && !existing.fullName.contains("@") -> existing.fullName
+                    m.fullName.isNotBlank() && !m.fullName.contains("@") -> m.fullName
+                    existing.fullName.isNotBlank() -> existing.fullName
+                    else -> m.fullName
+                }
+                val preferredUsername = existing.username.ifBlank { m.username }
+
+                // 4. Role
+                val isLeader = existing.role.equals("Leader", true) || m.role.equals("Leader", true)
+                val preferredRole = if (isLeader) "Leader" else existing.role.ifBlank { m.role }
+
+                // 5. Ministry Role: prefer specific role over generic "Member" or blank
+                val preferredMinistryRole = when {
+                    existing.ministryRole.isNotBlank() && !existing.ministryRole.equals("Member", true) -> existing.ministryRole
+                    m.ministryRole.isNotBlank() && !m.ministryRole.equals("Member", true) -> m.ministryRole
+                    existing.ministryRole.isNotBlank() -> existing.ministryRole
+                    else -> m.ministryRole
+                }
+
+                // 6. Photo
+                val fallbackPhoto = preferences?.getString("user_photo_$preferredUid", null)?.takeIf { it.isNotBlank() }
+                    ?: (if (preferredEmail.isNotBlank()) preferences?.getString("email_photo_${preferredEmail.trim().lowercase()}", null)?.takeIf { it.isNotBlank() } else null)
+                    ?: ""
+                val preferredPhoto = existing.photoUri.ifBlank { m.photoUri }.ifBlank { fallbackPhoto }
+
+                // 7. Unavailable ranges union
+                val combinedRanges = (existing.unavailableRanges + m.unavailableRanges)
+                    .distinctBy { it.id.ifBlank { "${it.startDate}_${it.endDate}_${it.reason}" } }
+
+                merged[key] = existing.copy(
+                    uid = preferredUid,
+                    fullName = preferredFullName,
+                    username = preferredUsername,
+                    email = preferredEmail,
+                    role = preferredRole,
+                    ministryRole = preferredMinistryRole,
+                    photoUri = preferredPhoto,
+                    unavailableRanges = combinedRanges
+                )
+            }
+        }
+
+        val result = merged.values.map { m ->
+            val fallbackPhoto = preferences?.getString("user_photo_${m.uid}", null)?.takeIf { it.isNotBlank() }
+                ?: preferences?.getString("email_photo_${m.email.trim().lowercase()}", null)?.takeIf { it.isNotBlank() }
+                ?: ""
+            val mWithPhoto = if (m.photoUri.isBlank() && fallbackPhoto.isNotBlank()) m.copy(photoUri = fallbackPhoto) else m
+
+            if (mWithPhoto.email.trim().equals("ryanlloydgenturo@gmail.com", ignoreCase = true) ||
+                mWithPhoto.fullName.trim().equals("Ryan Lloyd Genturo", ignoreCase = true)) {
+                if (m.role.isBlank()) {
+                    mWithPhoto.copy(role = "Leader", ministryRole = "Worship Leader")
+                } else {
+                    mWithPhoto
+                }
+            } else if (mWithPhoto.ministryRole.equals("Substitute Leader", ignoreCase = true)) {
+                mWithPhoto.copy(role = "Leader")
+            } else if (mWithPhoto.role.equals("Leader", ignoreCase = true)) {
+                mWithPhoto.copy(
+                    role = "Leader",
+                    ministryRole = if (mWithPhoto.ministryRole.isBlank() || mWithPhoto.ministryRole.equals("Member", true)) "Worship Leader" else mWithPhoto.ministryRole
+                )
+            } else {
+                mWithPhoto
+            }
+        }.toMutableList()
+
+        sortRoster(result)
+        return result
     }
 
     /**
@@ -508,7 +654,25 @@ object TeamRepository {
             db.collection(USERS_COLLECTION)
                 .document(profile.uid)
                 .set(updates, com.google.firebase.firestore.SetOptions.merge())
-                .addOnSuccessListener { onComplete(Result.success(Unit)) }
+                .addOnSuccessListener {
+                    if (profile.email.isNotBlank()) {
+                        try {
+                            db.collection(USERS_COLLECTION)
+                                .whereEqualTo("email", profile.email.trim().lowercase())
+                                .get()
+                                .addOnSuccessListener { snap ->
+                                    if (snap != null && !snap.isEmpty) {
+                                        for (doc in snap.documents) {
+                                            if (doc.id != profile.uid) {
+                                                doc.reference.set(updates, com.google.firebase.firestore.SetOptions.merge())
+                                            }
+                                        }
+                                    }
+                                }
+                        } catch (_: Throwable) {}
+                    }
+                    onComplete(Result.success(Unit))
+                }
                 .addOnFailureListener { onComplete(Result.failure(it)) }
         } catch (e: Exception) {
             onComplete(Result.failure(e))
@@ -612,51 +776,8 @@ object TeamRepository {
                                         .update("removedMembers", com.google.firebase.firestore.FieldValue.arrayRemove(*uidsToPruneFromTeam.distinct().toTypedArray()))
                                 } catch (_: Throwable) {}
                             }
-                            // Merge any duplicate documents for the same email/uid so unavailableRanges and ministryRole are never lost
-                            val mergedByIdentity = LinkedHashMap<String, TeamMember>()
-                            for (m in rawMembers) {
-                                val key = m.email.trim().lowercase().ifBlank { m.uid }
-                                val existing = mergedByIdentity[key]
-                                if (existing == null) {
-                                    mergedByIdentity[key] = m
-                                } else {
-                                    val preferredUid = if (!m.uid.startsWith("user_") && m.uid.isNotBlank()) m.uid else existing.uid.ifBlank { m.uid }
-                                    val combinedRanges = (existing.unavailableRanges + m.unavailableRanges)
-                                        .distinctBy { it.id.ifBlank { "${it.startDate}_${it.endDate}_${it.reason}" } }
-                                    val fallbackPhoto = preferences?.getString("user_photo_${preferredUid}", null)?.takeIf { it.isNotBlank() }
-                                        ?: (if (key.contains("@")) preferences?.getString("email_photo_$key", null)?.takeIf { it.isNotBlank() } else null)
-                                        ?: ""
-                                    mergedByIdentity[key] = existing.copy(
-                                        uid = preferredUid,
-                                        fullName = existing.fullName.ifBlank { m.fullName },
-                                        username = existing.username.ifBlank { m.username },
-                                        role = if (existing.role.equals("Leader", true) || m.role.equals("Leader", true)) "Leader" else existing.role.ifBlank { m.role },
-                                        ministryRole = existing.ministryRole.ifBlank { m.ministryRole },
-                                        photoUri = existing.photoUri.ifBlank { m.photoUri }.ifBlank { fallbackPhoto },
-                                        unavailableRanges = combinedRanges
-                                    )
-                                }
-                            }
-                            val members = mergedByIdentity.values.map { m ->
-                                val fallbackPhoto = preferences?.getString("user_photo_${m.uid}", null)?.takeIf { it.isNotBlank() }
-                                    ?: preferences?.getString("email_photo_${m.email.trim().lowercase()}", null)?.takeIf { it.isNotBlank() }
-                                    ?: ""
-                                val mWithPhoto = if (m.photoUri.isBlank() && fallbackPhoto.isNotBlank()) m.copy(photoUri = fallbackPhoto) else m
-                                if (mWithPhoto.email.trim().equals("ryanlloydgenturo@gmail.com", ignoreCase = true) ||
-                                    mWithPhoto.fullName.trim().equals("Ryan Lloyd Genturo", ignoreCase = true)) {
-                                    mWithPhoto.copy(
-                                        role = "Leader",
-                                        ministryRole = "Worship Leader"
-                                    )
-                                } else if (mWithPhoto.role.equals("Leader", ignoreCase = true)) {
-                                    mWithPhoto.copy(
-                                        role = "Leader",
-                                        ministryRole = if (mWithPhoto.ministryRole.isBlank() || mWithPhoto.ministryRole.equals("Member", true)) "Worship Leader" else mWithPhoto.ministryRole
-                                    )
-                                } else {
-                                    mWithPhoto
-                                }
-                            }.toList()
+                            // Canonical deduplication so multiple documents for the same member are cleanly merged
+                            val members = deduplicateRoster(rawMembers, preferences)
                             saveRosterLocally(code, members, preferences)
                             finishOnce(Result.success(getCachedRoster(code, preferences)))
                         }
@@ -710,24 +831,17 @@ object TeamRepository {
                         if (rawMember.removedByLeader || rawMember.teamCode.trim().uppercase() != code) {
                             continue
                         }
-                        val isLeader = rawMember.email.trim().lowercase() == "ryanlloydgenturo@gmail.com" ||
-                                       rawMember.fullName.equals("Ryan Lloyd Genturo", ignoreCase = true) ||
-                                       rawMember.ministryRole.equals("Worship Leader", ignoreCase = true) ||
-                                       rawMember.ministryRole.equals("Substitute Leader", ignoreCase = true)
-                        val member = if (!isLeader && rawMember.role.equals("Leader", ignoreCase = true)) rawMember.copy(role = "Member") else rawMember
-                        list.add(member)
+                        list.add(rawMember)
                     }
 
-                    list.sortWith(compareByDescending<TeamMember> { it.role.equals("Leader", true) }
-                        .thenBy { it.fullName.ifBlank { it.username } })
-
-                    saveRosterLocally(code, list, preferences)
+                    val deduplicated = deduplicateRoster(list, preferences)
+                    saveRosterLocally(code, deduplicated, preferences)
                     val memList = cachedRosters.getOrPut(code) { java.util.Collections.synchronizedList(mutableListOf()) }
                     synchronized(memList) {
                         memList.clear()
-                        memList.addAll(list)
+                        memList.addAll(deduplicated)
                     }
-                    onUpdate(list)
+                    onUpdate(deduplicated)
                 }
         } catch (e: Throwable) {
             android.util.Log.e("TeamRepository", "subscribeToRoster exception: ${e.message}", e)
@@ -766,15 +880,20 @@ object TeamRepository {
         // Update in-memory caches
         for ((_, roster) in cachedRosters) {
             synchronized(roster) {
-                val member = roster.find {
-                    (memberUid.isNotBlank() && it.uid == memberUid) ||
-                    (cleanEmail.isNotBlank() && it.email.equals(cleanEmail, ignoreCase = true)) ||
-                    (memberName.isNotBlank() && (it.fullName.equals(memberName, true) || it.username.equals(memberName, true)))
+                var modified = false
+                for (i in roster.indices) {
+                    val it = roster[i]
+                    if ((memberUid.isNotBlank() && it.uid == memberUid) ||
+                        (cleanEmail.isNotBlank() && it.email.equals(cleanEmail, ignoreCase = true)) ||
+                        (memberName.isNotBlank() && (it.fullName.equals(memberName, true) || it.username.equals(memberName, true)))) {
+                        roster[i] = it.copy(ministryRole = effectiveNewRole, role = computedRole)
+                        modified = true
+                    }
                 }
-                if (member != null) {
-                    val updated = member.copy(ministryRole = effectiveNewRole, role = computedRole)
-                    val idx = roster.indexOf(member)
-                    roster[idx] = updated
+                if (modified) {
+                    val deduped = deduplicateRoster(roster.toList(), preferences)
+                    roster.clear()
+                    roster.addAll(deduped)
                 }
             }
         }
@@ -2263,15 +2382,59 @@ object TeamRepository {
         val code = teamCode.trim().uppercase()
         return listOf(
             SongData(
+                id = "seed_amazing_grace",
+                teamCode = code,
+                title = "Amazing Grace",
+                artist = "John Newton",
+                key = "G",
+                bpm = 72,
+                sheet = "[Verse 1]\n[G]Amazing grace, how [C]sweet the [G]sound\nThat saved a [D]wretch like me\n[G]I once was lost, but [C]now am [G]found\nWas blind, but [D]now I [G]see\n\n[Verse 2]\n'Twas [G]grace that taught my [C]heart to [G]fear\nAnd grace my [D]fears re[G]lieved\nHow [G]precious did that [C]grace ap[G]pear\nThe hour I [D]first be[G]lieved\n\n[Chorus]\nMy chains are [C]gone, I've been set [G]free\nMy God, my [C]Savior has ransomed [G]me\nAnd like a [C]flood His mercy [Em]reigns\nUnending [Am]love, a[D]mazing [G]grace\n\n[Verse 3]\nThe [G]Lord has promised [C]good to [G]me\nHis word my [D]hope se[G]cures\nHe [G]will my shield and [C]portion [G]be\nAs long as [D]life en[G]dures",
+                lyrics = "Amazing grace, how sweet the sound\nThat saved a wretch like me\nI once was lost, but now am found\nWas blind, but now I see\n\n'Twas grace that taught my heart to fear\nAnd grace my fears relieved\nHow precious did that grace appear\nThe hour I first believed\n\nMy chains are gone, I've been set free\nMy God, my Savior has ransomed me\nAnd like a flood His mercy reigns\nUnending love, amazing grace\n\nThe Lord has promised good to me\nHis word my hope secures\nHe will my shield and portion be\nAs long as life endures",
+                referenceUrl = "https://www.youtube.com/watch?v=Jbe7OruLk8I"
+            ),
+            SongData(
+                id = "seed_build_my_life",
+                teamCode = code,
+                title = "Build My Life",
+                artist = "Pat Barrett",
+                key = "G",
+                bpm = 68,
+                sheet = "[Verse 1]\n[G]Worthy of every song we could [C]ever sing\n[G]Worthy of all the praise we could [C]ever bring\n[G]Worthy of every breath we could [C]ever breathe\nWe live for [Am]You, [D]we live for [G]You\n\n[Verse 2]\n[G]Jesus, the name above every [C]other name\n[G]Jesus, the only one who could [C]ever save\n[G]Worthy of every breath we could [C]ever breathe\nWe live for [Am]You, [D]we live for [G]You\n\n[Chorus]\n[C]Holy, there is no one like [Am]You\nThere is none beside [G]You\nOpen up my eyes in [Em]wonder\nAnd [C]show me who You are and [Am]fill me\nWith Your heart and lead [G]me\nIn Your love to those [Em]around me\n\n[Bridge]\n[C]I will build my [D]life upon Your [Em]love\nIt is a [G]firm foundation\n[C]I will put my [D]trust in You a[Em]lone\nAnd I will [G]not be shaken",
+                lyrics = "Worthy of every song we could ever sing\nWorthy of all the praise we could ever bring\nWorthy of every breath we could ever breathe\nWe live for You, we live for You\n\nJesus, the name above every other name\nJesus, the only one who could ever save\nWorthy of every breath we could ever breathe\nWe live for You, we live for You\n\nHoly, there is no one like You\nThere is none beside You\nOpen up my eyes in wonder\nAnd show me who You are and fill me\nWith Your heart and lead me\nIn Your love to those around me\n\nI will build my life upon Your love\nIt is a firm foundation\nI will put my trust in You alone\nAnd I will not be shaken",
+                referenceUrl = "https://www.youtube.com/watch?v=Z32HiCoFzlU"
+            ),
+            SongData(
+                id = "seed_goodness_of_god",
+                teamCode = code,
+                title = "Goodness of God",
+                artist = "Bethel Music",
+                key = "Ab",
+                bpm = 70,
+                sheet = "[Verse 1]\n[Ab]I love You, Lord, for Your [Db]mercy never [Ab]fails me\n[Eb]All my [Fm]days, I've been [Db]held in Your [Eb]hands\nFrom the moment that I [Fm]wake up until I [Db]lay my [Ab]head\n[Db]I will sing of the [Eb]goodness of [Ab]God\n\n[Chorus]\n[Db]All my life You have been faithful\n[Ab]All my life You have been so, so good\n[Db]With every breath that I am [Ab]able\n[Db]I will sing of the [Eb]goodness of [Ab]God\n\n[Verse 2]\n[Ab]I love Your voice, You have [Db]led me through the [Ab]fire\nIn [Eb]darkest [Fm]night, You are [Db]close like no [Eb]other\nI've known You as a [Fm]Father, I've known You as a [Db]Friend\nAnd [Db]I have lived in the [Eb]goodness of [Ab]God\n\n[Bridge]\n[Ab/C]Your goodness is [Db]running after, it's [Eb]running after [Ab]me\n[Ab/C]Your goodness is [Db]running after, it's [Eb]running after [Ab]me\nWith my [Ab/C]life laid down, I'm sur[Db]rendered now, I [Eb]give You every[Fm]thing\n[Ab/C]Your goodness is [Db]running after, it's [Eb]running after [Ab]me",
+                lyrics = "I love You, Lord, for Your mercy never fails me\nAll my days, I've been held in Your hands\nFrom the moment that I wake up until I lay my head\nI will sing of the goodness of God\n\nAll my life You have been faithful\nAll my life You have been so, so good\nWith every breath that I am able\nI will sing of the goodness of God\n\nI love Your voice, You have led me through the fire\nIn darkest night, You are close like no other\nI've known You as a Father, I've known You as a Friend\nAnd I have lived in the goodness of God\n\nYour goodness is running after, it's running after me\nYour goodness is running after, it's running after me\nWith my life laid down, I'm surrendered now, I give You everything\nYour goodness is running after, it's running after me",
+                referenceUrl = "https://www.youtube.com/watch?v=n3t6CdeiN1M"
+            ),
+            SongData(
+                id = "seed_gratitude",
+                teamCode = code,
+                title = "Gratitude",
+                artist = "Brandon Lake",
+                key = "B",
+                bpm = 78,
+                sheet = "[Verse 1]\n[B]All my words fall short\n[E]I got nothing new\n[G#m]How could I express\n[F#]All my gratitude\n\n[Verse 2]\n[B]I could sing these songs\n[E]As I often do\n[G#m]But every song must end\n[F#]And You never do\n\n[Chorus]\n[B]So I throw up my hands and praise You again and again\n[G#m]'Cause all that I have is a hallelujah, [E]hallelujah\n[B]And I know it's not much, but I've nothing else fit for a King\n[G#m]Except for a heart singing hallelujah, [F#]hallelujah\n\n[Bridge]\nCome on, [B]my soul, don't you get shy on me\nLift up your [E]song, 'cause you've got a lion inside of those lungs\nGet up and [G#m]praise the [F#]Lord!",
+                lyrics = "All my words fall short\nI got nothing new\nHow could I express\nAll my gratitude\n\nI could sing these songs\nAs I often do\nBut every song must end\nAnd You never do\n\nSo I throw up my hands and praise You again and again\n'Cause all that I have is a hallelujah, hallelujah\nAnd I know it's not much, but I've nothing else fit for a King\nExcept for a heart singing hallelujah, hallelujah\n\nCome on, my soul, don't you get shy on me\nLift up your song, 'cause you've got a lion inside of those lungs\nGet up and praise the Lord!",
+                referenceUrl = "https://www.youtube.com/watch?v=dQdfs5S6jyA"
+            ),
+            SongData(
                 id = "seed_praise",
                 teamCode = code,
                 title = "Praise",
                 artist = "Elevation Worship",
                 key = "G",
                 bpm = 127,
-                sheet = "[Verse 1]\n[G]Let everything that has breath\nPraise the Lord, [C]praise the Lord\n[G]I'll praise in the valley, praise on the mountain\n[C]I'll praise when I'm sure, praise when I'm doubting\n\n[Chorus]\n[G]Praise the Lord, oh my soul\n[Em]Praise the Lord, oh my soul\n[C]I won't be quiet, my [D]rock and salvation\n[G]Praise the Lord!",
-                lyrics = "Let everything that has breath\nPraise the Lord, praise the Lord\nI'll praise in the valley, praise on the mountain\nI'll praise when I'm sure, praise when I'm doubting\n\nPraise the Lord, oh my soul\nPraise the Lord, oh my soul\nI won't be quiet, my rock and salvation\nPraise the Lord!",
-                referenceUrl = "https://www.youtube.com/watch?v=f2OXgn6mHHY"
+                sheet = "[Verse 1]\n[G]Let everything that has breath\nPraise the Lord, [C]praise the Lord\n[G]I'll praise in the valley, praise on the mountain\n[C]I'll praise when I'm sure, praise when I'm doubting\n\n[Verse 2]\n[G]I'll praise when outnumbered, praise when surrounded\n'Cause [C]praise is the water my enemies drown in\n[G]As long as I'm breathing, I've got a reason to\n\n[Chorus]\n[G]Praise the Lord, oh my soul\n[Em]Praise the Lord, oh my soul\n[C]I won't be quiet, my [D]rock and salvation\n[G]Praise the Lord!\n\n[Bridge]\n[G]I'll praise 'cause You're sovereign, praise 'cause You reign\n[Em]Praise 'cause You rose and defeated the grave\n[C]I'll praise 'cause You're faithful, [D]praise 'cause You're true\n[G]Praise 'cause there's nobody greater than You!",
+                lyrics = "Let everything that has breath\nPraise the Lord, praise the Lord\nI'll praise in the valley, praise on the mountain\nI'll praise when I'm sure, praise when I'm doubting\n\nI'll praise when outnumbered, praise when surrounded\n'Cause praise is the water my enemies drown in\nAs long as I'm breathing, I've got a reason to\n\nPraise the Lord, oh my soul\nPraise the Lord, oh my soul\nI won't be quiet, my rock and salvation\nPraise the Lord!\n\nI'll praise 'cause You're sovereign, praise 'cause You reign\nPraise 'cause You rose and defeated the grave\nI'll praise 'cause You're faithful, praise 'cause You're true\nPraise 'cause there's nobody greater than You!",
+                referenceUrl = "https://www.youtube.com/watch?v=f2oxGYpuLkw"
             ),
             SongData(
                 id = "seed_trust_in_god",
@@ -2280,9 +2443,20 @@ object TeamRepository {
                 artist = "Elevation Worship",
                 key = "C",
                 bpm = 74,
-                sheet = "[Verse 1]\n[C]Blessed assurance, [F]Jesus is [C]mine\n[Am]Oh what a [G]foretaste of [F]glory divine\n[C]Heir of salvation, [F]purchase of [C]God\n[Am]Born of His [G]Spirit, washed [F]in His blood\n\n[Chorus]\n[C]I trust in God, my Savior\n[Am]The One who will never fail\n[F]He will never fail, [G]He will never [C]fail",
-                lyrics = "Blessed assurance, Jesus is mine\nOh what a foretaste of glory divine\nHeir of salvation, purchase of God\nBorn of His Spirit, washed in His blood\n\nI trust in God, my Savior\nThe One who will never fail\nHe will never fail, He will never fail",
-                referenceUrl = "https://www.youtube.com/watch?v=y7495tY_k_8"
+                sheet = "[Verse 1]\n[C]Blessed assurance, [F]Jesus is [C]mine\n[Am]Oh what a [G]foretaste of [F]glory divine\n[C]Heir of salvation, [F]purchase of [C]God\n[Am]Born of His [G]Spirit, washed [F]in His blood\n\n[Chorus]\n[C]I trust in God, my Savior\n[Am]The One who will never fail\n[F]He will never fail, [G]He will never [C]fail\n[C]I trust in God, my Savior\n[Am]The One who will never fail\n[F]He will never fail, [G]He will never [C]fail\n\n[Bridge]\n[C]I sought the Lord and He heard and He answered\n[Am]I sought the Lord and He heard and He answered\n[F]I sought the Lord and He heard and He answered\n[G]That's why I trust Him, that's why I [C]trust Him",
+                lyrics = "Blessed assurance, Jesus is mine\nOh what a foretaste of glory divine\nHeir of salvation, purchase of God\nBorn of His Spirit, washed in His blood\n\nI trust in God, my Savior\nThe One who will never fail\nHe will never fail, He will never fail\nI trust in God, my Savior\nThe One who will never fail\nHe will never fail, He will never fail\n\nI sought the Lord and He heard and He answered\nI sought the Lord and He heard and He answered\nI sought the Lord and He heard and He answered\nThat's why I trust Him, that's why I trust Him",
+                referenceUrl = "https://www.youtube.com/watch?v=QS04WbSnxok"
+            ),
+            SongData(
+                id = "seed_holy_forever",
+                teamCode = code,
+                title = "Holy Forever",
+                artist = "Chris Tomlin",
+                key = "C",
+                bpm = 72,
+                sheet = "[Verse 1]\n[C]A thousand generations falling [F]down in [C]worship\nTo sing the [Am]song of ages to the [G]Lamb\nAnd [C]all who've gone before us and [F]all who will be[C]lieve\nWill sing the [Am]song of ages to the [G]Lamb\n\n[Chorus]\nYour name is the [F]highest, Your name is the [Am]greatest\nYour name stands a[G]bove them all\nAll thrones and do[F]minions, all powers and po[Am]sitions\nYour name stands a[G]bove them all\nAnd the angels cry, [F]Holy, [Am]all creation cries, [G]Holy\nYou are lifted high, [F]Holy, [G]holy for[C]ever",
+                lyrics = "A thousand generations falling down in worship\nTo sing the song of ages to the Lamb\nAnd all who've gone before us and all who will believe\nWill sing the song of ages to the Lamb\n\nYour name is the highest, Your name is the greatest\nYour name stands above them all\nAll thrones and dominions, all powers and positions\nYour name stands above them all\nAnd the angels cry, Holy, all creation cries, Holy\nYou are lifted high, Holy, holy forever",
+                referenceUrl = "https://www.youtube.com/watch?v=oOXvQz_gtfA"
             ),
             SongData(
                 id = "seed_way_maker",
@@ -2293,51 +2467,7 @@ object TeamRepository {
                 bpm = 68,
                 sheet = "[Verse 1]\n[E]You are here, moving in our midst\n[B]I worship You, I worship You\n[C#m]You are here, working in this place\n[A]I worship You, I worship You\n\n[Chorus]\n[E]Way maker, miracle worker, [B]promise keeper\n[C#m]Light in the darkness, my God, [A]that is who You [E]are",
                 lyrics = "You are here, moving in our midst\nI worship You, I worship You\nYou are here, working in this place\nI worship You, I worship You\n\nWay maker, miracle worker, promise keeper\nLight in the darkness, my God, that is who You are",
-                referenceUrl = "https://www.youtube.com/watch?v=n4XWfwLHeLM"
-            ),
-            SongData(
-                id = "seed_gratitude",
-                teamCode = code,
-                title = "Gratitude",
-                artist = "Brandon Lake",
-                key = "B",
-                bpm = 78,
-                sheet = "[Verse 1]\n[B]All my words fall short\n[E]I got nothing new\n[G#m]How could I express\n[F#]All my gratitude\n\n[Chorus]\n[B]So I throw up my hands and praise You again and again\n[G#m]'Cause all that I have is a hallelujah, [E]hallelujah\n[B]And I know it's not much, but I've nothing else fit for a King\n[G#m]Except for a heart singing hallelujah, [F#]hallelujah",
-                lyrics = "All my words fall short\nI got nothing new\nHow could I express\nAll my gratitude\n\nSo I throw up my hands and praise You again and again\n'Cause all that I have is a hallelujah, hallelujah\nAnd I know it's not much, but I've nothing else fit for a King\nExcept for a heart singing hallelujah, hallelujah",
-                referenceUrl = "https://www.youtube.com/watch?v=dQdfs5S6jyA"
-            ),
-            SongData(
-                id = "seed_goodness_of_god",
-                teamCode = code,
-                title = "Goodness of God",
-                artist = "Bethel Music",
-                key = "Ab",
-                bpm = 70,
-                sheet = "[Verse 1]\n[Ab]I love You, Lord, for Your [Db]mercy never [Ab]fails me\n[Eb]All my [Fm]days, I've been [Db]held in Your [Eb]hands\nFrom the moment that I [Fm]wake up until I [Db]lay my [Ab]head\n[Db]I will sing of the [Eb]goodness of [Ab]God\n\n[Chorus]\n[Db]All my life You have been faithful\n[Ab]All my life You have been so, so good\n[Db]With every breath that I am [Ab]able\n[Db]I will sing of the [Eb]goodness of [Ab]God",
-                lyrics = "I love You, Lord, for Your mercy never fails me\nAll my days, I've been held in Your hands\nFrom the moment that I wake up until I lay my head\nI will sing of the goodness of God\n\nAll my life You have been faithful\nAll my life You have been so, so good\nWith every breath that I am able\nI will sing of the goodness of God",
-                referenceUrl = "https://www.youtube.com/watch?v=-f4MUKEVKaU"
-            ),
-            SongData(
-                id = "seed_build_my_life",
-                teamCode = code,
-                title = "Build My Life",
-                artist = "Pat Barrett",
-                key = "G",
-                bpm = 68,
-                sheet = "[Verse 1]\n[G]Worthy of every song we could [C]ever sing\n[G]Worthy of all the praise we could [C]ever bring\n[G]Worthy of every breath we could [C]ever breathe\nWe live for [Am]You, [D]we live for [G]You\n\n[Chorus]\n[C]Holy, there is no one like [Am]You\nThere is none beside [G]You\nOpen up my eyes in [Em]wonder\nAnd [C]show me who You are and [Am]fill me\nWith Your heart and lead [G]me\nIn Your love to those [Em]around me",
-                lyrics = "Worthy of every song we could ever sing\nWorthy of all the praise we could ever bring\nWorthy of every breath we could ever breathe\nWe live for You, we live for You\n\nHoly, there is no one like You\nThere is none beside You\nOpen up my eyes in wonder\nAnd show me who You are and fill me\nWith Your heart and lead me\nIn Your love to those around me",
-                referenceUrl = "https://www.youtube.com/watch?v=Z32HiSuUY8o"
-            ),
-            SongData(
-                id = "seed_amazing_grace",
-                teamCode = code,
-                title = "Amazing Grace",
-                artist = "John Newton",
-                key = "G",
-                bpm = 72,
-                sheet = "[Verse 1]\n[G]Amazing grace, how [C]sweet the [G]sound\nThat saved a [D]wretch like me\n[G]I once was lost, but [C]now am [G]found\nWas blind, but [D]now I [G]see\n\n[Verse 2]\n'Twas [G]grace that taught my [C]heart to [G]fear\nAnd grace my [D]fears relieved\nHow [G]precious did that [C]grace ap[G]pear\nThe hour I [D]first be[G]lieved",
-                lyrics = "Amazing grace, how sweet the sound\nThat saved a wretch like me\nI once was lost, but now am found\nWas blind, but now I see\n\n'Twas grace that taught my heart to fear\nAnd grace my fears relieved\nHow precious did that grace appear\nThe hour I first believed",
-                referenceUrl = "https://www.youtube.com/watch?v=Jbe7OruLk8I"
+                referenceUrl = "https://www.youtube.com/watch?v=QM8jQHE5AAk"
             )
         )
     }
@@ -2399,15 +2529,24 @@ object TeamRepository {
                         }
                         val parsed = SongData.fromMap(map)
                         if (parsed.id.lowercase() !in deletedKeys && parsed.title.trim().lowercase() !in deletedKeys) {
-                            // If seed song was saved previously without referenceUrl or updated chords, backfill metadata
+                            // If seed song was saved previously without referenceUrl, with legacy 404 URL, or with partial lyrics, backfill metadata
                             val seedMatch = defaultSeeds.find { it.title.equals(parsed.title, ignoreCase = true) }
-                            val enriched = if (seedMatch != null && parsed.referenceUrl.isBlank()) {
+                            val enriched = if (seedMatch != null) {
+                                val isBrokenOrOldUrl = parsed.referenceUrl.isBlank() ||
+                                    parsed.referenceUrl.contains("-f4MUKEVKaU") ||
+                                    parsed.referenceUrl.contains("Z32HiSuUY8o") ||
+                                    parsed.referenceUrl.contains("f2OXgn6mHHY") ||
+                                    parsed.referenceUrl.contains("y7495tY_k_8") ||
+                                    parsed.referenceUrl.contains("n4XWfwLHeLM")
+                                val effectiveRefUrl = if (isBrokenOrOldUrl) seedMatch.referenceUrl else parsed.referenceUrl
+                                val effectiveSheet = if (parsed.sheet.isBlank() || parsed.sheet.contains("Add your licensed") || parsed.sheet.length < seedMatch.sheet.length) seedMatch.sheet else parsed.sheet
+                                val effectiveLyrics = if (parsed.lyrics.isBlank() || parsed.lyrics.length < seedMatch.lyrics.length) seedMatch.lyrics else parsed.lyrics
                                 parsed.copy(
-                                    referenceUrl = seedMatch.referenceUrl,
+                                    referenceUrl = effectiveRefUrl,
                                     key = if (parsed.key.isBlank() || parsed.key == "C") seedMatch.key else parsed.key,
-                                    bpm = if (parsed.bpm == 74) seedMatch.bpm else parsed.bpm,
-                                    sheet = if (parsed.sheet.isBlank() || parsed.sheet.contains("Add your licensed")) seedMatch.sheet else parsed.sheet,
-                                    lyrics = if (parsed.lyrics.isBlank()) seedMatch.lyrics else parsed.lyrics
+                                    bpm = if (parsed.bpm == 74 && seedMatch.bpm != 74) seedMatch.bpm else parsed.bpm,
+                                    sheet = effectiveSheet,
+                                    lyrics = effectiveLyrics
                                 )
                             } else parsed
                             list.add(enriched)

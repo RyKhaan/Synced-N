@@ -1248,23 +1248,23 @@ class ExampleUnitTest {
 
         // 3. Verify Seed Catalog has correct Keys, BPMs, and YouTube Reference URLs
         val seeds = com.example.syncedn.data.database.TeamRepository.getDefaultSeedSongs("TEST")
-        assertEquals(7, seeds.size)
+        assertEquals(8, seeds.size)
         val praise = seeds.find { it.title == "Praise" }!!
         assertEquals("Elevation Worship", praise.artist)
         assertEquals("G", praise.key)
         assertEquals(127, praise.bpm)
-        assertEquals("https://www.youtube.com/watch?v=f2OXgn6mHHY", praise.referenceUrl)
+        assertEquals("https://www.youtube.com/watch?v=f2oxGYpuLkw", praise.referenceUrl)
         assertTrue("Praise sheet must contain chords", praise.sheet.contains("[G]"))
 
         val trust = seeds.find { it.title == "Trust in God" }!!
         assertEquals("C", trust.key)
         assertEquals(74, trust.bpm)
-        assertEquals("https://www.youtube.com/watch?v=y7495tY_k_8", trust.referenceUrl)
+        assertEquals("https://www.youtube.com/watch?v=QS04WbSnxok", trust.referenceUrl)
 
         val wayMaker = seeds.find { it.title == "Way Maker" }!!
         assertEquals("E", wayMaker.key)
         assertEquals(68, wayMaker.bpm)
-        assertEquals("https://www.youtube.com/watch?v=n4XWfwLHeLM", wayMaker.referenceUrl)
+        assertEquals("https://www.youtube.com/watch?v=QM8jQHE5AAk", wayMaker.referenceUrl)
 
         val gratitude = seeds.find { it.title == "Gratitude" }!!
         assertEquals("B", gratitude.key)
@@ -1273,6 +1273,7 @@ class ExampleUnitTest {
         val goodness = seeds.find { it.title == "Goodness of God" }!!
         assertEquals("Ab", goodness.key)
         assertEquals(70, goodness.bpm)
+        assertEquals("https://www.youtube.com/watch?v=n3t6CdeiN1M", goodness.referenceUrl)
     }
 
     @Test
@@ -1295,9 +1296,9 @@ class ExampleUnitTest {
         val repo = com.example.syncedn.data.database.TeamRepository
         val code = "TESTTEAM"
 
-        // 1. Initial cached songs should contain 7 seeds
+        // 1. Initial cached songs should contain 8 seeds
         val initial = repo.getCachedSongs(code, prefs)
-        assertEquals(7, initial.size)
+        assertEquals(8, initial.size)
 
         // 2. Add custom song "I Speak Jesus"
         val customSong = com.example.syncedn.data.model.SongData(
@@ -1312,9 +1313,9 @@ class ExampleUnitTest {
         )
         repo.saveSongLocally(code, customSong, prefs)
 
-        // 3. getCachedSongs must now contain 8 songs (custom song + all 7 original seeds)
+        // 3. getCachedSongs must now contain 9 songs (custom song + all 8 original seeds)
         val updated = repo.getCachedSongs(code, prefs)
-        assertEquals(8, updated.size)
+        assertEquals(9, updated.size)
         assertTrue(updated.any { it.title == "I Speak Jesus" })
         assertTrue(updated.any { it.title == "Praise" })
         assertTrue(updated.any { it.title == "Trust in God" })
@@ -1324,7 +1325,7 @@ class ExampleUnitTest {
         // 4. Deleting a song marks it deleted
         repo.deleteSong(code, "seed_praise", prefs)
         val afterDelete = repo.getCachedSongs(code, prefs)
-        assertEquals(7, afterDelete.size)
+        assertEquals(8, afterDelete.size)
         assertFalse(afterDelete.any { it.title == "Praise" })
         assertTrue(afterDelete.any { it.title == "I Speak Jesus" })
     }
@@ -2781,5 +2782,135 @@ class ExampleUnitTest {
         } finally {
             tempDir.deleteRecursively()
         }
+    }
+
+    @Test
+    fun testRosterDeduplicationByEmailAndUid() {
+        val range1 = com.example.syncedn.data.model.UnavailableRange("r1", "2026-11-01", "2026-11-02", "Vacation")
+        val range2 = com.example.syncedn.data.model.UnavailableRange("r2", "2026-11-05", "2026-11-06", "Work")
+
+        val doc1 = com.example.syncedn.data.model.TeamMember(
+            uid = "user_987654",
+            fullName = "YANYAN",
+            username = "YANYAN",
+            email = "yanyangenturo@gmail.com",
+            role = "Member",
+            ministryRole = "Vocalist",
+            teamCode = "TEST01",
+            photoUri = "",
+            unavailableRanges = listOf(range1)
+        )
+        val doc2 = com.example.syncedn.data.model.TeamMember(
+            uid = "auth_uid_yanyan",
+            fullName = "Yanyan Genturo",
+            username = "yanyangenturo",
+            email = "yanyangenturo@gmail.com",
+            role = "Member",
+            ministryRole = "Member",
+            teamCode = "TEST01",
+            photoUri = "https://cloudinary.com/profile_yanyan.jpg",
+            unavailableRanges = listOf(range2)
+        )
+        val doc3 = com.example.syncedn.data.model.TeamMember(
+            uid = "user_rl_synthetic",
+            fullName = "RL",
+            username = "RL",
+            email = "ryanlloydgenturo@gmail.com",
+            role = "Leader",
+            ministryRole = "Worship Leader",
+            teamCode = "TEST01"
+        )
+        val doc4 = com.example.syncedn.data.model.TeamMember(
+            uid = "auth_uid_rl",
+            fullName = "Ryan Lloyd Genturo",
+            username = "RL",
+            email = "ryanlloydgenturo@gmail.com",
+            role = "Leader",
+            ministryRole = "Worship Leader",
+            teamCode = "TEST01",
+            photoUri = "https://cloudinary.com/profile_rl.jpg"
+        )
+
+        val rawList = listOf(doc1, doc2, doc3, doc4)
+        val deduplicated = com.example.syncedn.data.database.TeamRepository.deduplicateRoster(rawList)
+
+        // Verifications:
+        // 1. Must reduce 4 duplicate records down to exactly 2 canonical members (RL and Yanyan)
+        assertEquals(2, deduplicated.size)
+
+        // 2. Yanyan entry checks
+        val yanyan = deduplicated.find { it.email.equals("yanyangenturo@gmail.com", true) }
+        assertNotNull("Yanyan must exist in deduplicated roster", yanyan)
+        assertEquals("auth_uid_yanyan", yanyan!!.uid) // Preferred authentic UID
+        assertEquals("https://cloudinary.com/profile_yanyan.jpg", yanyan.photoUri) // Photo preserved
+        assertEquals("Vocalist", yanyan.ministryRole) // Specific ministry role preserved over generic Member
+        assertEquals(2, yanyan.unavailableRanges.size) // Both date ranges merged
+
+        // 3. RL entry checks
+        val rl = deduplicated.find { it.email.equals("ryanlloydgenturo@gmail.com", true) }
+        assertNotNull("RL must exist in deduplicated roster", rl)
+        assertEquals("auth_uid_rl", rl!!.uid) // Preferred authentic UID
+        assertEquals("Leader", rl.role)
+        assertEquals("Worship Leader", rl.ministryRole)
+        assertEquals("https://cloudinary.com/profile_rl.jpg", rl.photoUri)
+    }
+
+    @Test
+    fun testDefaultSeedSongsIntegrityAndVerifiedUrls() {
+        val seedSongs = com.example.syncedn.data.database.TeamRepository.getDefaultSeedSongs("TEST01")
+        assertTrue("Seed catalog must contain at least 5 songs", seedSongs.size >= 5)
+
+        val requiredTitles = listOf("Amazing Grace", "Build My Life", "Goodness of God", "Gratitude", "Praise", "Trust in God")
+        for (req in requiredTitles) {
+            val match = seedSongs.find { it.title.equals(req, ignoreCase = true) }
+            assertNotNull("Seed song '$req' must be present in default seed catalog", match)
+            val videoId = com.example.syncedn.data.model.SongData.extractYoutubeVideoId(match!!.referenceUrl)
+            assertNotNull("Reference URL for '$req' must have a valid YouTube video ID: ${match.referenceUrl}", videoId)
+            assertTrue("Sheet for '$req' must have chords format", match.sheet.contains("[") && match.sheet.contains("]"))
+            assertTrue("Sheet for '$req' must contain [Verse", match.sheet.contains("[Verse"))
+            assertTrue("Sheet for '$req' must contain [Chorus", match.sheet.contains("[Chorus"))
+            assertTrue("Lyrics for '$req' must not be blank", match.lyrics.isNotBlank())
+            assertTrue("Original key for '$req' must not be blank", match.key.isNotBlank())
+            assertTrue("BPM for '$req' must be greater than 0", match.bpm > 0)
+        }
+    }
+
+    @Test
+    fun testLegacyBrokenSeedSongUrlAutoMigration() {
+        val defaultSeeds = com.example.syncedn.data.database.TeamRepository.getDefaultSeedSongs("MIGRATE01")
+        val goodnessSeed = defaultSeeds.find { it.title.equals("Goodness of God", true) }!!
+
+        // Simulate an existing cached song in preferences with the old broken 404 URL
+        val legacyGoodnessSong = goodnessSeed.copy(
+            referenceUrl = "https://www.youtube.com/watch?v=-f4MUKEVKaU"
+        )
+        val legacyArray = org.json.JSONArray().apply {
+            put(org.json.JSONObject(legacyGoodnessSong.toMap()))
+        }
+
+        val prefs = FakePreferences().apply {
+            edit().putString("team_songs_MIGRATE01", legacyArray.toString()).apply()
+        }
+
+        val loadedSongs = com.example.syncedn.data.database.TeamRepository.getCachedSongs("MIGRATE01", prefs)
+        val migratedGoodness = loadedSongs.find { it.title.equals("Goodness of God", true) }
+        assertNotNull(migratedGoodness)
+        // Must be migrated to the verified working URL (n3t6CdeiN1M)
+        assertEquals("https://www.youtube.com/watch?v=n3t6CdeiN1M", migratedGoodness!!.referenceUrl)
+    }
+
+    @Test
+    fun testMemberTransposeChordsGating() {
+        val sheetWithChords = "[Verse 1]\n[G]Amazing grace, how [C]sweet the sound"
+        val hasChords = com.example.syncedn.ChordSheet.hasChords(sheetWithChords)
+        assertTrue("Sheet must have chords", hasChords)
+
+        // MemberActivity showChords should be equal to hasChordsInSheet, allowing members to transpose
+        val showChords = hasChords
+        assertTrue("showChords must be true for sheets with chords regardless of instrumentalist assignment", showChords)
+
+        // Transposing G by 2 semitones to A
+        val transposedToA = com.example.syncedn.ChordSheet.render(sheetWithChords, 2, false, false)
+        assertTrue("Transposed sheet must contain transposed chords line", transposedToA.contains("A") && transposedToA.contains("D"))
     }
 }

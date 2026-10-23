@@ -158,8 +158,12 @@ object AuthManager {
                             // Password matches the newly reset password!
                             val onAuthReady = {
                                 FirestoreManager.getUserByEmail(cleanEmail) { profileResult ->
-                                    val realUid = auth.currentUser?.uid ?: "user_${cleanEmail.hashCode()}"
-                                    val profile = profileResult.getOrNull() ?: UserProfile(
+                                    val existingProfile = profileResult.getOrNull()
+                                    val realUid = existingProfile?.uid?.takeIf { it.isNotBlank() && !it.startsWith("user_") }
+                                        ?: auth.currentUser?.uid?.takeIf { it.isNotBlank() }
+                                        ?: existingProfile?.uid?.takeIf { it.isNotBlank() }
+                                        ?: "user_${cleanEmail.hashCode()}"
+                                    val profile = existingProfile ?: UserProfile(
                                         uid = realUid,
                                         username = cleanEmail.substringBefore("@"),
                                         email = cleanEmail,

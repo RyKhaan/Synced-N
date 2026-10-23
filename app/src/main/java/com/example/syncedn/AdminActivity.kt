@@ -2695,36 +2695,40 @@ class AdminActivity : AppCompatActivity() {
         }
 
         val cached = TeamRepository.getCachedRoster(currentCode, preferences)
-        if (cached.isNotEmpty()) return applyOverrides(cached)
-        if (teamRoster.isNotEmpty()) return applyOverrides(teamRoster)
-        val currentUid = preferences.getString("userId", "").orEmpty()
-        val currentName = fullName.ifBlank { displayName }
-        val userRole = preferences.getString("role", if (isLeader) "Leader" else "Member").orEmpty()
-        val ministry = preferences.getString("ministryRole", if (isLeader) "Worship Leader" else "Member").orEmpty()
-        if (currentName.isNotBlank() && currentCode.isNotBlank()) {
-            val self = TeamMember(
-                uid = currentUid,
-                fullName = currentName,
-                username = displayName,
-                email = preferences.getString("email", "").orEmpty(),
-                role = userRole,
-                ministryRole = ministry,
-                teamCode = currentCode,
-                photoUri = preferences.getString("photoUri", "").orEmpty()
-            )
-            return applyOverrides(listOf(self))
+        val rawList = if (cached.isNotEmpty()) cached
+        else if (teamRoster.isNotEmpty()) teamRoster
+        else {
+            val currentUid = preferences.getString("userId", "").orEmpty()
+            val currentName = fullName.ifBlank { displayName }
+            val userRole = preferences.getString("role", if (isLeader) "Leader" else "Member").orEmpty()
+            val ministry = preferences.getString("ministryRole", if (isLeader) "Worship Leader" else "Member").orEmpty()
+            if (currentName.isNotBlank() && currentCode.isNotBlank()) {
+                val self = TeamMember(
+                    uid = currentUid,
+                    fullName = currentName,
+                    username = displayName,
+                    email = preferences.getString("email", "").orEmpty(),
+                    role = userRole,
+                    ministryRole = ministry,
+                    teamCode = currentCode,
+                    photoUri = preferences.getString("photoUri", "").orEmpty()
+                )
+                listOf(self)
+            } else {
+                ministryMembers.map { (name, role, badge) ->
+                    TeamMember(
+                        uid = name.lowercase().replace(" ", "_"),
+                        fullName = name,
+                        username = name.split(" ").firstOrNull() ?: name,
+                        email = "${name.lowercase().replace(" ", "")}@syncedn.org",
+                        role = if (badge == "Admin") "Leader" else "Member",
+                        ministryRole = role,
+                        teamCode = currentCode
+                    )
+                }
+            }
         }
-        return applyOverrides(ministryMembers.map { (name, role, badge) ->
-            TeamMember(
-                uid = name.lowercase().replace(" ", "_"),
-                fullName = name,
-                username = name.split(" ").firstOrNull() ?: name,
-                email = "${name.lowercase().replace(" ", "")}@syncedn.org",
-                role = if (badge == "Admin") "Leader" else "Member",
-                ministryRole = role,
-                teamCode = currentCode
-            )
-        })
+        return TeamRepository.deduplicateRoster(applyOverrides(rawList), preferences)
     }
 
 

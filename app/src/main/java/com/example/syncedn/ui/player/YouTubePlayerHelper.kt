@@ -155,7 +155,9 @@ object YouTubePlayerHelper {
                 </head>
                 <body>
                     <iframe 
-                        src="https://www.youtube-nocookie.com/embed/$videoId?playsinline=1&rel=0&modestbranding=1&enablejsapi=1" 
+                        id="ytplayer"
+                        type="text/html"
+                        src="https://www.youtube.com/embed/$videoId?playsinline=1&rel=0&modestbranding=1&enablejsapi=1&origin=https://www.youtube.com&widget_referrer=https://www.youtube.com" 
                         allowfullscreen 
                         allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture">
                     </iframe>
@@ -163,7 +165,7 @@ object YouTubePlayerHelper {
                 </html>
             """.trimIndent()
 
-            loadDataWithBaseURL("https://www.youtube-nocookie.com", html, "text/html", "UTF-8", null)
+            loadDataWithBaseURL("https://www.youtube.com", html, "text/html", "UTF-8", null)
         }
 
         frameContainer.addView(webView)
