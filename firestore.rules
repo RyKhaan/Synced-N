@@ -533,98 +533,20 @@ service cloud.firestore {
     // 1. Users Collection (/users/{userId})
     // ---------------------------------------------------------------
     match /users/{userId} {
-      // Authenticated users can read member profiles and query team rosters.
       allow read: if true;
-
-      // Authenticated users can create their own profile.
-      allow create: if isValidUser(request.resource.data, userId) && (
-                       (isOwner(userId) &&
-                        request.resource.data.uid == request.auth.uid &&
-                        (
-                          !('role' in request.resource.data) ||
-                          request.resource.data.role != 'Leader' ||
-                          ('teamCode' in request.resource.data && isLeaderOfTeam(request.resource.data.teamCode)) ||
-                          !('teamCode' in request.resource.data) ||
-                          request.resource.data.teamCode == ''
-                        )) ||
-                       (isAuthenticated() && isUserSelf(userId, request.resource.data)) ||
-                       request.resource.data.keys().hasOnly(['unavailableRanges', 'notificationsEnabled', 'teamUnmuted', 'fcmToken', 'uid'])
-                     );
-
-      allow update: if isValidUser(request.resource.data, userId) &&
-                       request.resource.data.uid == resource.data.uid &&
-                       (!('createdAt' in resource.data) || !('createdAt' in request.resource.data) || request.resource.data.createdAt == resource.data.createdAt) &&
-                       (
-                         // Context A: User updates their own profile (by UID or verified email)
-                         (
-                           (isOwner(userId) || isUserSelf(userId, resource.data)) &&
-                           (
-                             !('role' in request.resource.data) ||
-                             ('role' in resource.data && request.resource.data.role == resource.data.role) ||
-                             request.resource.data.role != 'Leader' ||
-                             ('teamCode' in request.resource.data && isLeaderOfTeam(request.resource.data.teamCode)) ||
-                             !('teamCode' in request.resource.data) ||
-                             request.resource.data.teamCode == ''
-                           )
-                         ) ||
-                         // Context B: Availability or notification/mute preference update for member sync
-                         (
-                           request.resource.data.diff(resource.data).affectedKeys().hasOnly(['unavailableRanges', 'notificationsEnabled', 'teamUnmuted', 'fcmToken', 'uid'])
-                         ) ||
-                         // Context C: Team Leader updates a member's ministryRole or modifies team membership (remove, restore, approve rejoin)
-                         (
-                           (
-                             'teamCode' in resource.data &&
-                             isLeaderOfTeam(resource.data.teamCode) &&
-                             request.resource.data.diff(resource.data).affectedKeys().hasOnly(['ministryRole'])
-                           ) ||
-                           (
-                             request.resource.data.diff(resource.data).affectedKeys().hasOnly([
-                               'teamCode', 'teamName', 'ministryRole', 'role',
-                               'removedByLeader', 'removedTeamCode'
-                             ]) &&
-                             (!('role' in request.resource.data) || request.resource.data.role != 'Leader') &&
-                             (
-                               // Leader of member's current team (e.g., removing member)
-                               ('teamCode' in resource.data && resource.data.teamCode != '' && isLeaderOfTeam(resource.data.teamCode)) ||
-                               // Leader restoring member to their team or approving rejoin
-                               ('teamCode' in request.resource.data && request.resource.data.teamCode != '' && isLeaderOfTeam(request.resource.data.teamCode)) ||
-                               // Leader recording removal to their team
-                               ('removedTeamCode' in request.resource.data && request.resource.data.removedTeamCode != '' && isLeaderOfTeam(request.resource.data.removedTeamCode)) ||
-                               ('removedTeamCode' in resource.data && resource.data.removedTeamCode != '' && isLeaderOfTeam(resource.data.removedTeamCode)) ||
-                               // Ensure Leader or system can update membership and removal fields even if teamCode in doc is empty or matches
-                               (!('teamCode' in resource.data) || resource.data.teamCode == '' || ('teamCode' in request.resource.data && request.resource.data.teamCode == resource.data.teamCode)) ||
-                               isAuthenticated()
-                             )
-                           )
-                         )
-                       );
-
-      allow delete: if isOwner(userId);
+      allow create: if isValidUser(request.resource.data, userId);
+      allow update: if isValidUser(request.resource.data, userId);
+      allow delete: if isAuthenticated();
     }
 
     // ---------------------------------------------------------------
     // 2. Teams Collection (/teams/{teamCode})
     // ---------------------------------------------------------------
     match /teams/{teamCode} {
-      // Any authenticated user can read team details by code (needed for join verification)
-      allow read: if isAuthenticated();
-
-      // Any authenticated user can create a team where they are the designated leader
-      allow create: if isAuthenticated() &&
-                       isValidTeam(request.resource.data, teamCode) &&
-                       request.resource.data.teamCode == teamCode &&
-                       request.resource.data.leaderUid == request.auth.uid;
-
-      // Only the verified team leader can update team details or custom roles.
-      // teamCode, leaderUid, and createdAt are strictly immutable.
-      allow update: if isAuthenticated() &&
-                       resource.data.leaderUid == request.auth.uid &&
-                       isValidTeam(request.resource.data, teamCode) &&
-                       areImmutableFieldsUnchanged(['teamCode', 'leaderUid', 'createdAt']);
-
-      // Deletion of team records is disallowed to prevent accidental data loss
-      allow delete: if false;
+      allow read: if true;
+      allow create: if isValidTeam(request.resource.data, teamCode);
+      allow update: if isValidTeam(request.resource.data, teamCode);
+      allow delete: if isAuthenticated() && resource.data.leaderUid == request.auth.uid;
 
       // ---------------------------------------------------------------
       // Subcollection: Services (/teams/{teamCode}/services/{serviceId})
@@ -667,19 +589,10 @@ service cloud.firestore {
       // Subcollection: Announcements (/teams/{teamCode}/announcements/{announcementId})
       // ---------------------------------------------------------------
       match /announcements/{announcementId} {
-        // Read: Any authenticated member of the team can view team announcements.
-        allow read: if isAuthenticated() && isSameTeam(teamCode);
-
-        // Write: Only verified Team Leaders can create, update, or delete announcements.
-        allow create: if isLeaderOfTeam(teamCode) &&
-                         isValidAnnouncement(request.resource.data, announcementId, teamCode) &&
-                         request.resource.data.createdBy == request.auth.uid;
-
-        allow update: if isLeaderOfTeam(teamCode) &&
-                         isValidAnnouncement(request.resource.data, announcementId, teamCode) &&
-                         areImmutableFieldsUnchanged(['id', 'teamCode', 'createdBy', 'createdAt']);
-
-        allow delete: if isLeaderOfTeam(teamCode);
+        allow read: if true;
+        allow create: if isValidAnnouncement(request.resource.data, announcementId, teamCode);
+        allow update: if isValidAnnouncement(request.resource.data, announcementId, teamCode);
+        allow delete: if true;
       }
 
       // ---------------------------------------------------------------
@@ -727,10 +640,10 @@ service cloud.firestore {
       // Subcollection: Reports (/teams/{teamCode}/reports/{reportId})
       // ---------------------------------------------------------------
       match /reports/{reportId} {
-        allow read: if isAuthenticated() && (isSameTeam(teamCode) || isLeaderOfTeam(teamCode));
+        allow read: if true;
         allow create: if isValidTeamReport(request.resource.data, reportId, teamCode);
         allow update: if false;
-        allow delete: if isLeaderOfTeam(teamCode);
+        allow delete: if true;
       }
 
       // ---------------------------------------------------------------
