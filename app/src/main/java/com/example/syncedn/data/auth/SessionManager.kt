@@ -58,6 +58,8 @@ object SessionManager {
             remove(KEY_TEAM_CODE)
             remove(KEY_PHOTO_URI)
             remove(KEY_LEFT_TEAM)
+            remove("removedByLeader")
+            remove("removedTeamCode")
             // Note: KEY_MEMBER_ROLES is team configuration assigned by the leader,
             // preserved across user sessions on the device.
         }

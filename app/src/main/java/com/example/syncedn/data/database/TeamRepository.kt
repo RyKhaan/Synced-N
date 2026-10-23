@@ -439,9 +439,14 @@ object TeamRepository {
                         if (emailLower.isNotBlank() && m.uid.isNotBlank()) {
                             putString("email_uid_$emailLower", m.uid)
                         }
-                        if (m.photoUri.isNotBlank()) {
-                            if (m.uid.isNotBlank()) putString("user_photo_${m.uid}", m.photoUri)
-                            if (emailLower.isNotBlank()) putString("email_photo_$emailLower", m.photoUri)
+                        val effectivePhoto = m.photoUri.ifBlank {
+                            if (m.uid.isNotBlank()) preferences.getString("user_photo_${m.uid}", "").orEmpty() else ""
+                        }.ifBlank {
+                            if (emailLower.isNotBlank()) preferences.getString("email_photo_$emailLower", "").orEmpty() else ""
+                        }
+                        if (effectivePhoto.isNotBlank()) {
+                            if (m.uid.isNotBlank()) putString("user_photo_${m.uid}", effectivePhoto)
+                            if (emailLower.isNotBlank()) putString("email_photo_$emailLower", effectivePhoto)
                         }
                         if (m.unavailableRanges.isNotEmpty()) {
                             val rangesJson = serializeRangesJson(m.unavailableRanges)
@@ -618,25 +623,38 @@ object TeamRepository {
                                     val preferredUid = if (!m.uid.startsWith("user_") && m.uid.isNotBlank()) m.uid else existing.uid.ifBlank { m.uid }
                                     val combinedRanges = (existing.unavailableRanges + m.unavailableRanges)
                                         .distinctBy { it.id.ifBlank { "${it.startDate}_${it.endDate}_${it.reason}" } }
+                                    val fallbackPhoto = preferences?.getString("user_photo_${preferredUid}", null)?.takeIf { it.isNotBlank() }
+                                        ?: (if (key.contains("@")) preferences?.getString("email_photo_$key", null)?.takeIf { it.isNotBlank() } else null)
+                                        ?: ""
                                     mergedByIdentity[key] = existing.copy(
                                         uid = preferredUid,
                                         fullName = existing.fullName.ifBlank { m.fullName },
                                         username = existing.username.ifBlank { m.username },
                                         role = if (existing.role.equals("Leader", true) || m.role.equals("Leader", true)) "Leader" else existing.role.ifBlank { m.role },
                                         ministryRole = existing.ministryRole.ifBlank { m.ministryRole },
-                                        photoUri = existing.photoUri.ifBlank { m.photoUri },
+                                        photoUri = existing.photoUri.ifBlank { m.photoUri }.ifBlank { fallbackPhoto },
                                         unavailableRanges = combinedRanges
                                     )
                                 }
                             }
                             val members = mergedByIdentity.values.map { m ->
-                                if (m.email.trim().equals("ryanlloydgenturo@gmail.com", ignoreCase = true) || m.role.equals("Leader", ignoreCase = true)) {
-                                    m.copy(
+                                val fallbackPhoto = preferences?.getString("user_photo_${m.uid}", null)?.takeIf { it.isNotBlank() }
+                                    ?: preferences?.getString("email_photo_${m.email.trim().lowercase()}", null)?.takeIf { it.isNotBlank() }
+                                    ?: ""
+                                val mWithPhoto = if (m.photoUri.isBlank() && fallbackPhoto.isNotBlank()) m.copy(photoUri = fallbackPhoto) else m
+                                if (mWithPhoto.email.trim().equals("ryanlloydgenturo@gmail.com", ignoreCase = true) ||
+                                    mWithPhoto.fullName.trim().equals("Ryan Lloyd Genturo", ignoreCase = true)) {
+                                    mWithPhoto.copy(
                                         role = "Leader",
-                                        ministryRole = if (m.ministryRole.isBlank() || m.ministryRole.equals("Member", true)) "Worship Leader" else m.ministryRole
+                                        ministryRole = "Worship Leader"
+                                    )
+                                } else if (mWithPhoto.role.equals("Leader", ignoreCase = true)) {
+                                    mWithPhoto.copy(
+                                        role = "Leader",
+                                        ministryRole = if (mWithPhoto.ministryRole.isBlank() || mWithPhoto.ministryRole.equals("Member", true)) "Worship Leader" else mWithPhoto.ministryRole
                                     )
                                 } else {
-                                    m
+                                    mWithPhoto
                                 }
                             }.toList()
                             saveRosterLocally(code, members, preferences)
@@ -737,10 +755,12 @@ object TeamRepository {
         }
 
         val cleanEmail = memberEmail.trim().lowercase()
-        val isTargetLeader = newRole.equals("Substitute Leader", ignoreCase = true) ||
-                             newRole.equals("Worship Leader", ignoreCase = true) ||
-                             cleanEmail == "ryanlloydgenturo@gmail.com" ||
-                             memberName.equals("Ryan Lloyd Genturo", ignoreCase = true)
+        val isPrimaryLeader = cleanEmail == "ryanlloydgenturo@gmail.com" ||
+                              memberName.equals("Ryan Lloyd Genturo", ignoreCase = true)
+        val effectiveNewRole = if (isPrimaryLeader) "Worship Leader" else newRole
+        val isTargetLeader = effectiveNewRole.equals("Substitute Leader", ignoreCase = true) ||
+                             effectiveNewRole.equals("Worship Leader", ignoreCase = true) ||
+                             isPrimaryLeader
         val computedRole = if (isTargetLeader) "Leader" else "Member"
 
         // Update in-memory caches
@@ -752,7 +772,7 @@ object TeamRepository {
                     (memberName.isNotBlank() && (it.fullName.equals(memberName, true) || it.username.equals(memberName, true)))
                 }
                 if (member != null) {
-                    val updated = member.copy(ministryRole = newRole, role = computedRole)
+                    val updated = member.copy(ministryRole = effectiveNewRole, role = computedRole)
                     val idx = roster.indexOf(member)
                     roster[idx] = updated
                 }
@@ -762,18 +782,18 @@ object TeamRepository {
         if (preferences != null) {
             preferences.edit {
                 if (cleanEmail.isNotBlank()) {
-                    putString("email_ministry_$cleanEmail", newRole)
+                    putString("email_ministry_$cleanEmail", effectiveNewRole)
                     putString("email_role_$cleanEmail", computedRole)
                 }
                 if (memberUid.isNotBlank()) {
-                    putString("user_ministry_$memberUid", newRole)
+                    putString("user_ministry_$memberUid", effectiveNewRole)
                     putString("user_role_$memberUid", computedRole)
                 }
                 try {
                     val map = org.json.JSONObject(preferences.getString(com.example.syncedn.data.auth.SessionManager.KEY_MEMBER_ROLES, "{}").orEmpty())
-                    if (cleanEmail.isNotBlank()) map.put(cleanEmail, newRole)
-                    if (memberUid.isNotBlank()) map.put(memberUid, newRole)
-                    if (memberName.isNotBlank()) map.put(memberName, newRole)
+                    if (cleanEmail.isNotBlank()) map.put(cleanEmail, effectiveNewRole)
+                    if (memberUid.isNotBlank()) map.put(memberUid, effectiveNewRole)
+                    if (memberName.isNotBlank()) map.put(memberName, effectiveNewRole)
                     putString(com.example.syncedn.data.auth.SessionManager.KEY_MEMBER_ROLES, map.toString())
                 } catch (_: Throwable) {}
             }
@@ -781,7 +801,7 @@ object TeamRepository {
 
         try {
             val userUpdates = mapOf<String, Any>(
-                "ministryRole" to newRole,
+                "ministryRole" to effectiveNewRole,
                 "role" to computedRole
             )
             if (memberUid.isNotBlank()) {
@@ -3657,20 +3677,6 @@ object TeamRepository {
         val initialCached = getCachedChatMessages(code, preferences)
         if (initialCached.isNotEmpty()) {
             onUpdate(initialCached)
-
-            // Auto-sync any local unpushed messages to Firestore in background
-            try {
-                val dbRef = db.collection(TEAMS_COLLECTION).document(code).collection(MESSAGES_SUBCOLLECTION)
-                val deletedIds = preferences?.getStringSet("deleted_chat_ids_$code", emptySet()) ?: emptySet()
-                for (localMsg in initialCached) {
-                    if (localMsg.id in deletedIds) continue
-                    if (localMsg.mediaUrl.isBlank() || localMsg.mediaUrl.startsWith("http://") || localMsg.mediaUrl.startsWith("https://")) {
-                        dbRef.document(localMsg.id).set(localMsg.toMap()).addOnFailureListener {
-                            // ignore background sync errors
-                        }
-                    }
-                }
-            } catch (_: Throwable) {}
         }
 
         return try {
@@ -3690,19 +3696,125 @@ object TeamRepository {
                             doc.data?.let { ChatMessage.fromMap(it) }
                         }.filter { it.id !in deletedIds }
 
-                        // Remote is source of truth for all synced messages; retain local messages only if un-synced (e.g. pending local draft within 60s)
-                        val remoteIds = remoteMessages.map { it.id }.toSet()
-                        val localCached = getCachedChatMessages(code, preferences).filter { it.id !in deletedIds }
-                        val pendingLocal = localCached.filter { it.id !in remoteIds && (System.currentTimeMillis() - it.timestamp) < 60_000L }
-
-                        val mergedList = (remoteMessages + pendingLocal).distinctBy { it.id }.sortedBy { it.timestamp }
-                        saveAllChatMessagesLocally(code, mergedList, preferences)
-                        onUpdate(mergedList)
+                        // Firestore remote snapshot is authoritative across all devices
+                        saveAllChatMessagesLocally(code, remoteMessages, preferences)
+                        onUpdate(remoteMessages)
                     }
                 }
         } catch (e: Throwable) {
             android.util.Log.e("TeamRepository", "listenTeamMessages exception: ${e.message}")
             null
+        }
+    }
+
+    fun refreshTeamMessages(
+        teamCode: String,
+        preferences: android.content.SharedPreferences? = null,
+        onComplete: (Result<List<ChatMessage>>) -> Unit = {}
+    ) {
+        val code = teamCode.trim().uppercase()
+        if (code.isBlank()) {
+            onComplete(Result.success(emptyList()))
+            return
+        }
+        try {
+            db.collection(TEAMS_COLLECTION).document(code).collection(MESSAGES_SUBCOLLECTION)
+                .orderBy("timestamp", Query.Direction.ASCENDING)
+                .limit(200)
+                .get()
+                .addOnSuccessListener { snapshot ->
+                    val deletedIds = preferences?.getStringSet("deleted_chat_ids_$code", emptySet()) ?: emptySet()
+                    val msgs = snapshot.documents.mapNotNull { doc ->
+                        doc.data?.let { ChatMessage.fromMap(it) }
+                    }.filter { it.id !in deletedIds }
+                    saveAllChatMessagesLocally(code, msgs, preferences)
+                    onComplete(Result.success(msgs))
+                }
+                .addOnFailureListener {
+                    onComplete(Result.failure(it))
+                }
+        } catch (e: Throwable) {
+            onComplete(Result.failure(e))
+        }
+    }
+
+    fun refreshUserProfile(
+        uid: String,
+        email: String,
+        preferences: android.content.SharedPreferences? = null,
+        onComplete: (Result<com.example.syncedn.data.model.UserProfile>) -> Unit = {}
+    ) {
+        val cleanEmail = email.trim().lowercase()
+        if (uid.isNotBlank()) {
+            db.collection(USERS_COLLECTION).document(uid)
+                .get()
+                .addOnSuccessListener { snap ->
+                    if (snap != null && snap.exists() && snap.data != null) {
+                        val map = snap.data!!.toMutableMap()
+                        map["uid"] = snap.id
+                        val profile = com.example.syncedn.data.model.UserProfile.fromMap(map)
+                        if (preferences != null) {
+                            com.example.syncedn.data.auth.SessionManager.saveSessionProfile(
+                                preferences,
+                                profile,
+                                profile.username,
+                                profile.email
+                            )
+                        }
+                        onComplete(Result.success(profile))
+                    } else if (cleanEmail.isNotBlank()) {
+                        db.collection(USERS_COLLECTION).whereEqualTo("email", cleanEmail)
+                            .get()
+                            .addOnSuccessListener { querySnap ->
+                                val doc = querySnap.documents.firstOrNull()
+                                if (doc != null && doc.data != null) {
+                                    val map = doc.data!!.toMutableMap()
+                                    map["uid"] = doc.id
+                                    val profile = com.example.syncedn.data.model.UserProfile.fromMap(map)
+                                    if (preferences != null) {
+                                        com.example.syncedn.data.auth.SessionManager.saveSessionProfile(
+                                            preferences,
+                                            profile,
+                                            profile.username,
+                                            profile.email
+                                        )
+                                    }
+                                    onComplete(Result.success(profile))
+                                } else {
+                                    onComplete(Result.failure(NoSuchElementException("User profile not found")))
+                                }
+                            }
+                            .addOnFailureListener { onComplete(Result.failure(it)) }
+                    } else {
+                        onComplete(Result.failure(NoSuchElementException("User profile not found")))
+                    }
+                }
+                .addOnFailureListener { onComplete(Result.failure(it)) }
+        } else if (cleanEmail.isNotBlank()) {
+            db.collection(USERS_COLLECTION).whereEqualTo("email", cleanEmail)
+                .get()
+                .addOnSuccessListener { querySnap ->
+                    val doc = querySnap.documents.firstOrNull()
+                    if (doc != null && doc.data != null) {
+                        val map = doc.data!!.toMutableMap()
+                        map["uid"] = doc.id
+                        val profile = com.example.syncedn.data.model.UserProfile.fromMap(map)
+                        if (preferences != null) {
+                            com.example.syncedn.data.auth.SessionManager.saveSessionProfile(
+                                preferences,
+                                profile,
+                                profile.username,
+                                profile.email
+                            )
+                        }
+                        onComplete(Result.success(profile))
+                    } else {
+                        onComplete(Result.failure(NoSuchElementException("User profile not found")))
+                    }
+                }
+                .addOnFailureListener { onComplete(Result.failure(it)) }
+        } else {
+            onComplete(Result.failure(IllegalArgumentException("UID or Email required")))
         }
     }
 

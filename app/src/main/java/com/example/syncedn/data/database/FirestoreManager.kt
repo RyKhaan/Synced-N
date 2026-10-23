@@ -366,7 +366,9 @@ object FirestoreManager {
         val cleanEmail = email.trim()
         val updates = mutableMapOf<String, Any>(
             "role" to role,
-            "teamName" to teamName
+            "teamName" to teamName,
+            "removedByLeader" to false,
+            "removedTeamCode" to ""
         )
         if (effectiveUid.isNotBlank()) {
             updates["uid"] = effectiveUid
