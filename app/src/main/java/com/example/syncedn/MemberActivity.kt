@@ -2666,7 +2666,13 @@ space(48)
                         }
                     }
                 }
-                var updated = if (override.isNotBlank()) m.copy(ministryRole = override) else m
+                var updated = if (override.isNotBlank()) {
+                    val isOverrideLeader = override.equals("Substitute Leader", ignoreCase = true) ||
+                                           override.equals("Worship Leader", ignoreCase = true) ||
+                                           emailLower == "ryanlloydgenturo@gmail.com" ||
+                                           m.fullName.equals("Ryan Lloyd Genturo", ignoreCase = true)
+                    m.copy(ministryRole = override, role = if (isOverrideLeader) "Leader" else "Member")
+                } else m
                 if (updated.photoUri.isBlank()) {
                     val p = preferences.getString("user_photo_${m.uid}", "").orEmpty().ifBlank {
                         preferences.getString("email_photo_${emailLower}", "").orEmpty().ifBlank {
@@ -5192,7 +5198,11 @@ space(48)
                 roster.forEach { member ->
                     val name = member.fullName.ifBlank { member.username.ifBlank { "Member" } }
                     val role = member.ministryRole.ifBlank { if (member.role.equals("Leader", true)) "Worship Leader" else "Member" }
-                    val badge = if (member.role.equals("Leader", true)) "Leader" else "Member"
+                    val isLeaderBadge = member.email.equals("ryanlloydgenturo@gmail.com", ignoreCase = true) ||
+                                        member.fullName.equals("Ryan Lloyd Genturo", ignoreCase = true) ||
+                                        member.ministryRole.equals("Worship Leader", ignoreCase = true) ||
+                                        member.ministryRole.equals("Substitute Leader", ignoreCase = true)
+                    val badge = if (isLeaderBadge) "Leader" else "Member"
                     col.add(memberRow(name, role, badge, photoUri = member.photoUri))
                     col.space(4)
                 }
