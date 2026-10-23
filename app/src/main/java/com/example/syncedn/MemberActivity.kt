@@ -319,19 +319,33 @@ open class MemberActivity : AppCompatActivity() {
                         (currentUid.isNotBlank() && m.uid == currentUid) ||
                         (currentEmail.isNotBlank() && m.email.trim().lowercase() == currentEmail)
                     }
-                    if (myEntry != null && myEntry.ministryRole.equals("Substitute Leader", ignoreCase = true)) {
+                    if (myEntry != null) {
                         val currentPref = preferences.getString("ministryRole", "").orEmpty()
-                        if (!currentPref.equals("Substitute Leader", ignoreCase = true)) {
-                            preferences.edit {
-                                putString("ministryRole", "Substitute Leader")
-                                putString(SessionManager.KEY_MINISTRY_ROLE, "Substitute Leader")
+                        if (myEntry.ministryRole.equals("Substitute Leader", ignoreCase = true)) {
+                            if (!currentPref.equals("Substitute Leader", ignoreCase = true)) {
+                                preferences.edit {
+                                    putString("role", "Leader")
+                                    putString(SessionManager.KEY_ROLE, "Leader")
+                                    putString("ministryRole", "Substitute Leader")
+                                    putString(SessionManager.KEY_MINISTRY_ROLE, "Substitute Leader")
+                                }
+                                toast("Assigned as Substitute Leader! Switching to Worship Leader dashboard...")
+                                val intent = Intent(this@MemberActivity, AdminActivity::class.java)
+                                    .putExtra("startPage", "home")
+                                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                                startActivity(intent)
+                                finish()
                             }
-                            toast("Assigned as Substitute Leader! Switching to Worship Leader dashboard...")
-                            val intent = Intent(this@MemberActivity, AdminActivity::class.java)
-                                .putExtra("startPage", "home")
-                                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
-                            startActivity(intent)
-                            finish()
+                        } else {
+                            if (currentPref.equals("Substitute Leader", ignoreCase = true) ||
+                                preferences.getString("role", "").equals("Leader", true)) {
+                                preferences.edit {
+                                    putString("role", "Member")
+                                    putString(SessionManager.KEY_ROLE, "Member")
+                                    putString("ministryRole", myEntry.ministryRole.ifBlank { "Member" })
+                                    putString(SessionManager.KEY_MINISTRY_ROLE, myEntry.ministryRole.ifBlank { "Member" })
+                                }
+                            }
                         }
                     }
                 }
@@ -538,12 +552,14 @@ open class MemberActivity : AppCompatActivity() {
         WindowCompat.setDecorFitsSystemWindows(window, false)
         syncLocalTeamsToMemory()
         checkAndRequestNotificationPermission()
-        val currentRoleOnStart = preferences.getString("role", "Member").orEmpty()
         val currentMinistryOnStart = preferences.getString("ministryRole", "").orEmpty()
         val currentEmailOnStart = preferences.getString("email", "").orEmpty().trim().lowercase()
-        if (currentRoleOnStart.equals("Leader", ignoreCase = true) ||
-            currentMinistryOnStart.equals("Substitute Leader", ignoreCase = true) ||
-            currentEmailOnStart == "ryanlloydgenturo@gmail.com") {
+        val currentTeamName = preferences.getString("teamName", "").orEmpty().trim().lowercase()
+        val teamLeaderEmail = preferences.getString("team_leader_email_$currentTeamName", "").orEmpty().trim().lowercase()
+        val isPrimaryLeader = currentEmailOnStart == "ryanlloydgenturo@gmail.com" ||
+                              (teamLeaderEmail.isNotBlank() && teamLeaderEmail == currentEmailOnStart) ||
+                              currentMinistryOnStart.equals("Worship Leader", ignoreCase = true)
+        if (isPrimaryLeader || currentMinistryOnStart.equals("Substitute Leader", ignoreCase = true)) {
             val intent = Intent(this, AdminActivity::class.java).putExtra("startPage", intent.getStringExtra("startPage") ?: "home")
             startActivity(intent)
             finish()
@@ -671,13 +687,15 @@ open class MemberActivity : AppCompatActivity() {
         } else {
             next
         }
-        val userRole = preferences.getString("role", "Member").orEmpty()
         val userMinistry = preferences.getString("ministryRole", "").orEmpty()
         val userEmail = preferences.getString("email", "").orEmpty().trim().lowercase()
+        val userTeamName = preferences.getString("teamName", "").orEmpty().trim().lowercase()
+        val teamLeaderEmail = preferences.getString("team_leader_email_$userTeamName", "").orEmpty().trim().lowercase()
+        val isPrimaryLeader = userEmail == "ryanlloydgenturo@gmail.com" ||
+                              (teamLeaderEmail.isNotBlank() && teamLeaderEmail == userEmail) ||
+                              userMinistry.equals("Worship Leader", ignoreCase = true)
         if (effectiveNext in listOf("home", "schedule", "teams", "announcements", "calendar", "songs", "service")) {
-            if (userRole.equals("Leader", ignoreCase = true) ||
-                userMinistry.equals("Substitute Leader", ignoreCase = true) ||
-                userEmail == "ryanlloydgenturo@gmail.com") {
+            if (isPrimaryLeader || userMinistry.equals("Substitute Leader", ignoreCase = true)) {
                 startActivity(Intent(this, AdminActivity::class.java).putExtra("startPage", effectiveNext))
                 finish()
                 return
@@ -2666,12 +2684,13 @@ space(48)
                         }
                     }
                 }
-                var updated = if (override.isNotBlank()) {
-                    val isOverrideLeader = override.equals("Substitute Leader", ignoreCase = true) ||
-                                           override.equals("Worship Leader", ignoreCase = true) ||
+                val liveRole = m.ministryRole.takeIf { it.isNotBlank() } ?: override
+                var updated = if (liveRole.isNotBlank()) {
+                    val isOverrideLeader = liveRole.equals("Substitute Leader", ignoreCase = true) ||
+                                           liveRole.equals("Worship Leader", ignoreCase = true) ||
                                            emailLower == "ryanlloydgenturo@gmail.com" ||
                                            m.fullName.equals("Ryan Lloyd Genturo", ignoreCase = true)
-                    m.copy(ministryRole = override, role = if (isOverrideLeader) "Leader" else "Member")
+                    m.copy(ministryRole = liveRole, role = if (isOverrideLeader) "Leader" else "Member")
                 } else m
                 if (updated.photoUri.isBlank()) {
                     val p = preferences.getString("user_photo_${m.uid}", "").orEmpty().ifBlank {
@@ -4891,15 +4910,6 @@ space(48)
                 })
         }
         layoutParams = LinearLayout.LayoutParams(-1, dp(if (showDetails) 156 else 88))
-        addOnLayoutChangeListener { _, left, _, right, _, _, _, _, _ ->
-            val w = right - left
-            if (w > 0) {
-                val imageWidth = (w * (if (showDetails) 237f else 130f) / 360f).toInt()
-                if (photograph.layoutParams.width != imageWidth) {
-                    photograph.layoutParams = photograph.layoutParams.apply { width = imageWidth }
-                }
-            }
-        }
     }
     private fun teamTabs(): View = horizontal().apply {
         setPadding(dp(20), dp(10), dp(12), dp(10))
@@ -5002,7 +5012,7 @@ space(48)
                                             runOnUiThread {
                                                 if (res.isSuccess) {
                                                     val idx = chatMessages.indexOfFirst { it.id == msg.id }
-                                                    if (idx != -1) chatMessages[idx] = chatMessages[idx].copy(text = newTxt)
+                                                    if (idx != -1) chatMessages[idx] = chatMessages[idx].copy(text = newTxt, isEdited = true, editedAt = System.currentTimeMillis())
                                                     navigate("teams")
                                                 } else toast("Failed to edit message")
                                             }
@@ -5034,7 +5044,8 @@ space(48)
             }
 
             val timeStr = timeFormat.format(java.util.Date(msg.timestamp))
-            val caption = text("$timeStr  ✓✓ Delivered", 10, Color.rgb(148, 163, 184)).apply {
+            val statusLabel = if (msg.isEdited) "$timeStr  (edited)  ✓✓ Delivered" else "$timeStr  ✓✓ Delivered"
+            val caption = text(statusLabel, 10, Color.rgb(148, 163, 184)).apply {
                 setPadding(0, dp(2), dp(4), 0)
             }
             bubbleContainer.addView(caption, LinearLayout.LayoutParams(
@@ -5106,7 +5117,8 @@ space(48)
             ).apply { gravity = Gravity.START })
 
             val timeStr = timeFormat.format(java.util.Date(msg.timestamp))
-            val caption = text(timeStr, 10, Color.rgb(148, 163, 184)).apply {
+            val statusLabel = if (msg.isEdited) "$timeStr  (edited)" else timeStr
+            val caption = text(statusLabel, 10, Color.rgb(148, 163, 184)).apply {
                 setPadding(dp(4), dp(2), 0, 0)
             }
             bubbleContainer.addView(caption, LinearLayout.LayoutParams(
@@ -5149,12 +5161,37 @@ space(48)
                     runOnUiThread {
                         if (page == "teams" && teamTab == "Team Chat") {
                             val existingIds = chatMessages.map { it.id }.toSet()
+                            val newIds = msgs.map { it.id }.toSet()
+                            val hasDeleted = existingIds.any { it !in newIds }
                             val incoming = msgs.filter { it.id !in existingIds }
-                            val mediaUpdated = msgs.filter { m ->
+                            val hasEditedOrUpdated = msgs.any { m ->
                                 val cur = chatMessages.find { it.id == m.id }
-                                cur != null && cur.mediaUrl != m.mediaUrl && m.mediaUrl.isNotBlank()
+                                cur != null && (cur.text != m.text || cur.isEdited != m.isEdited || (cur.mediaUrl != m.mediaUrl && m.mediaUrl.isNotBlank()))
                             }
-                            if (incoming.isNotEmpty()) {
+                            if (hasDeleted || hasEditedOrUpdated) {
+                                chatMessages.clear()
+                                chatMessages.addAll(msgs)
+                                val col = chatMessagesCol
+                                if (col != null) {
+                                    col.removeAllViews()
+                                    chatEmptyView = null
+                                    val myUid = AuthManager.currentUser?.uid?.takeIf { it.isNotBlank() }
+                                        ?: preferences.getString(SessionManager.KEY_USER_ID, "").orEmpty()
+                                    if (chatMessages.isEmpty()) {
+                                        val empty = text("No messages yet. Say hello to your team!", 13, Color.rgb(100, 116, 139), centered = true).apply {
+                                            setPadding(0, dp(40), 0, dp(40))
+                                        }
+                                        chatEmptyView = empty
+                                        col.add(empty, -1, -2)
+                                    } else {
+                                        chatMessages.forEach { msg ->
+                                            col.addView(buildChatMessageBubble(msg, myUid))
+                                        }
+                                    }
+                                } else {
+                                    navigate("teams")
+                                }
+                            } else if (incoming.isNotEmpty()) {
                                 val map = LinkedHashMap<String, ChatMessage>()
                                 chatMessages.forEach { map[it.id] = it }
                                 msgs.forEach { map[it.id] = it }
@@ -5170,14 +5207,13 @@ space(48)
                                 } else {
                                     navigate("teams")
                                 }
-                            } else if (mediaUpdated.isNotEmpty()) {
-                                val map = LinkedHashMap<String, ChatMessage>()
-                                chatMessages.forEach { map[it.id] = it }
-                                msgs.forEach { map[it.id] = it }
-                                chatMessages.clear()
-                                chatMessages.addAll(map.values.sortedBy { it.timestamp })
-                                navigate("teams")
                             }
+                        } else {
+                            val map = LinkedHashMap<String, ChatMessage>()
+                            chatMessages.forEach { map[it.id] = it }
+                            msgs.forEach { map[it.id] = it }
+                            chatMessages.clear()
+                            chatMessages.addAll(map.values.sortedBy { it.timestamp })
                         }
                     }
                 }
