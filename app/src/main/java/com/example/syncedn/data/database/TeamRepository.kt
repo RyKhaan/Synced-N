@@ -2596,8 +2596,17 @@ object TeamRepository {
         if (inMemory != null && inMemory.isNotEmpty()) {
             val mergedMem = synchronized(inMemory) { inMemory.filter { it.id.lowercase() !in deletedKeys && it.title.trim().lowercase() !in deletedKeys }.toMutableList() }
             activeSeeds.forEach { seed ->
-                if (mergedMem.none { it.title.equals(seed.title, ignoreCase = true) }) {
+                val existingIdx = mergedMem.indexOfFirst { it.title.equals(seed.title, ignoreCase = true) }
+                if (existingIdx < 0) {
                     mergedMem.add(seed)
+                } else {
+                    val existing = mergedMem[existingIdx]
+                    if (!com.example.syncedn.ChordSheet.hasChords(existing.sheet) && com.example.syncedn.ChordSheet.hasChords(seed.sheet)) {
+                        mergedMem[existingIdx] = existing.copy(
+                            sheet = seed.sheet,
+                            lyrics = if (existing.lyrics.isBlank()) seed.lyrics else existing.lyrics
+                        )
+                    }
                 }
             }
             return mergedMem
@@ -2628,7 +2637,7 @@ object TeamRepository {
                                     parsed.referenceUrl.contains("y7495tY_k_8") ||
                                     parsed.referenceUrl.contains("n4XWfwLHeLM")
                                 val effectiveRefUrl = if (isBrokenOrOldUrl) seedMatch.referenceUrl else parsed.referenceUrl
-                                val effectiveSheet = if (parsed.sheet.isBlank() || parsed.sheet.contains("Add your licensed") || parsed.sheet.length < seedMatch.sheet.length) seedMatch.sheet else parsed.sheet
+                                val effectiveSheet = if (parsed.sheet.isBlank() || parsed.sheet.contains("Add your licensed") || parsed.sheet.length < seedMatch.sheet.length || (!com.example.syncedn.ChordSheet.hasChords(parsed.sheet) && com.example.syncedn.ChordSheet.hasChords(seedMatch.sheet))) seedMatch.sheet else parsed.sheet
                                 val effectiveLyrics = if (parsed.lyrics.isBlank() || parsed.lyrics.length < seedMatch.lyrics.length) seedMatch.lyrics else parsed.lyrics
                                 parsed.copy(
                                     referenceUrl = effectiveRefUrl,
@@ -2644,8 +2653,17 @@ object TeamRepository {
                     val merged = mutableListOf<SongData>()
                     merged.addAll(list)
                     activeSeeds.forEach { seed ->
-                        if (merged.none { it.title.equals(seed.title, ignoreCase = true) }) {
+                        val existingIdx = merged.indexOfFirst { it.title.equals(seed.title, ignoreCase = true) }
+                        if (existingIdx < 0) {
                             merged.add(seed)
+                        } else {
+                            val existing = merged[existingIdx]
+                            if (!com.example.syncedn.ChordSheet.hasChords(existing.sheet) && com.example.syncedn.ChordSheet.hasChords(seed.sheet)) {
+                                merged[existingIdx] = existing.copy(
+                                    sheet = seed.sheet,
+                                    lyrics = if (existing.lyrics.isBlank()) seed.lyrics else existing.lyrics
+                                )
+                            }
                         }
                     }
                     if (merged.isNotEmpty()) {
@@ -2819,8 +2837,17 @@ object TeamRepository {
                     val merged = mutableListOf<SongData>()
                     merged.addAll(fetched.filter { it.id.lowercase() !in deletedKeys && it.title.trim().lowercase() !in deletedKeys })
                     activeSeeds.forEach { seed ->
-                        if (merged.none { it.title.equals(seed.title, ignoreCase = true) }) {
+                        val existingIdx = merged.indexOfFirst { it.title.equals(seed.title, ignoreCase = true) }
+                        if (existingIdx < 0) {
                             merged.add(seed)
+                        } else {
+                            val existing = merged[existingIdx]
+                            if (!com.example.syncedn.ChordSheet.hasChords(existing.sheet) && com.example.syncedn.ChordSheet.hasChords(seed.sheet)) {
+                                merged[existingIdx] = existing.copy(
+                                    sheet = seed.sheet,
+                                    lyrics = if (existing.lyrics.isBlank()) seed.lyrics else existing.lyrics
+                                )
+                            }
                         }
                     }
                     saveSongsLocally(code, merged, preferences)
