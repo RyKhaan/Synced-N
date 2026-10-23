@@ -312,6 +312,28 @@ open class MemberActivity : AppCompatActivity() {
                 runOnUiThread {
                     teamRoster = updatedRoster
                     updateRosterViews()
+
+                    val currentUid = currentUserId()
+                    val currentEmail = preferences.getString("email", "").orEmpty().trim().lowercase()
+                    val myEntry = updatedRoster.find { m ->
+                        (currentUid.isNotBlank() && m.uid == currentUid) ||
+                        (currentEmail.isNotBlank() && m.email.trim().lowercase() == currentEmail)
+                    }
+                    if (myEntry != null && myEntry.ministryRole.equals("Substitute Leader", ignoreCase = true)) {
+                        val currentPref = preferences.getString("ministryRole", "").orEmpty()
+                        if (!currentPref.equals("Substitute Leader", ignoreCase = true)) {
+                            preferences.edit {
+                                putString("ministryRole", "Substitute Leader")
+                                putString(SessionManager.KEY_MINISTRY_ROLE, "Substitute Leader")
+                            }
+                            toast("Assigned as Substitute Leader! Switching to Worship Leader dashboard...")
+                            val intent = Intent(this@MemberActivity, AdminActivity::class.java)
+                                .putExtra("startPage", "home")
+                                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                            startActivity(intent)
+                            finish()
+                        }
+                    }
                 }
             }
         }
@@ -397,6 +419,27 @@ open class MemberActivity : AppCompatActivity() {
                 .collection("users").document(myCurrentUid)
                 .addSnapshotListener { snapshot, error ->
                     if (error != null || snapshot == null || !snapshot.exists()) return@addSnapshotListener
+                    val ministryRoleFromSnap = snapshot.getString("ministryRole").orEmpty()
+                    if (ministryRoleFromSnap.equals("Substitute Leader", ignoreCase = true)) {
+                        val currentPref = preferences.getString("ministryRole", "").orEmpty()
+                        if (!currentPref.equals("Substitute Leader", ignoreCase = true)) {
+                            preferences.edit {
+                                putString("ministryRole", "Substitute Leader")
+                                putString(SessionManager.KEY_MINISTRY_ROLE, "Substitute Leader")
+                            }
+                            runOnUiThread {
+                                if (!isFinishing && !isDestroyed) {
+                                    toast("You have been assigned as Substitute Leader!")
+                                    val intent = Intent(this@MemberActivity, AdminActivity::class.java)
+                                        .putExtra("startPage", "home")
+                                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                                    startActivity(intent)
+                                    finish()
+                                }
+                            }
+                            return@addSnapshotListener
+                        }
+                    }
                     val removedByLeader = snapshot.getBoolean("removedByLeader") ?: false
                     val removedTeamCode = snapshot.getString("removedTeamCode").orEmpty()
                     val myActiveTeamCode = preferences.getString(SessionManager.KEY_TEAM_CODE, "").orEmpty()
@@ -437,6 +480,27 @@ open class MemberActivity : AppCompatActivity() {
                 .addSnapshotListener { snapshot, error ->
                     if (error != null || snapshot == null || snapshot.isEmpty) return@addSnapshotListener
                     val doc = snapshot.documents.firstOrNull() ?: return@addSnapshotListener
+                    val ministryRoleFromDoc = doc.getString("ministryRole").orEmpty()
+                    if (ministryRoleFromDoc.equals("Substitute Leader", ignoreCase = true)) {
+                        val currentPref = preferences.getString("ministryRole", "").orEmpty()
+                        if (!currentPref.equals("Substitute Leader", ignoreCase = true)) {
+                            preferences.edit {
+                                putString("ministryRole", "Substitute Leader")
+                                putString(SessionManager.KEY_MINISTRY_ROLE, "Substitute Leader")
+                            }
+                            runOnUiThread {
+                                if (!isFinishing && !isDestroyed) {
+                                    toast("You have been assigned as Substitute Leader!")
+                                    val intent = Intent(this@MemberActivity, AdminActivity::class.java)
+                                        .putExtra("startPage", "home")
+                                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                                    startActivity(intent)
+                                    finish()
+                                }
+                            }
+                            return@addSnapshotListener
+                        }
+                    }
                     val removedByLeader = doc.getBoolean("removedByLeader") ?: false
                     val removedTeamCode = doc.getString("removedTeamCode").orEmpty()
                     val myActiveTeamCode = preferences.getString(SessionManager.KEY_TEAM_CODE, "").orEmpty()
@@ -474,6 +538,17 @@ open class MemberActivity : AppCompatActivity() {
         WindowCompat.setDecorFitsSystemWindows(window, false)
         syncLocalTeamsToMemory()
         checkAndRequestNotificationPermission()
+        val currentRoleOnStart = preferences.getString("role", "Member").orEmpty()
+        val currentMinistryOnStart = preferences.getString("ministryRole", "").orEmpty()
+        val currentEmailOnStart = preferences.getString("email", "").orEmpty().trim().lowercase()
+        if (currentRoleOnStart.equals("Leader", ignoreCase = true) ||
+            currentMinistryOnStart.equals("Substitute Leader", ignoreCase = true) ||
+            currentEmailOnStart == "ryanlloydgenturo@gmail.com") {
+            val intent = Intent(this, AdminActivity::class.java).putExtra("startPage", intent.getStringExtra("startPage") ?: "home")
+            startActivity(intent)
+            finish()
+            return
+        }
         displayName = savedInstanceState?.getString("displayName") ?: preferences.getString(SessionManager.KEY_USERNAME, "").orEmpty()
         fullName = preferences.getString(SessionManager.KEY_FULL_NAME, "").orEmpty()
         profileReturnPage = savedInstanceState?.getString("profileReturnPage") ?: "settings"
@@ -595,6 +670,18 @@ open class MemberActivity : AppCompatActivity() {
             "teamChoice"
         } else {
             next
+        }
+        val userRole = preferences.getString("role", "Member").orEmpty()
+        val userMinistry = preferences.getString("ministryRole", "").orEmpty()
+        val userEmail = preferences.getString("email", "").orEmpty().trim().lowercase()
+        if (effectiveNext in listOf("home", "schedule", "teams", "announcements", "calendar", "songs", "service")) {
+            if (userRole.equals("Leader", ignoreCase = true) ||
+                userMinistry.equals("Substitute Leader", ignoreCase = true) ||
+                userEmail == "ryanlloydgenturo@gmail.com") {
+                startActivity(Intent(this, AdminActivity::class.java).putExtra("startPage", effectiveNext))
+                finish()
+                return
+            }
         }
         if (next in listOf("start", "login") && javaClass == MemberActivity::class.java) {
             startActivity(Intent(this, MainActivity::class.java).putExtra("startPage", next))
@@ -4758,10 +4845,16 @@ space(48)
     private fun teamHeader(showDetails: Boolean = false): View = FrameLayout(this).apply {
         background = GradientDrawable(GradientDrawable.Orientation.TL_BR,
             intArrayOf(Color.rgb(8, 7, 32), navy))
+        val screenW = resources.displayMetrics.widthPixels
+        val exactImageWidth = if (screenW > 0) {
+            ((screenW * (if (showDetails) 237f else 130f)) / 360f).toInt()
+        } else {
+            dp(if (showDetails) 237 else 130)
+        }
         val photograph = image("team_sunset", "Sunset and cross").apply {
             scaleType = ImageView.ScaleType.CENTER_CROP
         }
-        addView(photograph, FrameLayout.LayoutParams(dp(if (showDetails) 237 else 130), -1, Gravity.END))
+        addView(photograph, FrameLayout.LayoutParams(exactImageWidth, -1, Gravity.END))
         addView(View(this@MemberActivity).apply {
             background = bg(Color.argb(70, 0, 0, 20))
         }, FrameLayout.LayoutParams(-1, -1))
@@ -4793,12 +4886,11 @@ space(48)
         }
         layoutParams = LinearLayout.LayoutParams(-1, dp(if (showDetails) 156 else 88))
         addOnLayoutChangeListener { _, left, _, right, _, _, _, _, _ ->
-            val imageWidth = ((right - left) * (if (showDetails) 237f else 130f) / 360f).toInt()
-            if (photograph.layoutParams.width != imageWidth) {
-                photograph.post {
-                    if (photograph.layoutParams.width != imageWidth) {
-                        photograph.layoutParams = photograph.layoutParams.apply { width = imageWidth }
-                    }
+            val w = right - left
+            if (w > 0) {
+                val imageWidth = (w * (if (showDetails) 237f else 130f) / 360f).toInt()
+                if (photograph.layoutParams.width != imageWidth) {
+                    photograph.layoutParams = photograph.layoutParams.apply { width = imageWidth }
                 }
             }
         }
