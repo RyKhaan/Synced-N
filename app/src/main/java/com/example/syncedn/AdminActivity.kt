@@ -279,10 +279,26 @@ class AdminActivity : AppCompatActivity() {
         val uid = currentUserId()
         val emailLower = preferences.getString("email", "").orEmpty().trim().lowercase()
         val cleanTeamLower = team.trim().lowercase()
+        val isPrimaryLead = emailLower == "ryanlloydgenturo@gmail.com" || fullName.equals("Ryan Lloyd Genturo", ignoreCase = true)
         if (code.isNotBlank() && team.isNotBlank()) {
             FirestoreManager.registerLocalTeam(code, team)
             val currentName = fullName.ifBlank { displayName }
-            val ministry = preferences.getString("ministryRole", if (role.equals("Leader", true)) "Worship Leader" else "Member").orEmpty()
+            val ministry = if (isPrimaryLead) "Worship Leader" else preferences.getString("ministryRole", if (role.equals("Leader", true)) "Worship Leader" else "Member").orEmpty()
+            if (isPrimaryLead && !preferences.getString("ministryRole", "").equals("Worship Leader", ignoreCase = true)) {
+                preferences.edit {
+                    putString("ministryRole", "Worship Leader")
+                    putString(SessionManager.KEY_MINISTRY_ROLE, "Worship Leader")
+                    if (uid.isNotBlank()) putString("user_ministry_$uid", "Worship Leader")
+                    if (emailLower.isNotBlank()) putString("email_ministry_$emailLower", "Worship Leader")
+                }
+                TeamRepository.updateMemberMinistryRole(
+                    memberUid = uid,
+                    newRole = "Worship Leader",
+                    memberName = "Ryan Lloyd Genturo",
+                    memberEmail = "ryanlloydgenturo@gmail.com",
+                    preferences = preferences
+                )
+            }
             val existingRanges = TeamRepository.getMemberUnavailableRanges(uid, preferences, emailLower, currentName)
             val member = com.example.syncedn.data.model.TeamMember(
                 uid = uid,
@@ -362,6 +378,32 @@ class AdminActivity : AppCompatActivity() {
         teamName = savedInstanceState?.getString("teamName") ?: preferences.getString("teamName", "").orEmpty()
         val uid = preferences.getString("userId", "").orEmpty()
         val emailLower = preferences.getString("email", "").orEmpty().trim().lowercase()
+        if (emailLower == "ryanlloydgenturo@gmail.com" || fullName.equals("Ryan Lloyd Genturo", ignoreCase = true)) {
+            val curMinistry = preferences.getString("ministryRole", "").orEmpty()
+            if (!curMinistry.equals("Worship Leader", ignoreCase = true)) {
+                preferences.edit {
+                    putString("ministryRole", "Worship Leader")
+                    putString(SessionManager.KEY_MINISTRY_ROLE, "Worship Leader")
+                    putString("role", "Leader")
+                    putString(SessionManager.KEY_ROLE, "Leader")
+                    if (uid.isNotBlank()) {
+                        putString("user_ministry_$uid", "Worship Leader")
+                        putString("user_role_$uid", "Leader")
+                    }
+                    if (emailLower.isNotBlank()) {
+                        putString("email_ministry_$emailLower", "Worship Leader")
+                        putString("email_role_$emailLower", "Leader")
+                    }
+                }
+                TeamRepository.updateMemberMinistryRole(
+                    memberUid = uid,
+                    newRole = "Worship Leader",
+                    memberName = "Ryan Lloyd Genturo",
+                    memberEmail = "ryanlloydgenturo@gmail.com",
+                    preferences = preferences
+                )
+            }
+        }
         val activeCode = preferences.getString("teamCode", "").orEmpty()
             .ifBlank { preferences.getString("email_code_$emailLower", "").orEmpty() }
             .ifBlank { preferences.getString("user_code_$uid", "").orEmpty() }
@@ -2077,7 +2119,25 @@ class AdminActivity : AppCompatActivity() {
         val root=vertical().apply {setBackgroundColor(Color.WHITE)}
         root.add(settingsHeader("Settings",true))
         val scroll=StableScrollView(this).apply {isFillViewport=true; clipToPadding=true}
-        val col=vertical();scroll.addView(col,FrameLayout.LayoutParams(-1,-2));root.add(scroll,-1,0,1f)
+        val col=vertical();scroll.addView(col,FrameLayout.LayoutParams(-1,-2))
+        val swipeRefresh = androidx.swiperefreshlayout.widget.SwipeRefreshLayout(this).apply {
+            setColorSchemeColors(navy, Color.rgb(167, 0, 213))
+            addView(scroll, ViewGroup.LayoutParams(-1, -1))
+            setOnRefreshListener {
+                val uid = AuthManager.currentUser?.uid?.takeIf { it.isNotBlank() }
+                    ?: preferences.getString(SessionManager.KEY_USER_ID, "").orEmpty()
+                val email = preferences.getString("email", "").orEmpty()
+                TeamRepository.refreshUserProfile(uid, email, preferences) {
+                    runOnUiThread {
+                        fullName = preferences.getString(SessionManager.KEY_FULL_NAME, fullName).orEmpty()
+                        displayName = preferences.getString(SessionManager.KEY_USERNAME, displayName).orEmpty()
+                        isRefreshing = false
+                        navigate("settings")
+                    }
+                }
+            }
+        }
+        root.add(swipeRefresh, -1, 0, 1f)
         col.space(24)
         col.section(18).apply {
             val userRow=horizontal()
@@ -4363,7 +4423,11 @@ class AdminActivity : AppCompatActivity() {
         val myMinistryRole = preferences.getString(SessionManager.KEY_MINISTRY_ROLE, "").orEmpty()
             .ifBlank { preferences.getString("ministryRole", "").orEmpty() }
         val isSubLeader = myMinistryRole.equals("Substitute Leader", ignoreCase = true)
-        val assignableRoles = if (isSubLeader) {
+        val isTargetPrimary = roleMemberEmail.trim().lowercase() == "ryanlloydgenturo@gmail.com" ||
+                              roleMember.equals("Ryan Lloyd Genturo", ignoreCase = true)
+        val assignableRoles = if (isTargetPrimary) {
+            listOf("Worship Leader")
+        } else if (isSubLeader) {
             leaderRoles.filter {
                 !it.equals("Substitute Leader", ignoreCase = true) &&
                 !it.equals("Worship Leader", ignoreCase = true) &&
@@ -4413,6 +4477,14 @@ class AdminActivity : AppCompatActivity() {
             setOnClickListener {
                 if (selectedRole.isBlank()) {
                     toast("Choose a role.")
+                    return@setOnClickListener
+                }
+                if (isTargetPrimary && !selectedRole.equals("Worship Leader", ignoreCase = true)) {
+                    toast("Primary Leader is permanently assigned as Worship Leader.")
+                    return@setOnClickListener
+                }
+                if (isSubLeader && (selectedRole.equals("Substitute Leader", ignoreCase = true) || selectedRole.equals("Worship Leader", ignoreCase = true))) {
+                    toast("Substitute Leaders cannot assign another Substitute Leader.")
                     return@setOnClickListener
                 }
                 val targetMember = getActiveRoster().find {
@@ -6417,7 +6489,59 @@ class AdminActivity : AppCompatActivity() {
         val scroll = StableScrollView(this).apply { isFillViewport = true; clipToPadding = true }
         val col = vertical().apply { setPadding(dp(20), dp(16), dp(20), dp(20)) }
         scroll.addView(col, FrameLayout.LayoutParams(-1, -2))
-        root.add(scroll, -1, 0, 1f)
+        val swipeRefresh = androidx.swiperefreshlayout.widget.SwipeRefreshLayout(this).apply {
+            setColorSchemeColors(navy, Color.rgb(167, 0, 213))
+            addView(scroll, ViewGroup.LayoutParams(-1, -1))
+            setOnRefreshListener {
+                val activeCode = preferences.getString("teamCode", "").orEmpty()
+                when (teamTab) {
+                    "Team Chat" -> {
+                        if (activeCode.isNotBlank()) {
+                            TeamRepository.refreshTeamMessages(activeCode, preferences) { res ->
+                                runOnUiThread {
+                                    isRefreshing = false
+                                    res.getOrNull()?.let { msgs ->
+                                        chatMessages.clear()
+                                        chatMessages.addAll(msgs)
+                                        chatMessagesCol?.removeAllViews()
+                                        val myUid = AuthManager.currentUser?.uid?.takeIf { it.isNotBlank() }
+                                            ?: preferences.getString(SessionManager.KEY_USER_ID, "").orEmpty()
+                                        if (msgs.isEmpty()) {
+                                            val empty = text("No messages yet. Say hello to your team!", 13, Color.rgb(100, 116, 139), centered = true).apply {
+                                                setPadding(0, dp(40), 0, dp(40))
+                                            }
+                                            chatEmptyView = empty
+                                            chatMessagesCol?.add(empty, -1, -2)
+                                        } else {
+                                            msgs.forEach { m -> appendChatMessageBubble(m, myUid) }
+                                        }
+                                    }
+                                }
+                            }
+                        } else {
+                            isRefreshing = false
+                        }
+                    }
+                    "Members", "Role" -> {
+                        if (activeCode.isNotBlank()) {
+                            TeamRepository.getTeamRoster(activeCode, force = true) { res ->
+                                runOnUiThread {
+                                    isRefreshing = false
+                                    res.getOrNull()?.let { teamRoster = it }
+                                    navigate("teams")
+                                }
+                            }
+                        } else {
+                            isRefreshing = false
+                        }
+                    }
+                    else -> {
+                        isRefreshing = false
+                    }
+                }
+            }
+        }
+        root.add(swipeRefresh, -1, 0, 1f)
         when (teamTab) {
             "Members" -> {
                 val roster = getActiveRoster()
@@ -6429,11 +6553,17 @@ class AdminActivity : AppCompatActivity() {
                                         member.ministryRole.equals("Worship Leader", ignoreCase = true) ||
                                         member.ministryRole.equals("Substitute Leader", ignoreCase = true)
                     val badge = if (isLeaderBadge) "Leader" else "Member"
+                    val isPrimaryLeadMember = member.email.equals("ryanlloydgenturo@gmail.com", ignoreCase = true) ||
+                                              member.fullName.equals("Ryan Lloyd Genturo", ignoreCase = true)
                     col.add(memberRow(name, role, badge, if (isLeader) ({
-                        roleMember = name
-                        roleMemberUid = member.uid
-                        roleMemberEmail = member.email
-                        navigate("roleEdit")
+                        if (isPrimaryLeadMember) {
+                            toast("Primary Leader is permanently assigned as Worship Leader.")
+                        } else {
+                            roleMember = name
+                            roleMemberUid = member.uid
+                            roleMemberEmail = member.email
+                            navigate("roleEdit")
+                        }
                     }) else null, member.photoUri))
                     col.space(4)
                 }
@@ -6477,10 +6607,15 @@ class AdminActivity : AppCompatActivity() {
                                     add(horizontal().apply {
                                         setPadding(0, dp(8), 0, dp(8))
                                         if (isLeader) setOnClickListener {
-                                            roleMember = memberName
-                                            roleMemberUid = member.uid
-                                            roleMemberEmail = member.email
-                                            navigate("roleEdit")
+                                            if (member.email.equals("ryanlloydgenturo@gmail.com", ignoreCase = true) ||
+                                                memberName.equals("Ryan Lloyd Genturo", ignoreCase = true)) {
+                                                toast("Primary Leader is permanently assigned as Worship Leader.")
+                                            } else {
+                                                roleMember = memberName
+                                                roleMemberUid = member.uid
+                                                roleMemberEmail = member.email
+                                                navigate("roleEdit")
+                                            }
                                         }
                                         val pUri = member.photoUri.ifBlank {
                                             if (member.uid == currentUid || memberName.equals(displayName, ignoreCase = true) || memberName.equals(fullName, ignoreCase = true)) {
