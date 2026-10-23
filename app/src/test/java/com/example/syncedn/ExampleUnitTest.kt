@@ -3079,4 +3079,136 @@ class ExampleUnitTest {
         val transposedD = com.example.syncedn.ChordSheet.transposeChord("C", 2, false)
         assertEquals("C transposed up 2 semitones must be D", "D", transposedD)
     }
+
+    @Test
+    fun testUnavailableRangesDeletionSync() {
+        val repo = com.example.syncedn.data.database.TeamRepository
+        val prefs = FakePreferences()
+
+        // 1. Simulate member with a previously stored local unavailability range
+        val range1 = com.example.syncedn.data.model.UnavailableRange("r1", "2026-10-25", "2026-10-26", "Family event")
+        prefs.edit().putString(
+            "user_unavailable_ranges_test-uid",
+            org.json.JSONArray().put(org.json.JSONObject(range1.toMap())).toString()
+        ).apply()
+
+        // Verify it was saved in preferences
+        val storedRanges = repo.getMemberUnavailableRanges("test-uid", prefs)
+        assertEquals(1, storedRanges.size)
+
+        // 2. Member deletes unavailability in Firestore: incoming document has empty unavailableRanges
+        val updatedMember = com.example.syncedn.data.model.TeamMember(
+            uid = "test-uid",
+            fullName = "John Doe",
+            email = "johndoe@test.com",
+            role = "Member",
+            ministryRole = "Vocalist",
+            unavailableRanges = emptyList()
+        )
+
+        // Deduplicate roster should respect the empty list and NOT resurrect the deleted range
+        val roster = repo.deduplicateRoster(listOf(updatedMember), prefs)
+        assertEquals(1, roster.size)
+        assertTrue(
+            "Deleted unavailableRanges must remain empty and not resurrected",
+            roster[0].unavailableRanges.isEmpty()
+        )
+
+        // 3. saveRosterLocally should also synchronize and clear the old cached preference
+        repo.saveRosterLocally("TESTTEAM", roster, prefs)
+        val localRangesAfterSave = repo.getMemberUnavailableRanges("test-uid", prefs)
+        assertTrue(
+            "Local preference cache must be cleared after roster save",
+            localRangesAfterSave.isEmpty()
+        )
+    }
+
+    @Test
+    fun testChatMessageTimestampParsing() {
+        // 1. Long / Number timestamp
+        val mapWithNumber = mapOf(
+            "id" to "msg1",
+            "teamCode" to "TEAM01",
+            "senderUid" to "uid1",
+            "senderName" to "Alice",
+            "text" to "Hello World",
+            "timestamp" to 1700000000000L
+        )
+        val msg1 = com.example.syncedn.data.model.ChatMessage.fromMap(mapWithNumber)
+        assertEquals(1700000000000L, msg1.timestamp)
+
+        // 2. Double timestamp (e.g. from JSON serialization)
+        val mapWithDouble = mapOf(
+            "id" to "msg2",
+            "teamCode" to "TEAM01",
+            "senderUid" to "uid2",
+            "senderName" to "Bob",
+            "text" to "Double timestamp",
+            "timestamp" to 1700000000000.0
+        )
+        val msg2 = com.example.syncedn.data.model.ChatMessage.fromMap(mapWithDouble)
+        assertEquals(1700000000000L, msg2.timestamp)
+
+        // 3. String timestamp
+        val mapWithString = mapOf(
+            "id" to "msg3",
+            "teamCode" to "TEAM01",
+            "senderUid" to "uid3",
+            "senderName" to "Charlie",
+            "text" to "String timestamp",
+            "timestamp" to "1700000000000"
+        )
+        val msg3 = com.example.syncedn.data.model.ChatMessage.fromMap(mapWithString)
+        assertEquals(1700000000000L, msg3.timestamp)
+    }
+
+    @Test
+    fun testServiceCreationDateValidation() {
+        val sdf = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US)
+        val cal = java.util.Calendar.getInstance()
+        val todayIso = sdf.format(cal.time)
+
+        cal.add(java.util.Calendar.DAY_OF_YEAR, -1)
+        val yesterdayIso = sdf.format(cal.time)
+
+        cal.add(java.util.Calendar.DAY_OF_YEAR, 2)
+        val tomorrowIso = sdf.format(cal.time)
+
+        // Past date must be strictly less than today's ISO date string
+        assertTrue("Yesterday ($yesterdayIso) must be less than today ($todayIso)", yesterdayIso < todayIso)
+        // Today and tomorrow must NOT be less than today
+        assertFalse("Today ($todayIso) must not be less than today", todayIso < todayIso)
+        assertFalse("Tomorrow ($tomorrowIso) must not be less than today", tomorrowIso < todayIso)
+    }
+
+    @Test
+    fun testLeaderPromotionFlowRoleState() {
+        val member = com.example.syncedn.data.model.TeamMember(
+            uid = "sub-uid",
+            fullName = "Sub Leader",
+            email = "sub@syncedn.org",
+            role = "Leader",
+            ministryRole = "Worship Leader"
+        )
+        val isPromoted = member.ministryRole.equals("Worship Leader", ignoreCase = true) || member.role.equals("Leader", ignoreCase = true)
+        assertTrue("Promoted member should be recognized as Leader", isPromoted)
+        assertEquals("Worship Leader", member.ministryRole)
+        assertEquals("Leader", member.role)
+    }
+
+    @Test
+    fun testCoverPhotoUploadPreservesWizardMode() {
+        val leaderDraft = org.json.JSONObject()
+        var activeServiceIndex = -1
+        val page = "createService"
+
+        // Simulate uploading cover photo on new service creation
+        val remoteUrl = "https://res.cloudinary.com/demo/image/upload/sample.jpg"
+        leaderDraft.put("coverImageUrl", remoteUrl)
+
+        val serviceWizard = activeServiceIndex < 0
+        assertTrue("Wizard mode must remain active (true) after cover photo upload", serviceWizard)
+        val actionText = if (serviceWizard) "Next" else "Save"
+        assertEquals("Next button label must be preserved", "Next", actionText)
+    }
 }

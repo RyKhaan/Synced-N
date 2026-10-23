@@ -494,36 +494,53 @@ class AdminActivity : AppCompatActivity() {
                             (currentUid.isNotBlank() && m.uid == currentUid) ||
                             (currentEmail.isNotBlank() && m.email.trim().lowercase() == currentEmail)
                         }
-                        if (myEntry != null && !myEntry.ministryRole.equals("Substitute Leader", ignoreCase = true)) {
-                            val newRole = myEntry.ministryRole.ifBlank { "Member" }
-                            preferences.edit {
-                                putString("role", "Member")
-                                putString(SessionManager.KEY_ROLE, "Member")
-                                putString("ministryRole", newRole)
-                                putString(SessionManager.KEY_MINISTRY_ROLE, newRole)
-                                if (currentUid.isNotBlank()) {
-                                    putString("user_role_$currentUid", "Member")
-                                    putString("user_ministry_$currentUid", newRole)
+                        if (myEntry != null) {
+                            val isPromotedLeader = myEntry.ministryRole.equals("Worship Leader", ignoreCase = true) || myEntry.role.equals("Leader", ignoreCase = true)
+                            if (isPromotedLeader) {
+                                val wasSub = currentMinistry.equals("Substitute Leader", ignoreCase = true)
+                                preferences.edit {
+                                    putString("role", "Leader")
+                                    putString(SessionManager.KEY_ROLE, "Leader")
+                                    putString("ministryRole", "Worship Leader")
+                                    putString(SessionManager.KEY_MINISTRY_ROLE, "Worship Leader")
+                                    if (cleanTeamLower.isNotBlank() && currentEmail.isNotBlank()) {
+                                        putString("team_leader_email_$cleanTeamLower", currentEmail)
+                                    }
                                 }
-                                if (currentEmail.isNotBlank()) {
-                                    putString("email_role_$currentEmail", "Member")
-                                    putString("email_ministry_$currentEmail", newRole)
+                                if (wasSub) {
+                                    toast("You are now the Worship Leader of $teamName!")
                                 }
-                                if (cleanTeamLower.isNotBlank()) remove("team_leader_email_$cleanTeamLower")
-                                try {
-                                    val map = org.json.JSONObject(preferences.getString(SessionManager.KEY_MEMBER_ROLES, "{}").orEmpty())
-                                    if (currentUid.isNotBlank()) map.put(currentUid, newRole)
-                                    if (currentEmail.isNotBlank()) map.put(currentEmail, newRole)
-                                    putString(SessionManager.KEY_MEMBER_ROLES, map.toString())
-                                } catch (_: Throwable) {}
+                            } else if (!myEntry.ministryRole.equals("Substitute Leader", ignoreCase = true)) {
+                                val newRole = myEntry.ministryRole.ifBlank { "Member" }
+                                preferences.edit {
+                                    putString("role", "Member")
+                                    putString(SessionManager.KEY_ROLE, "Member")
+                                    putString("ministryRole", newRole)
+                                    putString(SessionManager.KEY_MINISTRY_ROLE, newRole)
+                                    if (currentUid.isNotBlank()) {
+                                        putString("user_role_$currentUid", "Member")
+                                        putString("user_ministry_$currentUid", newRole)
+                                    }
+                                    if (currentEmail.isNotBlank()) {
+                                        putString("email_role_$currentEmail", "Member")
+                                        putString("email_ministry_$currentEmail", newRole)
+                                    }
+                                    if (cleanTeamLower.isNotBlank()) remove("team_leader_email_$cleanTeamLower")
+                                    try {
+                                        val map = org.json.JSONObject(preferences.getString(SessionManager.KEY_MEMBER_ROLES, "{}").orEmpty())
+                                        if (currentUid.isNotBlank()) map.put(currentUid, newRole)
+                                        if (currentEmail.isNotBlank()) map.put(currentEmail, newRole)
+                                        putString(SessionManager.KEY_MEMBER_ROLES, map.toString())
+                                    } catch (_: Throwable) {}
+                                }
+                                TeamRepository.updateMemberMinistryRole(currentUid, newRole, memberEmail = currentEmail, preferences = preferences)
+                                toast("Your Substitute Leader assignment has ended.")
+                                val intent = Intent(this@AdminActivity, MemberActivity::class.java)
+                                    .putExtra("startPage", "home")
+                                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                                startActivity(intent)
+                                finish()
                             }
-                            TeamRepository.updateMemberMinistryRole(currentUid, newRole, memberEmail = currentEmail, preferences = preferences)
-                            toast("Your Substitute Leader assignment has ended.")
-                            val intent = Intent(this@AdminActivity, MemberActivity::class.java)
-                                .putExtra("startPage", "home")
-                                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
-                            startActivity(intent)
-                            finish()
                         }
                     }
                 }
@@ -585,7 +602,18 @@ class AdminActivity : AppCompatActivity() {
                         if (error != null || snapshot == null || !snapshot.exists()) return@addSnapshotListener
                         val ministryRoleSnap = snapshot.getString("ministryRole").orEmpty()
                         val roleSnap = snapshot.getString("role").orEmpty()
-                        if (!ministryRoleSnap.equals("Substitute Leader", ignoreCase = true) && !roleSnap.equals("Leader", ignoreCase = true)) {
+                        val isPromoted = ministryRoleSnap.equals("Worship Leader", ignoreCase = true) || roleSnap.equals("Leader", ignoreCase = true)
+                        if (isPromoted) {
+                            preferences.edit {
+                                putString("role", "Leader")
+                                putString(SessionManager.KEY_ROLE, "Leader")
+                                putString("ministryRole", "Worship Leader")
+                                putString(SessionManager.KEY_MINISTRY_ROLE, "Worship Leader")
+                                if (cleanTeamLower.isNotBlank() && myAdminEmail.isNotBlank()) {
+                                    putString("team_leader_email_$cleanTeamLower", myAdminEmail)
+                                }
+                            }
+                        } else if (!ministryRoleSnap.equals("Substitute Leader", ignoreCase = true) && !roleSnap.equals("Leader", ignoreCase = true)) {
                             handleDemotion(ministryRoleSnap)
                         }
                     }
@@ -2585,23 +2613,23 @@ class AdminActivity : AppCompatActivity() {
                     }
                     result.onSuccess { remoteUrl ->
                         leaderDraft.put("coverImageUrl", remoteUrl)
-                        val srvId = leaderDraft.optString("id").ifBlank { "srv_" + System.currentTimeMillis() }
-                        leaderDraft.put("id", srvId)
-                        val record = org.json.JSONObject(leaderDraft.toString())
-                        val existingIdx = localServices.indexOfFirst { it.optString("id") == srvId }
-                        if (existingIdx >= 0) {
-                            localServices[existingIdx] = record
-                            activeServiceIndex = existingIdx
-                        } else {
-                            localServices.add(record)
-                            activeServiceIndex = localServices.lastIndex
-                        }
-                        val records = org.json.JSONArray()
-                        localServices.forEach { records.put(it) }
-                        preferences.edit().putString("leaderServices", records.toString()).apply()
                         saveLeaderDraft()
-                        storeService(leaderDraft.optString("status").ifBlank { "Published" }, navigateAfter = false)
-                        toast("Cover photo uploaded to Cloudinary!")
+                        if (activeServiceIndex >= 0 && page != "createService") {
+                            val srvId = leaderDraft.optString("id").ifBlank { "srv_" + System.currentTimeMillis() }
+                            leaderDraft.put("id", srvId)
+                            val record = org.json.JSONObject(leaderDraft.toString())
+                            val existingIdx = localServices.indexOfFirst { it.optString("id") == srvId }
+                            if (existingIdx >= 0) {
+                                localServices[existingIdx] = record
+                            } else {
+                                localServices.add(record)
+                            }
+                            val records = org.json.JSONArray()
+                            localServices.forEach { records.put(it) }
+                            preferences.edit().putString("leaderServices", records.toString()).apply()
+                            storeService(leaderDraft.optString("status").ifBlank { "Published" }, navigateAfter = false)
+                        }
+                        toast("Cover photo uploaded!")
                         if (page == "createService" || page == "reviewService" || page == "service" || page == "home") {
                             navigate(page)
                         }
@@ -2677,6 +2705,7 @@ class AdminActivity : AppCompatActivity() {
         fun applyOverrides(list: List<TeamMember>): List<TeamMember> {
             val selfPhoto = preferences.getString("photoUri", null)?.takeIf { it.isNotBlank() }
             val selfUid = preferences.getString(SessionManager.KEY_USER_ID, "").orEmpty()
+            val selfEmail = preferences.getString("email", "").orEmpty().trim().lowercase()
             return list.map { m ->
                 val emailLower = m.email.trim().lowercase()
                 val isPrimaryLeader = emailLower == "ryanlloydgenturo@gmail.com" ||
@@ -2719,14 +2748,16 @@ class AdminActivity : AppCompatActivity() {
                     }
                     if (p.isNotBlank()) updated = updated.copy(photoUri = p)
                 }
-                val mergedRanges = (updated.unavailableRanges + TeamRepository.getMemberUnavailableRanges(
-                    uid = updated.uid,
-                    preferences = preferences,
-                    email = emailLower,
-                    name = updated.fullName.ifBlank { updated.username }
-                )).distinctBy { it.id.ifBlank { "${it.startDate}_${it.endDate}_${it.reason}" } }
-                if (mergedRanges != updated.unavailableRanges) {
-                    updated = updated.copy(unavailableRanges = mergedRanges)
+                if (updated.unavailableRanges.isEmpty() && (updated.uid == selfUid || emailLower == selfEmail)) {
+                    val selfRanges = TeamRepository.getMemberUnavailableRanges(
+                        uid = updated.uid,
+                        preferences = preferences,
+                        email = emailLower,
+                        name = updated.fullName.ifBlank { updated.username }
+                    )
+                    if (selfRanges.isNotEmpty()) {
+                        updated = updated.copy(unavailableRanges = selfRanges)
+                    }
                 }
                 updated
             }
@@ -2987,12 +3018,19 @@ class AdminActivity : AppCompatActivity() {
         return roster.filter { !it.removedByLeader }.map { member ->
             val name = member.fullName.ifBlank { member.username.ifBlank { "Member" } }
             val role = member.ministryRole.ifBlank { if (member.role.equals("Leader", true)) "Worship Leader" else "Member" }
-            val ranges = (member.unavailableRanges + TeamRepository.getMemberUnavailableRanges(
-                uid = member.uid,
-                preferences = preferences,
-                email = member.email,
-                name = name
-            )).distinctBy { it.id.ifBlank { "${it.startDate}_${it.endDate}_${it.reason}" } }
+            val isSelfMember = (name.equals(fullName, ignoreCase = true) || member.uid == preferences.getString("userId", ""))
+            val ranges = if (member.unavailableRanges.isNotEmpty()) {
+                member.unavailableRanges
+            } else if (isSelfMember) {
+                TeamRepository.getMemberUnavailableRanges(
+                    uid = member.uid,
+                    preferences = preferences,
+                    email = member.email,
+                    name = name
+                )
+            } else {
+                emptyList()
+            }
             val conflict = ranges.find { it.includes(date) }
             val isLegacyUnavailable = (name == fullName || member.uid == preferences.getString("userId", "")) &&
                     legacyStart.isNotBlank() && date >= legacyStart && date <= legacyEnd
@@ -3070,8 +3108,9 @@ class AdminActivity : AppCompatActivity() {
     }
     private fun createServiceView(): View = memberPage("New Service", if (serviceWizard) "home" else "service") { col ->
         col.space(16)
+        val todayIso = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).format(java.util.Date())
         val title = plainInput("Service title").apply { setText(leaderDraft.optString("title")) }
-        val date = dateField(leaderDraft.optString("date", "2026-10-11"))
+        val date = dateField(leaderDraft.optString("date", todayIso), minToday = true)
         val start = timeField(leaderDraft.optString("start", "09:00"))
         val end = timeField(leaderDraft.optString("end", "10:00"))
         val venue = plainInput("Venue").apply { setText(leaderDraft.optString("venue")) }
@@ -3131,9 +3170,11 @@ class AdminActivity : AppCompatActivity() {
             add(pickBtn, -2, 36)
         }
         col.add(coverContainer, -1, -2)
+        val todayIsoCheck = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).format(java.util.Date())
         stepActions(col, { navigate(if (serviceWizard) "home" else "service") }, if (serviceWizard) "Next" else "Save") {
             when {
                 title.text.isBlank() -> invalid(title, "Enter a service title.")
+                date.text.toString() < todayIsoCheck -> toast("Cannot create a service for a past date.")
                 venue.text.isBlank() -> invalid(venue, "Enter a venue.")
                 start.text.toString() >= end.text.toString() -> toast("End time must be after start time.")
                 else -> {
@@ -5017,15 +5058,27 @@ class AdminActivity : AppCompatActivity() {
         calendarYear = date.get(java.util.Calendar.YEAR)
         calendarMonth = date.get(java.util.Calendar.MONTH); calendarDay = 1; navigate("calendar")
     }
-    private fun dateField(initial: String): TextView = text(initial, 13, navy).apply {
+    private fun dateField(initial: String, minToday: Boolean = false): TextView = text(initial, 13, navy).apply {
         background = bg(Color.rgb(235, 235, 240), 10)
         setPadding(dp(12), 0, dp(12), 0)
         isFocusable = true; contentDescription = "Choose date"
         setOnClickListener {
-            val parts = text.toString().split("-").map { it.toInt() }
-            android.app.DatePickerDialog(this@AdminActivity, { _, year, month, day ->
+            val parts = text.toString().split("-").mapNotNull { it.toIntOrNull() }
+            val y = if (parts.size >= 3) parts[0] else java.util.Calendar.getInstance().get(java.util.Calendar.YEAR)
+            val m = if (parts.size >= 3) parts[1] - 1 else java.util.Calendar.getInstance().get(java.util.Calendar.MONTH)
+            val d = if (parts.size >= 3) parts[2] else java.util.Calendar.getInstance().get(java.util.Calendar.DAY_OF_MONTH)
+            val picker = android.app.DatePickerDialog(this@AdminActivity, { _, year, month, day ->
                 text = "%04d-%02d-%02d".format(java.util.Locale.US, year, month + 1, day)
-            }, parts[0], parts[1] - 1, parts[2]).show()
+            }, y, m, d)
+            if (minToday) {
+                val cal = java.util.Calendar.getInstance()
+                cal.set(java.util.Calendar.HOUR_OF_DAY, 0)
+                cal.set(java.util.Calendar.MINUTE, 0)
+                cal.set(java.util.Calendar.SECOND, 0)
+                cal.set(java.util.Calendar.MILLISECOND, 0)
+                picker.datePicker.minDate = cal.timeInMillis
+            }
+            picker.show()
         }
     }
     private fun plainInput(hintText: String, multiline: Boolean = false, chordSheet: Boolean = false) =

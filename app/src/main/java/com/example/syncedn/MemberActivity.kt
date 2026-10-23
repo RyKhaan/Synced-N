@@ -321,7 +321,25 @@ open class MemberActivity : AppCompatActivity() {
                     }
                     if (myEntry != null) {
                         val currentPref = preferences.getString("ministryRole", "").orEmpty()
-                        if (myEntry.ministryRole.equals("Substitute Leader", ignoreCase = true)) {
+                        val isPromotedLeader = myEntry.ministryRole.equals("Worship Leader", ignoreCase = true) || myEntry.role.equals("Leader", ignoreCase = true)
+                        if (isPromotedLeader) {
+                            preferences.edit {
+                                putString("role", "Leader")
+                                putString(SessionManager.KEY_ROLE, "Leader")
+                                putString("ministryRole", "Worship Leader")
+                                putString(SessionManager.KEY_MINISTRY_ROLE, "Worship Leader")
+                                val cleanTeam = teamName.trim().lowercase()
+                                if (cleanTeam.isNotBlank() && currentEmail.isNotBlank()) {
+                                    putString("team_leader_email_$cleanTeam", currentEmail)
+                                }
+                            }
+                            toast("You are now the Worship Leader of $teamName!")
+                            val intent = Intent(this@MemberActivity, AdminActivity::class.java)
+                                .putExtra("startPage", "home")
+                                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                            startActivity(intent)
+                            finish()
+                        } else if (myEntry.ministryRole.equals("Substitute Leader", ignoreCase = true)) {
                             if (!currentPref.equals("Substitute Leader", ignoreCase = true)) {
                                 preferences.edit {
                                     putString("role", "Leader")
@@ -361,6 +379,12 @@ open class MemberActivity : AppCompatActivity() {
                                     } catch (_: Throwable) {}
                                 }
                                 TeamRepository.updateMemberMinistryRole(currentUid, resolvedMinistry, memberEmail = currentEmail, preferences = preferences)
+                                val teamCode = preferences.getString("teamCode", "").orEmpty()
+                                if (teamCode.isNotBlank()) {
+                                    TeamRepository.syncFromPreferences(preferences, teamCode)
+                                }
+                                updateRosterViews()
+                                if (page == "home") setupHome()
                             }
                         }
                     }
@@ -454,6 +478,30 @@ open class MemberActivity : AppCompatActivity() {
                     val ministryRoleFromSnap = snapshot.getString("ministryRole").orEmpty()
                     val currentPref = preferences.getString("ministryRole", "").orEmpty()
                     val currentRolePref = preferences.getString("role", "").orEmpty()
+                    val isPromotedLeaderSnap = roleFromSnap.equals("Leader", ignoreCase = true) || ministryRoleFromSnap.equals("Worship Leader", ignoreCase = true)
+                    if (isPromotedLeaderSnap) {
+                        preferences.edit {
+                            putString("role", "Leader")
+                            putString(SessionManager.KEY_ROLE, "Leader")
+                            putString("ministryRole", "Worship Leader")
+                            putString(SessionManager.KEY_MINISTRY_ROLE, "Worship Leader")
+                            val cleanTeam = teamName.trim().lowercase()
+                            if (cleanTeam.isNotBlank() && myCurrentEmail.isNotBlank()) {
+                                putString("team_leader_email_$cleanTeam", myCurrentEmail.trim().lowercase())
+                            }
+                        }
+                        runOnUiThread {
+                            if (!isFinishing && !isDestroyed) {
+                                toast("You are now the Worship Leader of $teamName!")
+                                val intent = Intent(this@MemberActivity, AdminActivity::class.java)
+                                    .putExtra("startPage", "home")
+                                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                                startActivity(intent)
+                                finish()
+                            }
+                        }
+                        return@addSnapshotListener
+                    }
                     val isSubLeaderSnap = ministryRoleFromSnap.equals("Substitute Leader", ignoreCase = true) && !roleFromSnap.equals("Member", true)
                     if (isSubLeaderSnap) {
                         if (!currentPref.equals("Substitute Leader", ignoreCase = true)) {
@@ -512,7 +560,7 @@ open class MemberActivity : AppCompatActivity() {
                             runOnUiThread {
                                 if (!isFinishing && !isDestroyed) {
                                     updateRosterViews()
-                                    setupHome()
+                                    if (page == "home") setupHome()
                                     if (page == "teams") navigate("teams")
                                 }
                             }
@@ -525,8 +573,12 @@ open class MemberActivity : AppCompatActivity() {
                     val isLeadUser = myCurrentEmail.equals("ryanlloydgenturo@gmail.com", ignoreCase = true)
                     if (!isLeadUser && removedByLeader && (removedTeamCode.isBlank() || myActiveTeamCode.isBlank() || removedTeamCode.equals(myActiveTeamCode, ignoreCase = true))) {
                         val emailLower = myCurrentEmail.trim().lowercase()
+                        if (myActiveTeamCode.isNotBlank()) {
+                            com.example.syncedn.data.auth.SyncedFirebaseMessagingService.unsubscribeFromTeam(myActiveTeamCode)
+                            com.example.syncedn.data.auth.SyncedMessagingService.stopRealtimeTeamWatchers()
+                        }
                         preferences.edit()
-                            .putString("role", "Member")
+                            .putString("role", "")
                             .remove("teamName")
                             .remove("teamCode")
                             .remove("ministryRole")
@@ -535,8 +587,8 @@ open class MemberActivity : AppCompatActivity() {
                             .remove("user_team_$myCurrentUid")
                             .remove("user_code_$myCurrentUid")
                             .putBoolean("leftTeam", true)
-                            .putBoolean("removedByLeader", true)
-                            .putString("removedTeamCode", removedTeamCode.ifBlank { myActiveTeamCode })
+                            .putBoolean("removedByLeader", false)
+                            .remove("removedTeamCode")
                             .apply()
                         teamName = ""
                         runOnUiThread {
@@ -562,6 +614,30 @@ open class MemberActivity : AppCompatActivity() {
                     val ministryRoleFromDoc = doc.getString("ministryRole").orEmpty()
                     val currentPref = preferences.getString("ministryRole", "").orEmpty()
                     val currentRolePref = preferences.getString("role", "").orEmpty()
+                    val isPromotedLeaderDoc = roleFromDoc.equals("Leader", ignoreCase = true) || ministryRoleFromDoc.equals("Worship Leader", ignoreCase = true)
+                    if (isPromotedLeaderDoc) {
+                        preferences.edit {
+                            putString("role", "Leader")
+                            putString(SessionManager.KEY_ROLE, "Leader")
+                            putString("ministryRole", "Worship Leader")
+                            putString(SessionManager.KEY_MINISTRY_ROLE, "Worship Leader")
+                            val cleanTeam = teamName.trim().lowercase()
+                            if (cleanTeam.isNotBlank() && myCurrentEmail.isNotBlank()) {
+                                putString("team_leader_email_$cleanTeam", myCurrentEmail.trim().lowercase())
+                            }
+                        }
+                        runOnUiThread {
+                            if (!isFinishing && !isDestroyed) {
+                                toast("You are now the Worship Leader of $teamName!")
+                                val intent = Intent(this@MemberActivity, AdminActivity::class.java)
+                                    .putExtra("startPage", "home")
+                                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                                startActivity(intent)
+                                finish()
+                            }
+                        }
+                        return@addSnapshotListener
+                    }
                     val isSubLeaderDoc = ministryRoleFromDoc.equals("Substitute Leader", ignoreCase = true) && !roleFromDoc.equals("Member", true)
                     if (isSubLeaderDoc) {
                         if (!currentPref.equals("Substitute Leader", ignoreCase = true)) {
@@ -620,7 +696,7 @@ open class MemberActivity : AppCompatActivity() {
                             runOnUiThread {
                                 if (!isFinishing && !isDestroyed) {
                                     updateRosterViews()
-                                    setupHome()
+                                    if (page == "home") setupHome()
                                     if (page == "teams") navigate("teams")
                                 }
                             }
@@ -633,8 +709,12 @@ open class MemberActivity : AppCompatActivity() {
                     val isLeadUser = myCurrentEmail.equals("ryanlloydgenturo@gmail.com", ignoreCase = true)
                     if (!isLeadUser && removedByLeader && (removedTeamCode.isBlank() || myActiveTeamCode.isBlank() || removedTeamCode.equals(myActiveTeamCode, ignoreCase = true))) {
                         val emailLower = myCurrentEmail.trim().lowercase()
+                        if (myActiveTeamCode.isNotBlank()) {
+                            com.example.syncedn.data.auth.SyncedFirebaseMessagingService.unsubscribeFromTeam(myActiveTeamCode)
+                            com.example.syncedn.data.auth.SyncedMessagingService.stopRealtimeTeamWatchers()
+                        }
                         preferences.edit()
-                            .putString("role", "Member")
+                            .putString("role", "")
                             .remove("teamName")
                             .remove("teamCode")
                             .remove("ministryRole")
@@ -643,8 +723,8 @@ open class MemberActivity : AppCompatActivity() {
                             .remove("user_team_$myCurrentUid")
                             .remove("user_code_$myCurrentUid")
                             .putBoolean("leftTeam", true)
-                            .putBoolean("removedByLeader", true)
-                            .putString("removedTeamCode", removedTeamCode.ifBlank { myActiveTeamCode })
+                            .putBoolean("removedByLeader", false)
+                            .remove("removedTeamCode")
                             .apply()
                         teamName = ""
                         runOnUiThread {
@@ -1312,14 +1392,14 @@ open class MemberActivity : AppCompatActivity() {
     }
 
     private fun setupHome() {
-        findViewById<TextView>(UI.welcomeText).text = displayName.ifBlank { "Member" }
+        findViewById<TextView>(UI.welcomeText)?.text = displayName.ifBlank { "Member" }
         click(UI.notificationsButton) { navigate("notifications") }
         applyProfilePhoto(UI.profileButton)
         click(UI.profileButton) { openProfile("home") }
         click(UI.worshipCard) {
             openHomeUpcoming()
         }
-        findViewById<TextView>(UI.teamTitle).apply {
+        findViewById<TextView>(UI.teamTitle)?.apply {
             text = teamName.ifBlank { "Worship\nTeam" }
             maxLines = 2
             ellipsize = android.text.TextUtils.TruncateAt.END
@@ -2870,14 +2950,16 @@ space(48)
                     }
                     if (p.isNotBlank()) updated = updated.copy(photoUri = p)
                 }
-                val mergedRanges = (updated.unavailableRanges + TeamRepository.getMemberUnavailableRanges(
-                    uid = updated.uid,
-                    preferences = preferences,
-                    email = emailLower,
-                    name = updated.fullName.ifBlank { updated.username }
-                )).distinctBy { it.id.ifBlank { "${it.startDate}_${it.endDate}_${it.reason}" } }
-                if (mergedRanges != updated.unavailableRanges) {
-                    updated = updated.copy(unavailableRanges = mergedRanges)
+                if (updated.unavailableRanges.isEmpty() && isSelf) {
+                    val selfRanges = TeamRepository.getMemberUnavailableRanges(
+                        uid = updated.uid,
+                        preferences = preferences,
+                        email = emailLower,
+                        name = updated.fullName.ifBlank { updated.username }
+                    )
+                    if (selfRanges.isNotEmpty()) {
+                        updated = updated.copy(unavailableRanges = selfRanges)
+                    }
                 }
                 updated
             }
@@ -4032,8 +4114,14 @@ space(48)
                     member.ministryRole.ifBlank { member.role }
                 }
                 val isSame = mRole.equals(assignedRole, ignoreCase = true) || (assignedRole.isNotBlank() && mRole.contains(assignedRole, ignoreCase = true))
-                val memberRanges = member.unavailableRanges.takeIf { it.isNotEmpty() }
-                    ?: TeamRepository.getMemberUnavailableRanges(member.uid, preferences, member.email, mName)
+                val isSelfCand = member.uid == currentUserId() || mName.equals(currentName, true)
+                val memberRanges = if (member.unavailableRanges.isNotEmpty()) {
+                    member.unavailableRanges
+                } else if (isSelfCand) {
+                    TeamRepository.getMemberUnavailableRanges(member.uid, preferences, member.email, mName)
+                } else {
+                    emptyList()
+                }
                 val conflictRange = if (serviceDate.isNotBlank()) memberRanges.find { it.includes(serviceDate) } else null
                 candidatesList.add(CandidateItem(member.uid, mName, mRole, isSame, conflictRange?.reason ?: (if (conflictRange != null) "Schedule Conflict" else null), false))
             }
