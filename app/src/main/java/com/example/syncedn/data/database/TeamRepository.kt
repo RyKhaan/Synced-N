@@ -3573,18 +3573,24 @@ object TeamRepository {
             onComplete?.invoke(Result.failure(IllegalArgumentException("Invalid team code or message ID")))
             return
         }
+        val editTime = System.currentTimeMillis()
         val cached = getCachedChatMessages(code, preferences)
         val updatedList = cached.map { msg ->
-            if (msg.id == messageId) msg.copy(text = newText) else msg
+            if (msg.id == messageId) msg.copy(text = newText, isEdited = true, editedAt = editTime) else msg
         }
         saveAllChatMessagesLocally(code, updatedList, preferences)
 
         try {
+            val updates = mapOf<String, Any>(
+                "text" to newText,
+                "isEdited" to true,
+                "editedAt" to editTime
+            )
             db.collection(TEAMS_COLLECTION)
                 .document(code)
                 .collection(MESSAGES_SUBCOLLECTION)
                 .document(messageId)
-                .update("text", newText)
+                .update(updates)
                 .addOnSuccessListener {
                     onComplete?.invoke(Result.success(Unit))
                 }
@@ -3609,6 +3615,13 @@ object TeamRepository {
             onComplete?.invoke(Result.failure(IllegalArgumentException("Invalid team code or message ID")))
             return
         }
+        preferences?.let {
+            val delKey = "deleted_chat_ids_$code"
+            val currentDeleted = it.getStringSet(delKey, emptySet())?.toMutableSet() ?: mutableSetOf()
+            currentDeleted.add(messageId)
+            it.edit().putStringSet(delKey, currentDeleted).apply()
+        }
+
         val cached = getCachedChatMessages(code, preferences)
         val updatedList = cached.filter { it.id != messageId }
         saveAllChatMessagesLocally(code, updatedList, preferences)
@@ -3648,7 +3661,9 @@ object TeamRepository {
             // Auto-sync any local unpushed messages to Firestore in background
             try {
                 val dbRef = db.collection(TEAMS_COLLECTION).document(code).collection(MESSAGES_SUBCOLLECTION)
+                val deletedIds = preferences?.getStringSet("deleted_chat_ids_$code", emptySet()) ?: emptySet()
                 for (localMsg in initialCached) {
+                    if (localMsg.id in deletedIds) continue
                     if (localMsg.mediaUrl.isBlank() || localMsg.mediaUrl.startsWith("http://") || localMsg.mediaUrl.startsWith("https://")) {
                         dbRef.document(localMsg.id).set(localMsg.toMap()).addOnFailureListener {
                             // ignore background sync errors
@@ -3670,23 +3685,19 @@ object TeamRepository {
                         return@addSnapshotListener
                     }
                     if (snapshot != null) {
+                        val deletedIds = preferences?.getStringSet("deleted_chat_ids_$code", emptySet()) ?: emptySet()
                         val remoteMessages = snapshot.documents.mapNotNull { doc ->
                             doc.data?.let { ChatMessage.fromMap(it) }
-                        }
+                        }.filter { it.id !in deletedIds }
 
-                        // Merge remote messages with local cached messages so un-synced messages are never wiped out
-                        val localCached = getCachedChatMessages(code, preferences)
-                        val mergedMap = LinkedHashMap<String, ChatMessage>()
-                        localCached.forEach { mergedMap[it.id] = it }
-                        remoteMessages.forEach { mergedMap[it.id] = it }
+                        // Remote is source of truth for all synced messages; retain local messages only if un-synced (e.g. pending local draft within 60s)
+                        val remoteIds = remoteMessages.map { it.id }.toSet()
+                        val localCached = getCachedChatMessages(code, preferences).filter { it.id !in deletedIds }
+                        val pendingLocal = localCached.filter { it.id !in remoteIds && (System.currentTimeMillis() - it.timestamp) < 60_000L }
 
-                        val mergedList = mergedMap.values.sortedBy { it.timestamp }
-                        if (mergedList.isNotEmpty()) {
-                            saveAllChatMessagesLocally(code, mergedList, preferences)
-                            onUpdate(mergedList)
-                        } else if (localCached.isNotEmpty()) {
-                            onUpdate(localCached)
-                        }
+                        val mergedList = (remoteMessages + pendingLocal).distinctBy { it.id }.sortedBy { it.timestamp }
+                        saveAllChatMessagesLocally(code, mergedList, preferences)
+                        onUpdate(mergedList)
                     }
                 }
         } catch (e: Throwable) {

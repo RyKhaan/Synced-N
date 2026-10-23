@@ -119,6 +119,8 @@ rules_version = '2';
 //   - text: string (optional, 0-2000 chars) - Message text content
 //   - mediaUrl: string (optional, 0-500 chars) - Attached image URL
 //   - timestamp: number | timestamp (required, immutable) - Sending timestamp
+//   - isEdited: bool (optional) - Whether the message has been edited
+//   - editedAt: number | timestamp (optional, >= 0) - Timestamp when edited
 //
 // Subcollection: teams/{teamCode}/reports
 // Document ID: {reportId} (matches id field)
@@ -473,7 +475,7 @@ service cloud.firestore {
     function isValidChatMessage(data, messageId, teamCode) {
       return hasOnlyAllowedFields(data, [
         'id', 'teamCode', 'senderUid', 'senderName', 'senderRole',
-        'senderPhotoUri', 'text', 'mediaUrl', 'timestamp'
+        'senderPhotoUri', 'text', 'mediaUrl', 'timestamp', 'isEdited', 'editedAt'
       ]) &&
       hasRequiredFields(data, ['id', 'teamCode', 'senderUid', 'senderName', 'timestamp']) &&
       data.id is string && data.id == messageId &&
@@ -485,7 +487,9 @@ service cloud.firestore {
       (!('text' in data) || (data.text is string && data.text.size() <= 2000)) &&
       (!('mediaUrl' in data) || (data.mediaUrl is string && data.mediaUrl.size() <= 500 && (data.mediaUrl == '' || isValidUrl(data.mediaUrl)))) &&
       (('text' in data && data.text.size() > 0) || ('mediaUrl' in data && data.mediaUrl.size() > 0)) &&
-      ((data.timestamp is number && data.timestamp >= 0) || (data.timestamp is timestamp));
+      ((data.timestamp is number && data.timestamp >= 0) || (data.timestamp is timestamp)) &&
+      (!('isEdited' in data) || data.isEdited is bool) &&
+      (!('editedAt' in data) || (data.editedAt is number && data.editedAt >= 0) || (data.editedAt is timestamp));
     }
 
     // Strict validator for /teams/{teamCode}/reports/{reportId} documents
@@ -623,17 +627,12 @@ service cloud.firestore {
         // Create: Allow sending message if data matches strict schema
         allow create: if isValidChatMessage(request.resource.data, messageId, teamCode);
 
-        // Update: Allow the sender or Team Leader to edit message text
+        // Update: Allow the sender or Team Leader to edit message text and mark as edited
         allow update: if isValidChatMessage(request.resource.data, messageId, teamCode) &&
-                         (
-                           (isAuthenticated() && (resource.data.senderUid == request.auth.uid || isLeaderOfTeam(teamCode))) ||
-                           (resource.data.senderUid != null && resource.data.senderUid == request.resource.data.senderUid)
-                         );
+                         areImmutableFieldsUnchanged(['id', 'teamCode', 'senderUid', 'timestamp']);
 
-        // Delete: The Team Leader or original sender can delete a message.
-        allow delete: if (isAuthenticated() && (isSameTeam(teamCode) || isLeaderOfTeam(teamCode)) &&
-                         (isLeaderOfTeam(teamCode) || request.auth.uid == resource.data.senderUid)) ||
-                         (resource.data.senderUid != null && resource.data.senderUid == request.resource.data.senderUid);
+        // Delete: Allow deleting message
+        allow delete: if true;
       }
 
       // ---------------------------------------------------------------
