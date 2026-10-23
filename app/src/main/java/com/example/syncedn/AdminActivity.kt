@@ -328,7 +328,8 @@ class AdminActivity : AppCompatActivity() {
                 putString("team_registry_$code", team)
                 putString("team_leader_code_$cleanTeamLower", code)
             }
-            if (role.equals("Leader", ignoreCase = true) && cleanTeamLower.isNotBlank() && emailLower.isNotBlank()) {
+            val isSubLeader = preferences.getString("ministryRole", "").equals("Substitute Leader", ignoreCase = true)
+            if (!isSubLeader && role.equals("Leader", ignoreCase = true) && cleanTeamLower.isNotBlank() && emailLower.isNotBlank()) {
                 putString("team_leader_email_$cleanTeamLower", emailLower)
             }
             if (uid.isNotBlank()) {
@@ -413,8 +414,9 @@ class AdminActivity : AppCompatActivity() {
             val userMinistry = preferences.getString("ministryRole", "").orEmpty()
             val cleanTeamLower = teamName.trim().lowercase()
             val teamLeaderEmail = preferences.getString("team_leader_email_$cleanTeamLower", "").orEmpty().trim().lowercase()
+            val isSubLeader = userMinistry.equals("Substitute Leader", ignoreCase = true)
             val isPermanentLeader = emailLower == "ryanlloydgenturo@gmail.com" ||
-                                    (teamLeaderEmail.isNotBlank() && teamLeaderEmail == emailLower)
+                                    (!isSubLeader && teamLeaderEmail.isNotBlank() && teamLeaderEmail == emailLower)
             if (!isPermanentLeader && !userMinistry.equals("Substitute Leader", ignoreCase = true)) {
                 saveUserTeamState("Member", teamName, activeCode)
                 val intent = Intent(this, MemberActivity::class.java).putExtra("startPage", intent.getStringExtra("startPage") ?: "home")
@@ -483,8 +485,10 @@ class AdminActivity : AppCompatActivity() {
                         ?: preferences.getString(SessionManager.KEY_USER_ID, "").orEmpty()
                     val cleanTeamLower = teamName.trim().lowercase()
                     val teamLeaderEmail = preferences.getString("team_leader_email_$cleanTeamLower", "").orEmpty().trim().lowercase()
+                    val currentMinistry = preferences.getString("ministryRole", "").orEmpty()
+                    val isSubLeader = currentMinistry.equals("Substitute Leader", ignoreCase = true)
                     val isPrimaryLeader = currentEmail == "ryanlloydgenturo@gmail.com" ||
-                                          (teamLeaderEmail.isNotBlank() && teamLeaderEmail == currentEmail)
+                                          (!isSubLeader && teamLeaderEmail.isNotBlank() && teamLeaderEmail == currentEmail)
                     if (!isPrimaryLeader) {
                         val myEntry = list.find { m ->
                             (currentUid.isNotBlank() && m.uid == currentUid) ||
@@ -519,35 +523,58 @@ class AdminActivity : AppCompatActivity() {
         val myAdminEmail = preferences.getString("email", "").orEmpty().trim().lowercase()
         val cleanTeamLower = teamName.trim().lowercase()
         val teamLeaderEmail = preferences.getString("team_leader_email_$cleanTeamLower", "").orEmpty().trim().lowercase()
+        val myAdminMinistry = preferences.getString("ministryRole", "").orEmpty()
+        val isSubLeaderAdmin = myAdminMinistry.equals("Substitute Leader", ignoreCase = true)
         val isAdminPrimary = myAdminEmail == "ryanlloydgenturo@gmail.com" ||
-                             (teamLeaderEmail.isNotBlank() && teamLeaderEmail == myAdminEmail)
-        if (!isAdminPrimary && myAdminUid.isNotBlank()) {
-            userMembershipListener = com.google.firebase.firestore.FirebaseFirestore.getInstance()
-                .collection("users").document(myAdminUid)
-                .addSnapshotListener { snapshot, error ->
-                    if (error != null || snapshot == null || !snapshot.exists()) return@addSnapshotListener
-                    val ministryRoleSnap = snapshot.getString("ministryRole").orEmpty()
-                    if (!ministryRoleSnap.equals("Substitute Leader", ignoreCase = true)) {
-                        preferences.edit {
-                            putString("role", "Member")
-                            putString(SessionManager.KEY_ROLE, "Member")
-                            putString("ministryRole", ministryRoleSnap.ifBlank { "Member" })
-                            putString(SessionManager.KEY_MINISTRY_ROLE, ministryRoleSnap.ifBlank { "Member" })
-                            if (myAdminUid.isNotBlank()) putString("user_role_$myAdminUid", "Member")
-                            if (myAdminEmail.isNotBlank()) putString("email_role_$myAdminEmail", "Member")
-                        }
-                        runOnUiThread {
-                            if (!isFinishing && !isDestroyed) {
-                                toast("Your Substitute Leader assignment has ended.")
-                                val intent = Intent(this@AdminActivity, MemberActivity::class.java)
-                                    .putExtra("startPage", "home")
-                                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
-                                startActivity(intent)
-                                finish()
-                            }
-                        }
+                             (!isSubLeaderAdmin && teamLeaderEmail.isNotBlank() && teamLeaderEmail == myAdminEmail)
+        if (!isAdminPrimary) {
+            val handleDemotion: (String) -> Unit = { newMinistry ->
+                preferences.edit {
+                    putString("role", "Member")
+                    putString(SessionManager.KEY_ROLE, "Member")
+                    putString("ministryRole", newMinistry.ifBlank { "Member" })
+                    putString(SessionManager.KEY_MINISTRY_ROLE, newMinistry.ifBlank { "Member" })
+                    if (myAdminUid.isNotBlank()) putString("user_role_$myAdminUid", "Member")
+                    if (myAdminEmail.isNotBlank()) putString("email_role_$myAdminEmail", "Member")
+                    if (cleanTeamLower.isNotBlank()) remove("team_leader_email_$cleanTeamLower")
+                }
+                runOnUiThread {
+                    if (!isFinishing && !isDestroyed) {
+                        toast("Your Substitute Leader assignment has ended.")
+                        val intent = Intent(this@AdminActivity, MemberActivity::class.java)
+                            .putExtra("startPage", "home")
+                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_CLEAR_TASK)
+                        startActivity(intent)
+                        finish()
                     }
                 }
+            }
+
+            if (myAdminUid.isNotBlank()) {
+                userMembershipListener = com.google.firebase.firestore.FirebaseFirestore.getInstance()
+                    .collection("users").document(myAdminUid)
+                    .addSnapshotListener { snapshot, error ->
+                        if (error != null || snapshot == null || !snapshot.exists()) return@addSnapshotListener
+                        val ministryRoleSnap = snapshot.getString("ministryRole").orEmpty()
+                        val roleSnap = snapshot.getString("role").orEmpty()
+                        if (!ministryRoleSnap.equals("Substitute Leader", ignoreCase = true) && !roleSnap.equals("Leader", ignoreCase = true)) {
+                            handleDemotion(ministryRoleSnap)
+                        }
+                    }
+            }
+            if (myAdminEmail.isNotBlank()) {
+                com.google.firebase.firestore.FirebaseFirestore.getInstance()
+                    .collection("users").whereEqualTo("email", myAdminEmail)
+                    .addSnapshotListener { snapshot, error ->
+                        if (error != null || snapshot == null || snapshot.isEmpty) return@addSnapshotListener
+                        val doc = snapshot.documents.firstOrNull() ?: return@addSnapshotListener
+                        val ministryRoleSnap = doc.getString("ministryRole").orEmpty()
+                        val roleSnap = doc.getString("role").orEmpty()
+                        if (!ministryRoleSnap.equals("Substitute Leader", ignoreCase = true) && !roleSnap.equals("Leader", ignoreCase = true)) {
+                            handleDemotion(ministryRoleSnap)
+                        }
+                    }
+            }
         }
 
         navigate(savedInstanceState?.getString("page") ?: intent.getStringExtra("startPage") ?: "home")
@@ -640,6 +667,56 @@ class AdminActivity : AppCompatActivity() {
         chatListener = null
         sheetAutoScroll?.pause()
         super.onPause()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        val emailLower = preferences.getString("email", "").orEmpty().trim().lowercase()
+        val isRyan = emailLower == "ryanlloydgenturo@gmail.com"
+        val currentMinistry = preferences.getString("ministryRole", "").orEmpty()
+        val currentRole = preferences.getString("role", "").orEmpty()
+        val cleanTeamLower = teamName.trim().lowercase()
+        val teamLeaderEmail = preferences.getString("team_leader_email_$cleanTeamLower", "").orEmpty().trim().lowercase()
+        val isSubLeader = currentMinistry.equals("Substitute Leader", ignoreCase = true)
+        val isPermanentLeader = isRyan || (!isSubLeader && teamLeaderEmail.isNotBlank() && teamLeaderEmail == emailLower)
+
+        if (!isPermanentLeader && !isSubLeader && !currentRole.equals("Leader", ignoreCase = true)) {
+            val intent = Intent(this, MemberActivity::class.java)
+                .putExtra("startPage", "home")
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_CLEAR_TASK)
+            startActivity(intent)
+            finish()
+            return
+        }
+
+        val myUid = com.example.syncedn.data.auth.AuthManager.currentUser?.uid?.takeIf { it.isNotBlank() }
+            ?: preferences.getString(SessionManager.KEY_USER_ID, "").orEmpty()
+        if (!isPermanentLeader && myUid.isNotBlank()) {
+            com.google.firebase.firestore.FirebaseFirestore.getInstance()
+                .collection("users").document(myUid)
+                .get()
+                .addOnSuccessListener { snap ->
+                    if (snap != null && snap.exists() && !isFinishing && !isDestroyed) {
+                        val remoteMinistry = snap.getString("ministryRole").orEmpty()
+                        val remoteRole = snap.getString("role").orEmpty()
+                        if (!remoteMinistry.equals("Substitute Leader", ignoreCase = true) && !remoteRole.equals("Leader", ignoreCase = true)) {
+                            preferences.edit {
+                                putString("role", "Member")
+                                putString(SessionManager.KEY_ROLE, "Member")
+                                putString("ministryRole", remoteMinistry.ifBlank { "Member" })
+                                putString(SessionManager.KEY_MINISTRY_ROLE, remoteMinistry.ifBlank { "Member" })
+                                if (cleanTeamLower.isNotBlank()) remove("team_leader_email_$cleanTeamLower")
+                            }
+                            toast("Your Substitute Leader assignment has ended.")
+                            val intent = Intent(this@AdminActivity, MemberActivity::class.java)
+                                .putExtra("startPage", "home")
+                                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_CLEAR_TASK)
+                            startActivity(intent)
+                            finish()
+                        }
+                    }
+                }
+        }
     }
 
     override fun onStop() {
@@ -6035,45 +6112,16 @@ class AdminActivity : AppCompatActivity() {
             add(metronome)
         }); col.space(24)
         val refLink = currentSong?.referenceUrl.orEmpty().ifBlank { savedSong.optString("link") }
-        val ytVidId = extractYouTubeVideoId(refLink)
-        if (ytVidId != null) {
-            col.add(text("Rehearsal Video", 13, navy, true)); col.space(8)
-            val webView = android.webkit.WebView(this@AdminActivity).apply {
-                android.webkit.CookieManager.getInstance().setAcceptCookie(true)
-                android.webkit.CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
-                settings.javaScriptEnabled = true
-                settings.domStorageEnabled = true
-                settings.mediaPlaybackRequiresUserGesture = false
-                try { settings.userAgentString = settings.userAgentString.replace("; wv", "") } catch (_: Throwable) {}
-                webChromeClient = android.webkit.WebChromeClient()
-                val html = """
-                    <!DOCTYPE html>
-                    <html>
-                    <head>
-                        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-                        <style>
-                            body { margin: 0; background-color: #000; display: flex; align-items: center; justify-content: center; height: 100vh; }
-                            iframe { width: 100%; height: 100%; border: 0; }
-                        </style>
-                    </head>
-                    <body>
-                        <iframe src="https://www.youtube.com/embed/$ytVidId?enablejsapi=1&origin=https://www.youtube.com&playsinline=1&rel=0" allowfullscreen></iframe>
-                    </body>
-                    </html>
-                """.trimIndent()
-                loadDataWithBaseURL("https://www.youtube.com", html, "text/html", "UTF-8", null)
-            }
-            col.add(panel().apply {
-                setPadding(dp(4), dp(4), dp(4), dp(4))
-                add(webView, -1, 200)
-            }); col.space(8)
-            col.add(memberButton("Watch on YouTube App", navy) {
-                try {
-                    startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("vnd.youtube:$ytVidId")).setFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-                } catch (_: Exception) {
-                    startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://www.youtube.com/watch?v=$ytVidId")))
-                }
-            }, -1, 44); col.space(16)
+        val playerView = com.example.syncedn.ui.player.YouTubePlayerHelper.buildHybridPlayerView(
+            context = this@AdminActivity,
+            referenceUrl = refLink,
+            selectedSongTitle = selectedSong,
+            navyColor = navy,
+            dp = { dp(it) }
+        )
+        if (playerView != null) {
+            col.add(playerView)
+            col.space(12)
         }
 
         col.add(text(if(showChords) "Lyrics & Chords Sheet" else "Lyrics", 13, navy, true)); col.space(10)
@@ -6925,29 +6973,108 @@ class AdminActivity : AppCompatActivity() {
         }); col.space(4)
 
         col.add(teamDetailAction("leave_team", "Leave") {
-            AlertDialog.Builder(this).setTitle("Leave Team?")
-                .setMessage("Are you sure you want to leave this team?")
-                .setNegativeButton("Cancel", null).setPositiveButton("Leave") { _, _ ->
-                    val uid = preferences.getString("userId", "").orEmpty()
-                    val activeCode = preferences.getString("teamCode", "").orEmpty()
-                    if (activeCode.isNotBlank()) {
-                        com.example.syncedn.data.auth.SyncedFirebaseMessagingService.unsubscribeFromTeam(activeCode)
-                        com.example.syncedn.data.auth.SyncedMessagingService.stopRealtimeTeamWatchers()
+            val uid = preferences.getString("userId", "").orEmpty().ifBlank {
+                com.example.syncedn.data.auth.AuthManager.currentUser?.uid.orEmpty()
+            }
+            val activeCode = preferences.getString("teamCode", "").orEmpty()
+            val userEmail = preferences.getString("email", "").orEmpty().trim().lowercase()
+            val cleanTeamLower = teamName.trim().lowercase()
+            val teamLeaderEmail = preferences.getString("team_leader_email_$cleanTeamLower", "").orEmpty().trim().lowercase()
+            val userMinistry = preferences.getString("ministryRole", "").orEmpty()
+            val userRole = preferences.getString("role", "").orEmpty()
+            val isSubLeader = userMinistry.equals("Substitute Leader", ignoreCase = true)
+            val isLeaderAccount = userEmail == "ryanlloydgenturo@gmail.com" ||
+                                  (!isSubLeader && teamLeaderEmail.isNotBlank() && teamLeaderEmail == userEmail) ||
+                                  (!isSubLeader && userRole.equals("Leader", ignoreCase = true))
+
+            if (isLeaderAccount) {
+                val eligibleMembers = getActiveRoster().filter { m ->
+                    (uid.isBlank() || m.uid != uid) &&
+                    (userEmail.isBlank() || !m.email.trim().lowercase().equals(userEmail, ignoreCase = true)) &&
+                    !m.removedByLeader
+                }
+
+                if (eligibleMembers.isEmpty()) {
+                    AlertDialog.Builder(this)
+                        .setTitle("Cannot Leave Group")
+                        .setMessage("You are currently the Leader of this team. You cannot leave the group because there are no other eligible members to transfer leadership to.\n\nTo close or leave this team, invite another member first to transfer leadership, or manage team settings.")
+                        .setPositiveButton("OK", null)
+                        .show()
+                    return@teamDetailAction
+                }
+
+                val memberNames = eligibleMembers.map { m ->
+                    val displayName = m.fullName.ifBlank { m.username.ifBlank { m.email } }
+                    val role = m.ministryRole.ifBlank { "Member" }
+                    "$displayName ($role)"
+                }.toTypedArray()
+
+                var selectedIndex = 0
+
+                AlertDialog.Builder(this)
+                    .setTitle("Transfer Leadership Required")
+                    .setMessage("As the Team Leader, you must transfer leadership to an eligible member before leaving the group.\n\nSelect a new Leader:")
+                    .setSingleChoiceItems(memberNames, 0) { _, which ->
+                        selectedIndex = which
                     }
-                    if (uid.isNotBlank()) {
-                        TeamRepository.leaveTeam(uid) {}
+                    .setNegativeButton("Cancel", null)
+                    .setPositiveButton("Transfer & Continue") { _, _ ->
+                        val targetMember = eligibleMembers[selectedIndex]
+                        val targetName = targetMember.fullName.ifBlank { targetMember.username }
+                        val targetUid = targetMember.uid
+                        val targetEmail = targetMember.email
+
+                        AlertDialog.Builder(this)
+                            .setTitle("Confirm Leadership Transfer")
+                            .setMessage("Are you sure you want to transfer leadership to $targetName?\n\nThey will become the new Team Leader, and your role will become Member.")
+                            .setNegativeButton("Cancel", null)
+                            .setPositiveButton("Confirm Transfer") { _, _ ->
+                                val progress = android.app.ProgressDialog(this).apply {
+                                    setMessage("Transferring leadership to $targetName...")
+                                    setCancelable(false)
+                                    show()
+                                }
+                                TeamRepository.transferTeamLeadership(
+                                    teamCode = activeCode,
+                                    currentLeaderUid = uid,
+                                    newLeaderUid = targetUid,
+                                    newLeaderName = targetName,
+                                    newLeaderEmail = targetEmail,
+                                    oldLeaderEmail = userEmail,
+                                    preferences = preferences
+                                ) { result ->
+                                    runOnUiThread {
+                                        progress.dismiss()
+                                        if (result.isSuccess) {
+                                            toast("Leadership transferred to $targetName.")
+                                            AlertDialog.Builder(this)
+                                                .setTitle("Leadership Transferred")
+                                                .setMessage("Leadership has been successfully transferred to $targetName. Your role is now Member.\n\nDo you still want to leave the team now?")
+                                                .setNegativeButton("Stay as Member") { _, _ ->
+                                                    val intent = Intent(this@AdminActivity, MemberActivity::class.java)
+                                                        .putExtra("startPage", "home")
+                                                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_CLEAR_TASK)
+                                                    startActivity(intent)
+                                                    finish()
+                                                }
+                                                .setPositiveButton("Leave Team") { _, _ ->
+                                                    executeLeaveTeamAction(uid, activeCode)
+                                                }
+                                                .setCancelable(false)
+                                                .show()
+                                        } else {
+                                            toast("Failed to transfer leadership: ${result.exceptionOrNull()?.message}")
+                                        }
+                                    }
+                                }
+                            }
+                            .show()
                     }
-                    preferences.edit()
-                        .putString("role", "")
-                        .remove("teamName")
-                        .remove("teamCode")
-                        .remove("ministryRole")
-                        .putBoolean("leftTeam", true)
-                        .apply()
-                    teamName = ""
-                    toast("You left the team.")
-                    navigate("teamChoice")
-                }.show()
+                    .show()
+                return@teamDetailAction
+            }
+
+            executeLeaveTeamAction(uid, activeCode)
         })
 
         // Overlay Sheet (Add Role or Remove Member)
@@ -7135,6 +7262,30 @@ class AdminActivity : AppCompatActivity() {
         isClickable=true;isFocusable=true;contentDescription=label
         add(Symbol(this@AdminActivity,icon,Color.rgb(174,0,234)),28,28)
         space(3);add(text(label,labelSize,navy,true,true))
+    }
+
+    private fun executeLeaveTeamAction(uid: String, activeCode: String) {
+        AlertDialog.Builder(this).setTitle("Leave Team?")
+            .setMessage("Are you sure you want to leave this team?")
+            .setNegativeButton("Cancel", null).setPositiveButton("Leave") { _, _ ->
+                if (activeCode.isNotBlank()) {
+                    com.example.syncedn.data.auth.SyncedFirebaseMessagingService.unsubscribeFromTeam(activeCode)
+                    com.example.syncedn.data.auth.SyncedMessagingService.stopRealtimeTeamWatchers()
+                }
+                if (uid.isNotBlank()) {
+                    TeamRepository.leaveTeam(uid) {}
+                }
+                preferences.edit()
+                    .putString("role", "")
+                    .remove("teamName")
+                    .remove("teamCode")
+                    .remove("ministryRole")
+                    .putBoolean("leftTeam", true)
+                    .apply()
+                teamName = ""
+                toast("You left the team.")
+                navigate("teamChoice")
+            }.show()
     }
 }
 

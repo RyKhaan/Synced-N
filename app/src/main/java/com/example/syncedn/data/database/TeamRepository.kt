@@ -796,6 +796,13 @@ object TeamRepository {
                     if (memberName.isNotBlank()) map.put(memberName, effectiveNewRole)
                     putString(com.example.syncedn.data.auth.SessionManager.KEY_MEMBER_ROLES, map.toString())
                 } catch (_: Throwable) {}
+                if (computedRole == "Member") {
+                    val cleanTeamLower = preferences.getString("teamName", "").orEmpty().trim().lowercase()
+                    val savedLeaderEmail = preferences.getString("team_leader_email_$cleanTeamLower", "").orEmpty().trim().lowercase()
+                    if (cleanTeamLower.isNotBlank() && cleanEmail.isNotBlank() && savedLeaderEmail == cleanEmail) {
+                        remove("team_leader_email_$cleanTeamLower")
+                    }
+                }
             }
         }
 
@@ -1039,6 +1046,88 @@ object TeamRepository {
         onComplete: (Result<Unit>) -> Unit = {}
     ) {
         removeMemberFromTeam(memberUid, teamCode, "", null, onComplete)
+    }
+
+    /**
+     * Atomically transfers team leadership from the current leader to an eligible member.
+     * Updates:
+     * 1. /teams/{teamCode}: leaderUid, leaderName
+     * 2. /users/{newLeaderUid}: role="Leader", ministryRole="Worship Leader"
+     * 3. /users/{currentLeaderUid}: role="Member", ministryRole="Member"
+     */
+    fun transferTeamLeadership(
+        teamCode: String,
+        currentLeaderUid: String,
+        newLeaderUid: String,
+        newLeaderName: String,
+        newLeaderEmail: String,
+        oldLeaderEmail: String,
+        preferences: android.content.SharedPreferences? = null,
+        onComplete: (Result<Unit>) -> Unit = {}
+    ) {
+        val code = teamCode.trim().uppercase()
+        if (code.isBlank() || currentLeaderUid.isBlank() || newLeaderUid.isBlank()) {
+            onComplete(Result.failure(IllegalArgumentException("Invalid teamCode or leader UIDs")))
+            return
+        }
+
+        val batch = db.batch()
+
+        // 1. Update /teams/{code}
+        val teamRef = db.collection(TEAMS_COLLECTION).document(code)
+        batch.update(teamRef, mapOf<String, Any>(
+            "leaderUid" to newLeaderUid,
+            "leaderName" to newLeaderName
+        ))
+
+        // 2. Update new leader's user document
+        val newLeaderRef = db.collection(USERS_COLLECTION).document(newLeaderUid)
+        batch.update(newLeaderRef, mapOf<String, Any>(
+            "role" to "Leader",
+            "ministryRole" to "Worship Leader"
+        ))
+
+        // 3. Update old leader's user document
+        val oldLeaderRef = db.collection(USERS_COLLECTION).document(currentLeaderUid)
+        batch.update(oldLeaderRef, mapOf<String, Any>(
+            "role" to "Member",
+            "ministryRole" to "Member"
+        ))
+
+        batch.commit()
+            .addOnSuccessListener {
+                val cleanEmail = newLeaderEmail.trim().lowercase()
+                for ((_, roster) in cachedRosters) {
+                    synchronized(roster) {
+                        val oldIdx = roster.indexOfFirst { it.uid == currentLeaderUid }
+                        if (oldIdx >= 0) {
+                            roster[oldIdx] = roster[oldIdx].copy(role = "Member", ministryRole = "Member")
+                        }
+                        val newIdx = roster.indexOfFirst { it.uid == newLeaderUid }
+                        if (newIdx >= 0) {
+                            roster[newIdx] = roster[newIdx].copy(role = "Leader", ministryRole = "Worship Leader")
+                        }
+                    }
+                }
+
+                if (preferences != null) {
+                    preferences.edit {
+                        putString("role", "Member")
+                        putString(com.example.syncedn.data.auth.SessionManager.KEY_ROLE, "Member")
+                        putString("ministryRole", "Member")
+                        putString(com.example.syncedn.data.auth.SessionManager.KEY_MINISTRY_ROLE, "Member")
+                        val cleanTeamLower = preferences.getString("teamName", "").orEmpty().trim().lowercase()
+                        if (cleanTeamLower.isNotBlank() && cleanEmail.isNotBlank()) {
+                            putString("team_leader_email_$cleanTeamLower", cleanEmail)
+                        }
+                    }
+                }
+                onComplete(Result.success(Unit))
+            }
+            .addOnFailureListener { e ->
+                android.util.Log.e("TeamRepository", "transferTeamLeadership failed: ${e.message}", e)
+                onComplete(Result.failure(e))
+            }
     }
 
     /**

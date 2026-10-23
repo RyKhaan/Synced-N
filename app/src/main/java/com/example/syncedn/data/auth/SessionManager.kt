@@ -221,6 +221,8 @@ object SessionManager {
 
         val savedRole = preferences.getString("email_role_$emailLower", "").orEmpty()
             .ifBlank { if (uid.isNotBlank()) preferences.getString("user_role_$uid", "").orEmpty() else "" }
+            .ifBlank { preferences.getString(KEY_ROLE, "").orEmpty() }
+            .ifBlank { preferences.getString("role", "").orEmpty() }
         val savedTeam = preferences.getString("email_team_$emailLower", "").orEmpty()
             .ifBlank { if (uid.isNotBlank()) preferences.getString("user_team_$uid", "").orEmpty() else "" }
             .ifBlank { preferences.getString(KEY_TEAM_NAME, "").orEmpty() }
@@ -285,11 +287,17 @@ object SessionManager {
 
         val finalRole = when {
             isLeadUser -> "Leader"
-            remoteRole.equals("Leader", ignoreCase = true) || savedRole.equals("Leader", ignoreCase = true) -> "Leader"
+            remoteRole.isNotBlank() -> remoteRole
             savedRole.isNotBlank() -> savedRole
             finalTeam.isNotBlank() && preferences.getString("team_leader_email_${finalTeam.trim().lowercase()}", "") == emailLower -> "Leader"
-            remoteRole.isNotBlank() -> remoteRole
             else -> "Member"
+        }
+
+        preferences.edit {
+            putString(KEY_ROLE, finalRole)
+            putString("role", finalRole)
+            if (uid.isNotBlank()) putString("user_role_$uid", finalRole)
+            if (emailLower.isNotBlank()) putString("email_role_$emailLower", finalRole)
         }
 
         if (isLeadUser) {

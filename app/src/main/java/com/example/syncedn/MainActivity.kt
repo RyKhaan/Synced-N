@@ -8,6 +8,20 @@ class MainActivity : MemberActivity() {
 
     override fun onCreate(savedInstanceState: android.os.Bundle?) {
         super.onCreate(savedInstanceState)
+
+        // Fresh installation detection: noBackupFilesDir is never backed up by Android OS and is deleted on uninstall.
+        // On true first launch after install/reinstall, start on Splash -> Welcome/Login screen and clear residual tokens.
+        val installMarker = java.io.File(noBackupFilesDir, "synced_install_v1.marker")
+        if (!installMarker.exists()) {
+            try {
+                preferences.edit().clear().commit()
+                com.example.syncedn.data.auth.AuthManager.signOut()
+                installMarker.createNewFile()
+            } catch (_: Throwable) {}
+            navigate("start")
+            return
+        }
+
         val requestedStart = intent.getStringExtra("startPage")
         if (!requestedStart.isNullOrBlank() && requestedStart in listOf("login", "start", "register")) {
             navigate(requestedStart)

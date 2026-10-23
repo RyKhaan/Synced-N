@@ -402,7 +402,8 @@ open class MemberActivity : AppCompatActivity() {
                 putString("team_registry_$code", team)
                 putString("team_leader_code_$cleanTeamLower", code)
             }
-            if (role.equals("Leader", ignoreCase = true) && cleanTeamLower.isNotBlank() && emailLower.isNotBlank()) {
+            val isSubLeader = preferences.getString("ministryRole", "").equals("Substitute Leader", ignoreCase = true)
+            if (!isSubLeader && role.equals("Leader", ignoreCase = true) && cleanTeamLower.isNotBlank() && emailLower.isNotBlank()) {
                 putString("team_leader_email_$cleanTeamLower", emailLower)
             }
             if (uid.isNotBlank()) {
@@ -4779,45 +4780,16 @@ space(48)
             add(metronome)
         }); col.space(24)
         val refLink = currentSong?.referenceUrl.orEmpty().ifBlank { savedSong.optString("link") }
-        val ytVidId = extractYouTubeVideoId(refLink)
-        if (ytVidId != null) {
-            col.add(text("Rehearsal Video", 13, navy, true)); col.space(8)
-            val webView = android.webkit.WebView(this@MemberActivity).apply {
-                android.webkit.CookieManager.getInstance().setAcceptCookie(true)
-                android.webkit.CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
-                settings.javaScriptEnabled = true
-                settings.domStorageEnabled = true
-                settings.mediaPlaybackRequiresUserGesture = false
-                try { settings.userAgentString = settings.userAgentString.replace("; wv", "") } catch (_: Throwable) {}
-                webChromeClient = android.webkit.WebChromeClient()
-                val html = """
-                    <!DOCTYPE html>
-                    <html>
-                    <head>
-                        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-                        <style>
-                            body { margin: 0; background-color: #000; display: flex; align-items: center; justify-content: center; height: 100vh; }
-                            iframe { width: 100%; height: 100%; border: 0; }
-                        </style>
-                    </head>
-                    <body>
-                        <iframe src="https://www.youtube.com/embed/$ytVidId?enablejsapi=1&origin=https://www.youtube.com&playsinline=1&rel=0" allowfullscreen></iframe>
-                    </body>
-                    </html>
-                """.trimIndent()
-                loadDataWithBaseURL("https://www.youtube.com", html, "text/html", "UTF-8", null)
-            }
-            col.add(panel().apply {
-                setPadding(dp(4), dp(4), dp(4), dp(4))
-                add(webView, -1, 200)
-            }); col.space(8)
-            col.add(memberButton("Watch on YouTube App", navy) {
-                try {
-                    startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("vnd.youtube:$ytVidId")).setFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-                } catch (_: Exception) {
-                    startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://www.youtube.com/watch?v=$ytVidId")))
-                }
-            }, -1, 44); col.space(16)
+        val playerView = com.example.syncedn.ui.player.YouTubePlayerHelper.buildHybridPlayerView(
+            context = this@MemberActivity,
+            referenceUrl = refLink,
+            selectedSongTitle = selectedSong,
+            navyColor = navy,
+            dp = { dp(it) }
+        )
+        if (playerView != null) {
+            col.add(playerView)
+            col.space(12)
         }
 
         col.add(text(if(showChords) "Lyrics & Chords Sheet" else "Lyrics", 13, navy, true)); col.space(10)

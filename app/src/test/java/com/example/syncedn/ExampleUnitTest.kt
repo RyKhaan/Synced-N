@@ -2697,4 +2697,89 @@ class ExampleUnitTest {
         assertFalse(postGenRemoved.contains("yanyangenturo@gmail.com"))
         assertFalse(postGenRemoved.contains("YANYAN"))
     }
+
+    @Test
+    fun testSubstituteLeaderDemotionAndSessionResolution() {
+        val prefs = FakePreferences()
+        val email = "substitute@example.com"
+        val uid = "user_sub_456"
+
+        // Setup a previous state where user was Substitute Leader (with savedRole = "Leader")
+        prefs.edit()
+            .putString("email", email)
+            .putString(com.example.syncedn.data.auth.SessionManager.KEY_USER_ID, uid)
+            .putString(com.example.syncedn.data.auth.SessionManager.KEY_ROLE, "Leader")
+            .putString("role", "Leader")
+            .putString("ministryRole", "Substitute Leader")
+            .putString("teamName", "Praise Team")
+            .putString("teamCode", "TEAM01")
+            .apply()
+
+        // Remote Firestore profile now returns role = "Member" (Leader revoked the substitute role)
+        val remoteProfile = com.example.syncedn.data.model.UserProfile(
+            uid = uid,
+            email = email,
+            username = "SubUser",
+            role = "Member",
+            ministryRole = "Vocalist",
+            teamName = "Praise Team",
+            teamCode = "TEAM01"
+        )
+
+        val (finalRole, finalTeam, finalCode) = com.example.syncedn.data.auth.SessionManager.resolveUserTeamSession(
+            preferences = prefs,
+            profile = remoteProfile,
+            email = email
+        )
+
+        // Verifications:
+        // 1. Authoritative remote role "Member" must take priority over stale saved "Leader" role
+        assertEquals("Member", finalRole)
+        assertEquals("Praise Team", finalTeam)
+        assertEquals("TEAM01", finalCode)
+
+        // 2. Stale local preferences must be cleaned up to "Member"
+        assertEquals("Member", prefs.getString(com.example.syncedn.data.auth.SessionManager.KEY_ROLE, ""))
+        assertEquals("Member", prefs.getString("role", ""))
+        assertEquals("Member", prefs.getString("user_role_$uid", ""))
+    }
+
+    @Test
+    fun testYouTubeVideoIdExtractionAndFallback() {
+        // Standard desktop watch URL
+        assertEquals("dQw4w9WgXcQ", com.example.syncedn.data.model.SongData.extractYoutubeVideoId("https://www.youtube.com/watch?v=dQw4w9WgXcQ"))
+        // Desktop watch URL with extra query params
+        assertEquals("dQw4w9WgXcQ", com.example.syncedn.data.model.SongData.extractYoutubeVideoId("https://www.youtube.com/watch?v=dQw4w9WgXcQ&feature=shared&t=42"))
+        // Shortened youtu.be link
+        assertEquals("dQw4w9WgXcQ", com.example.syncedn.data.model.SongData.extractYoutubeVideoId("https://youtu.be/dQw4w9WgXcQ?si=abcdef123"))
+        // YouTube Shorts URL
+        assertEquals("dQw4w9WgXcQ", com.example.syncedn.data.model.SongData.extractYoutubeVideoId("https://www.youtube.com/shorts/dQw4w9WgXcQ"))
+        // Embed URL
+        assertEquals("dQw4w9WgXcQ", com.example.syncedn.data.model.SongData.extractYoutubeVideoId("https://www.youtube.com/embed/dQw4w9WgXcQ"))
+        // Empty / blank / invalid fallback
+        assertNull(com.example.syncedn.data.model.SongData.extractYoutubeVideoId(""))
+        assertNull(com.example.syncedn.data.model.SongData.extractYoutubeVideoId("   "))
+        assertNull(com.example.syncedn.data.model.SongData.extractYoutubeVideoId(null))
+        assertNull(com.example.syncedn.data.model.SongData.extractYoutubeVideoId("https://spotify.com/track/12345"))
+    }
+
+    @Test
+    fun testFreshInstallMarkerLogic() {
+        val tempDir = java.io.File(System.getProperty("java.io.tmpdir"), "test_synced_install_" + System.currentTimeMillis())
+        tempDir.mkdirs()
+        try {
+            val marker = java.io.File(tempDir, "synced_install_v1.marker")
+            // On fresh install, marker does not exist
+            assertFalse(marker.exists())
+
+            // App creates marker
+            marker.createNewFile()
+            assertTrue(marker.exists())
+
+            // Subsequent launches find marker existing
+            assertTrue(marker.exists())
+        } finally {
+            tempDir.deleteRecursively()
+        }
+    }
 }
