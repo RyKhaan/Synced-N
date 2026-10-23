@@ -401,8 +401,13 @@ object TeamRepository {
                 }
                 val arr = org.json.JSONArray()
                 for (m in sorted) {
+                    val isLeader = m.email.trim().lowercase() == "ryanlloydgenturo@gmail.com" ||
+                                   m.fullName.equals("Ryan Lloyd Genturo", ignoreCase = true) ||
+                                   m.ministryRole.equals("Worship Leader", ignoreCase = true) ||
+                                   m.ministryRole.equals("Substitute Leader", ignoreCase = true)
+                    val effectiveM = if (!isLeader && m.role.equals("Leader", ignoreCase = true)) m.copy(role = "Member") else m
                     val obj = org.json.JSONObject()
-                    m.toMap().forEach { (k, v) ->
+                    effectiveM.toMap().forEach { (k, v) ->
                         if (k == "unavailableRanges" && v is List<*>) {
                             val rArr = org.json.JSONArray()
                             v.forEach { r -> (r as? Map<*, *>)?.let { rArr.put(org.json.JSONObject(it)) } }
@@ -683,10 +688,15 @@ object TeamRepository {
                         if (!mapWithId.containsKey("uid") || (mapWithId["uid"] as? String).isNullOrBlank()) {
                             mapWithId["uid"] = doc.id
                         }
-                        val member = TeamMember.fromMap(mapWithId)
-                        if (member.removedByLeader || member.teamCode.trim().uppercase() != code) {
+                        val rawMember = TeamMember.fromMap(mapWithId)
+                        if (rawMember.removedByLeader || rawMember.teamCode.trim().uppercase() != code) {
                             continue
                         }
+                        val isLeader = rawMember.email.trim().lowercase() == "ryanlloydgenturo@gmail.com" ||
+                                       rawMember.fullName.equals("Ryan Lloyd Genturo", ignoreCase = true) ||
+                                       rawMember.ministryRole.equals("Worship Leader", ignoreCase = true) ||
+                                       rawMember.ministryRole.equals("Substitute Leader", ignoreCase = true)
+                        val member = if (!isLeader && rawMember.role.equals("Leader", ignoreCase = true)) rawMember.copy(role = "Member") else rawMember
                         list.add(member)
                     }
 
@@ -727,6 +737,11 @@ object TeamRepository {
         }
 
         val cleanEmail = memberEmail.trim().lowercase()
+        val isTargetLeader = newRole.equals("Substitute Leader", ignoreCase = true) ||
+                             newRole.equals("Worship Leader", ignoreCase = true) ||
+                             cleanEmail == "ryanlloydgenturo@gmail.com" ||
+                             memberName.equals("Ryan Lloyd Genturo", ignoreCase = true)
+        val computedRole = if (isTargetLeader) "Leader" else "Member"
 
         // Update in-memory caches
         for ((_, roster) in cachedRosters) {
@@ -737,7 +752,7 @@ object TeamRepository {
                     (memberName.isNotBlank() && (it.fullName.equals(memberName, true) || it.username.equals(memberName, true)))
                 }
                 if (member != null) {
-                    val updated = member.copy(ministryRole = newRole)
+                    val updated = member.copy(ministryRole = newRole, role = computedRole)
                     val idx = roster.indexOf(member)
                     roster[idx] = updated
                 }
@@ -746,8 +761,14 @@ object TeamRepository {
 
         if (preferences != null) {
             preferences.edit {
-                if (cleanEmail.isNotBlank()) putString("email_ministry_$cleanEmail", newRole)
-                if (memberUid.isNotBlank()) putString("user_ministry_$memberUid", newRole)
+                if (cleanEmail.isNotBlank()) {
+                    putString("email_ministry_$cleanEmail", newRole)
+                    putString("email_role_$cleanEmail", computedRole)
+                }
+                if (memberUid.isNotBlank()) {
+                    putString("user_ministry_$memberUid", newRole)
+                    putString("user_role_$memberUid", computedRole)
+                }
                 try {
                     val map = org.json.JSONObject(preferences.getString(com.example.syncedn.data.auth.SessionManager.KEY_MEMBER_ROLES, "{}").orEmpty())
                     if (cleanEmail.isNotBlank()) map.put(cleanEmail, newRole)
@@ -759,10 +780,14 @@ object TeamRepository {
         }
 
         try {
+            val userUpdates = mapOf<String, Any>(
+                "ministryRole" to newRole,
+                "role" to computedRole
+            )
             if (memberUid.isNotBlank()) {
                 db.collection(USERS_COLLECTION)
                     .document(memberUid)
-                    .update("ministryRole", newRole)
+                    .update(userUpdates)
                     .addOnFailureListener {
                         android.util.Log.w("TeamRepository", "updateMemberMinistryRole doc update failed: ${it.message}")
                     }
@@ -774,7 +799,7 @@ object TeamRepository {
                     .addOnSuccessListener { snap ->
                         if (snap != null && !snap.isEmpty) {
                             for (doc in snap.documents) {
-                                doc.reference.update("ministryRole", newRole)
+                                doc.reference.update(userUpdates)
                             }
                         }
                         onComplete(Result.success(Unit))
@@ -788,7 +813,7 @@ object TeamRepository {
                     .get()
                     .addOnSuccessListener { snap ->
                         for (doc in snap.documents) {
-                            doc.reference.update("ministryRole", newRole)
+                            doc.reference.update(userUpdates)
                         }
                         onComplete(Result.success(Unit))
                     }
