@@ -1,84 +1,145 @@
 <?xml version="1.0" ?>
 <mxfile host="app.diagrams.net" agent="Synced N A4 Portrait ERD">
   <diagram id="Synced_N_ERD_A4" name="Synced N ERD Diagram (A4 Portrait)">
-    <mxGraphModel dx="1420" dy="980" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1540" pageHeight="2240" background="#FFFFFF">
+    <mxGraphModel dx="1420" dy="980" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1620" pageHeight="2460" background="#FFFFFF">
       <root>
         <mxCell id="0"/>
         <mxCell id="1" parent="0"/>
         <mxCell id="USERS" value="&lt;b&gt;/users/{uid}&lt;/b&gt;&amp;#xa;&lt;b&gt;USERS (Root Collection)&lt;/b&gt;&amp;#xa;---&amp;#xa;[PK] uid : STRING(128)&amp;#xa;username : STRING(50)&amp;#xa;email : STRING(100)&amp;#xa;fullName : STRING(100)&amp;#xa;phone : STRING(25)&amp;#xa;role : STRING&amp;#xa;ministryRole : STRING(50)&amp;#xa;[FK] teamCode : STRING(6)&amp;#xa;teamName : STRING(100)&amp;#xa;photoUri : STRING(500)&amp;#xa;[EMB] notificationPreferences : MAP&lt;BOOL&gt;&amp;#xa;[EMB] unavailableRanges : ARRAY&lt;MAP&gt;&amp;#xa;createdAt : TIMESTAMP&amp;#xa;updatedAt : TIMESTAMP" style="swimlane;fontStyle=0;childLayout=stackLayout;horizontal=1;startSize=38;horizontalStack=0;resizeParent=1;resizeParentMax=0;resizeLast=0;collapsible=1;marginBottom=0;html=1;fillColor=#EFF6FF;strokeColor=#1D4ED8;strokeWidth=1.8;fontFamily=Arial;fontSize=11;fontColor=#0F172A;" vertex="1" parent="1">
-          <mxGeometry x="40" y="95" width="700" height="312" as="geometry"/>
-        </mxCell>
-        <mxCell id="PASSWORD_RESETS" value="&lt;b&gt;/password_resets/{emailKey}&lt;/b&gt;&amp;#xa;&lt;b&gt;PASSWORD_RESETS (Root Collection)&lt;/b&gt;&amp;#xa;---&amp;#xa;[PK] emailKey : STRING(128)&amp;#xa;email : STRING(100)&amp;#xa;otpCode : STRING(6)&amp;#xa;expiresAt : TIMESTAMP&amp;#xa;verified : BOOLEAN&amp;#xa;attempts : INTEGER" style="swimlane;fontStyle=0;childLayout=stackLayout;horizontal=1;startSize=38;horizontalStack=0;resizeParent=1;resizeParentMax=0;resizeLast=0;collapsible=1;marginBottom=0;html=1;fillColor=#FAF5FF;strokeColor=#7E22CE;strokeWidth=1.8;fontFamily=Arial;fontSize=11;fontColor=#0F172A;" vertex="1" parent="1">
-          <mxGeometry x="40" y="480" width="700" height="160" as="geometry"/>
-        </mxCell>
-        <mxCell id="AVAILABILITY" value="&lt;b&gt;/availability/{uid}&lt;/b&gt;&amp;#xa;&lt;b&gt;AVAILABILITY (Root Collection)&lt;/b&gt;&amp;#xa;---&amp;#xa;[PK,FK] uid : STRING(128)&amp;#xa;[FK] teamCode : STRING(6)&amp;#xa;[EMB] ranges : ARRAY&lt;MAP&gt;&amp;#xa;updatedAt : TIMESTAMP" style="swimlane;fontStyle=0;childLayout=stackLayout;horizontal=1;startSize=38;horizontalStack=0;resizeParent=1;resizeParentMax=0;resizeLast=0;collapsible=1;marginBottom=0;html=1;fillColor=#EFF6FF;strokeColor=#1D4ED8;strokeWidth=1.8;fontFamily=Arial;fontSize=11;fontColor=#0F172A;" vertex="1" parent="1">
-          <mxGeometry x="40" y="685" width="700" height="122" as="geometry"/>
-        </mxCell>
-        <mxCell id="SUBSTITUTIONS" value="&lt;b&gt;/teams/{teamCode}/substitutions/{subId}&lt;/b&gt;&amp;#xa;&lt;b&gt;SUBSTITUTIONS (Subcollection)&lt;/b&gt;&amp;#xa;---&amp;#xa;[PK] subId : STRING(64)&amp;#xa;[FK] teamCode : STRING(6)&amp;#xa;[FK] serviceId : STRING(64)&amp;#xa;[FK] requesterUid : STRING(128)&amp;#xa;[FK] targetSubstituteUid : STRING(128)&amp;#xa;role : STRING(50)&amp;#xa;reason : STRING(250)&amp;#xa;status : STRING(20)&amp;#xa;createdAt : TIMESTAMP" style="swimlane;fontStyle=0;childLayout=stackLayout;horizontal=1;startSize=38;horizontalStack=0;resizeParent=1;resizeParentMax=0;resizeLast=0;collapsible=1;marginBottom=0;html=1;fillColor=#ECFDF5;strokeColor=#047857;strokeWidth=1.8;fontFamily=Arial;fontSize=11;fontColor=#0F172A;" vertex="1" parent="1">
-          <mxGeometry x="40" y="865" width="700" height="217" as="geometry"/>
-        </mxCell>
-        <mxCell id="REJOIN_REQUESTS" value="&lt;b&gt;/teams/{teamCode}/rejoin_requests/{reqId}&lt;/b&gt;&amp;#xa;&lt;b&gt;REJOIN_REQUESTS (Subcollection)&lt;/b&gt;&amp;#xa;---&amp;#xa;[PK] reqId : STRING(64)&amp;#xa;[FK] teamCode : STRING(6)&amp;#xa;[FK] uid : STRING(128)&amp;#xa;fullName : STRING(100)&amp;#xa;status : STRING(20)&amp;#xa;requestedAt : TIMESTAMP" style="swimlane;fontStyle=0;childLayout=stackLayout;horizontal=1;startSize=38;horizontalStack=0;resizeParent=1;resizeParentMax=0;resizeLast=0;collapsible=1;marginBottom=0;html=1;fillColor=#ECFDF5;strokeColor=#047857;strokeWidth=1.8;fontFamily=Arial;fontSize=11;fontColor=#0F172A;" vertex="1" parent="1">
-          <mxGeometry x="40" y="1145" width="700" height="160" as="geometry"/>
-        </mxCell>
-        <mxCell id="REPORTS" value="&lt;b&gt;/teams/{teamCode}/reports/{reportId}&lt;/b&gt;&amp;#xa;&lt;b&gt;REPORTS (Subcollection)&lt;/b&gt;&amp;#xa;---&amp;#xa;[PK] reportId : STRING(64)&amp;#xa;[FK] teamCode : STRING(6)&amp;#xa;[FK] serviceId : STRING(64)&amp;#xa;attendanceCount : INTEGER&amp;#xa;summaryNotes : STRING(1000)&amp;#xa;createdAt : TIMESTAMP" style="swimlane;fontStyle=0;childLayout=stackLayout;horizontal=1;startSize=38;horizontalStack=0;resizeParent=1;resizeParentMax=0;resizeLast=0;collapsible=1;marginBottom=0;html=1;fillColor=#ECFDF5;strokeColor=#047857;strokeWidth=1.8;fontFamily=Arial;fontSize=11;fontColor=#0F172A;" vertex="1" parent="1">
-          <mxGeometry x="40" y="1370" width="700" height="160" as="geometry"/>
-        </mxCell>
-        <mxCell id="NOTIFICATIONS" value="&lt;b&gt;/teams/{teamCode}/notifications/{notifId}&lt;/b&gt;&amp;#xa;&lt;b&gt;NOTIFICATIONS (Subcollection)&lt;/b&gt;&amp;#xa;---&amp;#xa;[PK] notifId : STRING(64)&amp;#xa;[FK] teamCode : STRING(6)&amp;#xa;[FK] targetUid : STRING(128)&amp;#xa;title : STRING(100)&amp;#xa;body : STRING(250)&amp;#xa;type : STRING(30)&amp;#xa;isRead : BOOLEAN&amp;#xa;createdAt : TIMESTAMP" style="swimlane;fontStyle=0;childLayout=stackLayout;horizontal=1;startSize=38;horizontalStack=0;resizeParent=1;resizeParentMax=0;resizeLast=0;collapsible=1;marginBottom=0;html=1;fillColor=#ECFDF5;strokeColor=#047857;strokeWidth=1.8;fontFamily=Arial;fontSize=11;fontColor=#0F172A;" vertex="1" parent="1">
-          <mxGeometry x="40" y="1595" width="700" height="198" as="geometry"/>
+          <mxGeometry x="50" y="100" width="710" height="312" as="geometry"/>
         </mxCell>
         <mxCell id="TEAMS" value="&lt;b&gt;/teams/{teamCode}&lt;/b&gt;&amp;#xa;&lt;b&gt;TEAMS (Root Multi-Tenant Collection)&lt;/b&gt;&amp;#xa;---&amp;#xa;[PK] teamCode : STRING(6)&amp;#xa;teamName : STRING(100)&amp;#xa;[FK] leaderUid : STRING(128)&amp;#xa;[EMB] members : ARRAY&lt;MAP&gt;&amp;#xa;[EMB] customRoles : ARRAY&lt;STR&gt;&amp;#xa;createdAt : TIMESTAMP&amp;#xa;updatedAt : TIMESTAMP" style="swimlane;fontStyle=0;childLayout=stackLayout;horizontal=1;startSize=38;horizontalStack=0;resizeParent=1;resizeParentMax=0;resizeLast=0;collapsible=1;marginBottom=0;html=1;fillColor=#EFF6FF;strokeColor=#1D4ED8;strokeWidth=1.8;fontFamily=Arial;fontSize=11;fontColor=#0F172A;" vertex="1" parent="1">
-          <mxGeometry x="795" y="95" width="705" height="179" as="geometry"/>
+          <mxGeometry x="860" y="100" width="710" height="179" as="geometry"/>
+        </mxCell>
+        <mxCell id="AVAILABILITY" value="&lt;b&gt;/availability/{uid}&lt;/b&gt;&amp;#xa;&lt;b&gt;AVAILABILITY (Root Collection)&lt;/b&gt;&amp;#xa;---&amp;#xa;[PK,FK] uid : STRING(128)&amp;#xa;[FK] teamCode : STRING(6)&amp;#xa;[EMB] ranges : ARRAY&lt;MAP&gt;&amp;#xa;updatedAt : TIMESTAMP" style="swimlane;fontStyle=0;childLayout=stackLayout;horizontal=1;startSize=38;horizontalStack=0;resizeParent=1;resizeParentMax=0;resizeLast=0;collapsible=1;marginBottom=0;html=1;fillColor=#EFF6FF;strokeColor=#1D4ED8;strokeWidth=1.8;fontFamily=Arial;fontSize=11;fontColor=#0F172A;" vertex="1" parent="1">
+          <mxGeometry x="50" y="520" width="710" height="122" as="geometry"/>
+        </mxCell>
+        <mxCell id="PASSWORD_RESETS" value="&lt;b&gt;/password_resets/{emailKey}&lt;/b&gt;&amp;#xa;&lt;b&gt;PASSWORD_RESETS (Root Collection)&lt;/b&gt;&amp;#xa;---&amp;#xa;[PK] emailKey : STRING(128)&amp;#xa;email : STRING(100)&amp;#xa;otpCode : STRING(6)&amp;#xa;expiresAt : TIMESTAMP&amp;#xa;verified : BOOLEAN&amp;#xa;attempts : INTEGER" style="swimlane;fontStyle=0;childLayout=stackLayout;horizontal=1;startSize=38;horizontalStack=0;resizeParent=1;resizeParentMax=0;resizeLast=0;collapsible=1;marginBottom=0;html=1;fillColor=#FAF5FF;strokeColor=#7E22CE;strokeWidth=1.8;fontFamily=Arial;fontSize=11;fontColor=#0F172A;" vertex="1" parent="1">
+          <mxGeometry x="50" y="740" width="710" height="160" as="geometry"/>
+        </mxCell>
+        <mxCell id="SUBSTITUTIONS" value="&lt;b&gt;/teams/{teamCode}/substitutions/{subId}&lt;/b&gt;&amp;#xa;&lt;b&gt;SUBSTITUTIONS (Subcollection)&lt;/b&gt;&amp;#xa;---&amp;#xa;[PK] subId : STRING(64)&amp;#xa;[FK] teamCode : STRING(6)&amp;#xa;[FK] serviceId : STRING(64)&amp;#xa;[FK] requesterUid : STRING(128)&amp;#xa;[FK] targetSubstituteUid : STRING(128)&amp;#xa;role : STRING(50)&amp;#xa;reason : STRING(250)&amp;#xa;status : STRING(20)&amp;#xa;createdAt : TIMESTAMP" style="swimlane;fontStyle=0;childLayout=stackLayout;horizontal=1;startSize=38;horizontalStack=0;resizeParent=1;resizeParentMax=0;resizeLast=0;collapsible=1;marginBottom=0;html=1;fillColor=#ECFDF5;strokeColor=#047857;strokeWidth=1.8;fontFamily=Arial;fontSize=11;fontColor=#0F172A;" vertex="1" parent="1">
+          <mxGeometry x="50" y="960" width="710" height="217" as="geometry"/>
+        </mxCell>
+        <mxCell id="REJOIN_REQUESTS" value="&lt;b&gt;/teams/{teamCode}/rejoin_requests/{reqId}&lt;/b&gt;&amp;#xa;&lt;b&gt;REJOIN_REQUESTS (Subcollection)&lt;/b&gt;&amp;#xa;---&amp;#xa;[PK] reqId : STRING(64)&amp;#xa;[FK] teamCode : STRING(6)&amp;#xa;[FK] uid : STRING(128)&amp;#xa;fullName : STRING(100)&amp;#xa;status : STRING(20)&amp;#xa;requestedAt : TIMESTAMP" style="swimlane;fontStyle=0;childLayout=stackLayout;horizontal=1;startSize=38;horizontalStack=0;resizeParent=1;resizeParentMax=0;resizeLast=0;collapsible=1;marginBottom=0;html=1;fillColor=#ECFDF5;strokeColor=#047857;strokeWidth=1.8;fontFamily=Arial;fontSize=11;fontColor=#0F172A;" vertex="1" parent="1">
+          <mxGeometry x="50" y="1260" width="710" height="160" as="geometry"/>
+        </mxCell>
+        <mxCell id="REPORTS" value="&lt;b&gt;/teams/{teamCode}/reports/{reportId}&lt;/b&gt;&amp;#xa;&lt;b&gt;REPORTS (Subcollection)&lt;/b&gt;&amp;#xa;---&amp;#xa;[PK] reportId : STRING(64)&amp;#xa;[FK] teamCode : STRING(6)&amp;#xa;[FK] serviceId : STRING(64)&amp;#xa;attendanceCount : INTEGER&amp;#xa;summaryNotes : STRING(1000)&amp;#xa;createdAt : TIMESTAMP" style="swimlane;fontStyle=0;childLayout=stackLayout;horizontal=1;startSize=38;horizontalStack=0;resizeParent=1;resizeParentMax=0;resizeLast=0;collapsible=1;marginBottom=0;html=1;fillColor=#ECFDF5;strokeColor=#047857;strokeWidth=1.8;fontFamily=Arial;fontSize=11;fontColor=#0F172A;" vertex="1" parent="1">
+          <mxGeometry x="50" y="1500" width="710" height="160" as="geometry"/>
+        </mxCell>
+        <mxCell id="NOTIFICATIONS" value="&lt;b&gt;/teams/{teamCode}/notifications/{notifId}&lt;/b&gt;&amp;#xa;&lt;b&gt;NOTIFICATIONS (Subcollection)&lt;/b&gt;&amp;#xa;---&amp;#xa;[PK] notifId : STRING(64)&amp;#xa;[FK] teamCode : STRING(6)&amp;#xa;[FK] targetUid : STRING(128)&amp;#xa;title : STRING(100)&amp;#xa;body : STRING(250)&amp;#xa;type : STRING(30)&amp;#xa;isRead : BOOLEAN&amp;#xa;createdAt : TIMESTAMP" style="swimlane;fontStyle=0;childLayout=stackLayout;horizontal=1;startSize=38;horizontalStack=0;resizeParent=1;resizeParentMax=0;resizeLast=0;collapsible=1;marginBottom=0;html=1;fillColor=#ECFDF5;strokeColor=#047857;strokeWidth=1.8;fontFamily=Arial;fontSize=11;fontColor=#0F172A;" vertex="1" parent="1">
+          <mxGeometry x="50" y="1740" width="710" height="198" as="geometry"/>
         </mxCell>
         <mxCell id="SERVICES" value="&lt;b&gt;/teams/{teamCode}/services/{serviceId}&lt;/b&gt;&amp;#xa;&lt;b&gt;SERVICES (Subcollection)&lt;/b&gt;&amp;#xa;---&amp;#xa;[PK] serviceId : STRING(64)&amp;#xa;[FK] teamCode : STRING(6)&amp;#xa;title : STRING(120)&amp;#xa;date : STRING(10)&amp;#xa;start : STRING(10)&amp;#xa;end : STRING(10)&amp;#xa;venue : STRING(100)&amp;#xa;status : STRING(20)&amp;#xa;coverPhotoUrl : STRING(500)&amp;#xa;[EMB] assignments : ARRAY&lt;MAP&gt;&amp;#xa;[EMB] rehearsal : MAP&amp;#xa;[EMB] songs : ARRAY&lt;MAP&gt;&amp;#xa;[FK] createdBy : STRING(128)&amp;#xa;createdAt : TIMESTAMP&amp;#xa;updatedAt : TIMESTAMP" style="swimlane;fontStyle=0;childLayout=stackLayout;horizontal=1;startSize=38;horizontalStack=0;resizeParent=1;resizeParentMax=0;resizeLast=0;collapsible=1;marginBottom=0;html=1;fillColor=#ECFDF5;strokeColor=#047857;strokeWidth=1.8;fontFamily=Arial;fontSize=11;fontColor=#0F172A;" vertex="1" parent="1">
-          <mxGeometry x="795" y="340" width="705" height="331" as="geometry"/>
+          <mxGeometry x="860" y="480" width="710" height="331" as="geometry"/>
         </mxCell>
         <mxCell id="SERVICE_ASSIGNMENTS" value="&lt;b&gt;SERVICES.assignments[]&lt;/b&gt;&amp;#xa;&lt;b&gt;SERVICE_ASSIGNMENTS (Embedded Array)&lt;/b&gt;&amp;#xa;---&amp;#xa;[PFK] serviceId : STRING(64)&amp;#xa;[PFK] role : STRING(50)&amp;#xa;[FK] memberUid : STRING(128)&amp;#xa;memberName : STRING(100)&amp;#xa;status : STRING(20)" style="swimlane;fontStyle=0;childLayout=stackLayout;horizontal=1;startSize=38;horizontalStack=0;resizeParent=1;resizeParentMax=0;resizeLast=0;collapsible=1;marginBottom=0;html=1;fillColor=#FFF7ED;strokeColor=#C2410C;strokeWidth=1.8;fontFamily=Arial;fontSize=11;fontColor=#0F172A;" vertex="1" parent="1">
-          <mxGeometry x="795" y="755" width="705" height="141" as="geometry"/>
+          <mxGeometry x="860" y="850" width="710" height="141" as="geometry"/>
         </mxCell>
         <mxCell id="REHEARSALS" value="&lt;b&gt;SERVICES.rehearsal&lt;/b&gt;&amp;#xa;&lt;b&gt;REHEARSALS (Embedded Map)&lt;/b&gt;&amp;#xa;---&amp;#xa;[PFK] serviceId : STRING(64)&amp;#xa;date : STRING(10)&amp;#xa;time : STRING(10)&amp;#xa;room : STRING(50)&amp;#xa;notes : STRING(500)" style="swimlane;fontStyle=0;childLayout=stackLayout;horizontal=1;startSize=38;horizontalStack=0;resizeParent=1;resizeParentMax=0;resizeLast=0;collapsible=1;marginBottom=0;html=1;fillColor=#FFF7ED;strokeColor=#C2410C;strokeWidth=1.8;fontFamily=Arial;fontSize=11;fontColor=#0F172A;" vertex="1" parent="1">
-          <mxGeometry x="795" y="955" width="705" height="141" as="geometry"/>
+          <mxGeometry x="860" y="1050" width="710" height="141" as="geometry"/>
         </mxCell>
         <mxCell id="SERVICE_SONGS" value="&lt;b&gt;SERVICES.songs[]&lt;/b&gt;&amp;#xa;&lt;b&gt;SERVICE_SONGS (Embedded Array)&lt;/b&gt;&amp;#xa;---&amp;#xa;[PFK] serviceId : STRING(64)&amp;#xa;[FK] songId : STRING(64)&amp;#xa;title : STRING(120)&amp;#xa;artist : STRING(100)&amp;#xa;key : STRING(10)&amp;#xa;bpm : INTEGER" style="swimlane;fontStyle=0;childLayout=stackLayout;horizontal=1;startSize=38;horizontalStack=0;resizeParent=1;resizeParentMax=0;resizeLast=0;collapsible=1;marginBottom=0;html=1;fillColor=#FFF7ED;strokeColor=#C2410C;strokeWidth=1.8;fontFamily=Arial;fontSize=11;fontColor=#0F172A;" vertex="1" parent="1">
-          <mxGeometry x="795" y="1140" width="705" height="160" as="geometry"/>
+          <mxGeometry x="860" y="1240" width="710" height="160" as="geometry"/>
         </mxCell>
         <mxCell id="SONGS" value="&lt;b&gt;/teams/{teamCode}/songs/{songId}&lt;/b&gt;&amp;#xa;&lt;b&gt;SONGS (Subcollection)&lt;/b&gt;&amp;#xa;---&amp;#xa;[PK] songId : STRING(64)&amp;#xa;[FK] teamCode : STRING(6)&amp;#xa;title : STRING(120)&amp;#xa;artist : STRING(100)&amp;#xa;key : STRING(10)&amp;#xa;bpm : INTEGER&amp;#xa;sheet : STRING(30000)&amp;#xa;lyrics : STRING(20000)&amp;#xa;referenceUrl : STRING(500)&amp;#xa;[FK] createdBy : STRING(128)&amp;#xa;createdAt : TIMESTAMP" style="swimlane;fontStyle=0;childLayout=stackLayout;horizontal=1;startSize=38;horizontalStack=0;resizeParent=1;resizeParentMax=0;resizeLast=0;collapsible=1;marginBottom=0;html=1;fillColor=#ECFDF5;strokeColor=#047857;strokeWidth=1.8;fontFamily=Arial;fontSize=11;fontColor=#0F172A;" vertex="1" parent="1">
-          <mxGeometry x="795" y="1345" width="705" height="255" as="geometry"/>
+          <mxGeometry x="860" y="1445" width="710" height="255" as="geometry"/>
         </mxCell>
         <mxCell id="ANNOUNCEMENTS" value="&lt;b&gt;/teams/{teamCode}/announcements/{annId}&lt;/b&gt;&amp;#xa;&lt;b&gt;ANNOUNCEMENTS (Subcollection)&lt;/b&gt;&amp;#xa;---&amp;#xa;[PK] annId : STRING(64)&amp;#xa;[FK] teamCode : STRING(6)&amp;#xa;title : STRING(120)&amp;#xa;content : STRING(1500)&amp;#xa;isUrgent : BOOLEAN&amp;#xa;[FK] authorUid : STRING(128)&amp;#xa;createdAt : TIMESTAMP" style="swimlane;fontStyle=0;childLayout=stackLayout;horizontal=1;startSize=38;horizontalStack=0;resizeParent=1;resizeParentMax=0;resizeLast=0;collapsible=1;marginBottom=0;html=1;fillColor=#ECFDF5;strokeColor=#047857;strokeWidth=1.8;fontFamily=Arial;fontSize=11;fontColor=#0F172A;" vertex="1" parent="1">
-          <mxGeometry x="795" y="1690" width="705" height="179" as="geometry"/>
+          <mxGeometry x="860" y="1785" width="710" height="179" as="geometry"/>
         </mxCell>
         <mxCell id="MESSAGES" value="&lt;b&gt;/teams/{teamCode}/messages/{msgId}&lt;/b&gt;&amp;#xa;&lt;b&gt;MESSAGES (Subcollection)&lt;/b&gt;&amp;#xa;---&amp;#xa;[PK] msgId : STRING(64)&amp;#xa;[FK] teamCode : STRING(6)&amp;#xa;[FK] senderUid : STRING(128)&amp;#xa;senderName : STRING(100)&amp;#xa;text : STRING(1000)&amp;#xa;photoUrl : STRING(500)&amp;#xa;isEdited : BOOLEAN&amp;#xa;createdAt : TIMESTAMP" style="swimlane;fontStyle=0;childLayout=stackLayout;horizontal=1;startSize=38;horizontalStack=0;resizeParent=1;resizeParentMax=0;resizeLast=0;collapsible=1;marginBottom=0;html=1;fillColor=#ECFDF5;strokeColor=#047857;strokeWidth=1.8;fontFamily=Arial;fontSize=11;fontColor=#0F172A;" vertex="1" parent="1">
-          <mxGeometry x="795" y="1935" width="705" height="198" as="geometry"/>
+          <mxGeometry x="860" y="2030" width="710" height="198" as="geometry"/>
         </mxCell>
-        <mxCell id="rel_1" value="belongs to / creates" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#1E293B;strokeWidth=1.8;startArrow=ERmandOne;startFill=0;endArrow=ERmany;endFill=0;" edge="1" parent="1" source="USERS" target="TEAMS">
+        <mxCell id="rel_1" value="creates / joins" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#1E293B;strokeWidth=1.8;exitX=1;exitY=0.3;exitDx=0;exitDy=0;entryX=0;entryY=0.3;entryDx=0;entryDy=0;startArrow=ERmandOne;startFill=0;endArrow=ERmany;endFill=0;labelBackgroundColor=#FFFFFF;fontFamily=Arial;fontSize=10;fontColor=#1E293B;" edge="1" parent="1" source="USERS" target="TEAMS">
           <mxGeometry relative="1" as="geometry"/>
         </mxCell>
-        <mxCell id="rel_2" value="declares blackout dates" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#1E293B;strokeWidth=1.8;startArrow=ERmandOne;startFill=0;endArrow=ERmany;endFill=0;" edge="1" parent="1" source="USERS" target="AVAILABILITY">
+        <mxCell id="rel_2" value="declares blackout dates" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#1E293B;strokeWidth=1.8;exitX=0.3;exitY=1;exitDx=0;exitDy=0;entryX=0.3;entryY=0;entryDx=0;entryDy=0;startArrow=ERmandOne;startFill=0;endArrow=ERmany;endFill=0;labelBackgroundColor=#FFFFFF;fontFamily=Arial;fontSize=10;fontColor=#1E293B;" edge="1" parent="1" source="USERS" target="AVAILABILITY">
           <mxGeometry relative="1" as="geometry"/>
         </mxCell>
-        <mxCell id="rel_3" value="requests / accepts swap" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#1E293B;strokeWidth=1.8;startArrow=ERmandOne;startFill=0;endArrow=ERmany;endFill=0;" edge="1" parent="1" source="USERS" target="SUBSTITUTIONS">
+        <mxCell id="rel_3" value="initiates OTP recovery" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#1E293B;strokeWidth=1.8;exitX=0.7;exitY=1;exitDx=0;exitDy=0;entryX=0.7;entryY=0;entryDx=0;entryDy=0;startArrow=ERmandOne;startFill=0;endArrow=ERmany;endFill=0;labelBackgroundColor=#FFFFFF;fontFamily=Arial;fontSize=10;fontColor=#1E293B;" edge="1" parent="1" source="USERS" target="PASSWORD_RESETS">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="547" y="480"/>
+              <mxPoint x="547" y="500"/>
+              <mxPoint x="35" y="500"/>
+              <mxPoint x="35" y="725"/>
+              <mxPoint x="547" y="725"/>
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="rel_4" value="schedules weekly" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#1E293B;strokeWidth=1.8;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;startArrow=ERmandOne;startFill=0;endArrow=ERmany;endFill=0;labelBackgroundColor=#FFFFFF;fontFamily=Arial;fontSize=10;fontColor=#1E293B;" edge="1" parent="1" source="TEAMS" target="SERVICES">
           <mxGeometry relative="1" as="geometry"/>
         </mxCell>
-        <mxCell id="rel_4" value="schedules weekly" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#1E293B;strokeWidth=1.8;startArrow=ERmandOne;startFill=0;endArrow=ERmany;endFill=0;" edge="1" parent="1" source="TEAMS" target="SERVICES">
+        <mxCell id="rel_5" value="embeds assignments" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#1E293B;strokeWidth=1.8;exitX=0.25;exitY=1;exitDx=0;exitDy=0;entryX=0.25;entryY=0;entryDx=0;entryDy=0;startArrow=ERmandOne;startFill=0;endArrow=ERmany;endFill=0;labelBackgroundColor=#FFFFFF;fontFamily=Arial;fontSize=10;fontColor=#1E293B;" edge="1" parent="1" source="SERVICES" target="SERVICE_ASSIGNMENTS">
           <mxGeometry relative="1" as="geometry"/>
         </mxCell>
-        <mxCell id="rel_5" value="embeds assignments" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#1E293B;strokeWidth=1.8;startArrow=ERmandOne;startFill=0;endArrow=ERmany;endFill=0;" edge="1" parent="1" source="SERVICES" target="SERVICE_ASSIGNMENTS">
-          <mxGeometry relative="1" as="geometry"/>
+        <mxCell id="rel_6" value="embeds rehearsal" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#1E293B;strokeWidth=1.8;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;startArrow=ERmandOne;startFill=0;endArrow=ERmany;endFill=0;labelBackgroundColor=#FFFFFF;fontFamily=Arial;fontSize=10;fontColor=#1E293B;" edge="1" parent="1" source="SERVICES" target="REHEARSALS">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1215" y="800"/>
+              <mxPoint x="1215" y="835"/>
+              <mxPoint x="840" y="835"/>
+              <mxPoint x="840" y="1035"/>
+              <mxPoint x="1215" y="1035"/>
+            </Array>
+          </mxGeometry>
         </mxCell>
-        <mxCell id="rel_6" value="embeds rehearsal" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#1E293B;strokeWidth=1.8;startArrow=ERmandOne;startFill=0;endArrow=ERmany;endFill=0;" edge="1" parent="1" source="SERVICES" target="REHEARSALS">
-          <mxGeometry relative="1" as="geometry"/>
+        <mxCell id="rel_7" value="embeds lineup" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#1E293B;strokeWidth=1.8;exitX=0.75;exitY=1;exitDx=0;exitDy=0;entryX=0.75;entryY=0;entryDx=0;entryDy=0;startArrow=ERmandOne;startFill=0;endArrow=ERmany;endFill=0;labelBackgroundColor=#FFFFFF;fontFamily=Arial;fontSize=10;fontColor=#1E293B;" edge="1" parent="1" source="SERVICES" target="SERVICE_SONGS">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1392" y="800"/>
+              <mxPoint x="1392" y="825"/>
+              <mxPoint x="1585" y="825"/>
+              <mxPoint x="1585" y="1225"/>
+              <mxPoint x="1392" y="1225"/>
+            </Array>
+          </mxGeometry>
         </mxCell>
-        <mxCell id="rel_7" value="embeds song lineup" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#1E293B;strokeWidth=1.8;startArrow=ERmandOne;startFill=0;endArrow=ERmany;endFill=0;" edge="1" parent="1" source="SERVICES" target="SERVICE_SONGS">
-          <mxGeometry relative="1" as="geometry"/>
+        <mxCell id="rel_8" value="maintains library" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#1E293B;strokeWidth=1.8;exitX=0;exitY=0.8;exitDx=0;exitDy=0;entryX=0;entryY=0.2;entryDx=0;entryDy=0;startArrow=ERmandOne;startFill=0;endArrow=ERmany;endFill=0;labelBackgroundColor=#FFFFFF;fontFamily=Arial;fontSize=10;fontColor=#1E293B;" edge="1" parent="1" source="TEAMS" target="SONGS">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="860" y="310"/>
+              <mxPoint x="810" y="310"/>
+              <mxPoint x="810" y="1497"/>
+            </Array>
+          </mxGeometry>
         </mxCell>
-        <mxCell id="rel_8" value="maintains library" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#1E293B;strokeWidth=1.8;startArrow=ERmandOne;startFill=0;endArrow=ERmany;endFill=0;" edge="1" parent="1" source="TEAMS" target="SONGS">
-          <mxGeometry relative="1" as="geometry"/>
+        <mxCell id="rel_9" value="broadcasts alerts" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#1E293B;strokeWidth=1.8;exitX=0;exitY=0.9;exitDx=0;exitDy=0;entryX=0;entryY=0.3;entryDx=0;entryDy=0;startArrow=ERmandOne;startFill=0;endArrow=ERmany;endFill=0;labelBackgroundColor=#FFFFFF;fontFamily=Arial;fontSize=10;fontColor=#1E293B;" edge="1" parent="1" source="TEAMS" target="ANNOUNCEMENTS">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="860" y="335"/>
+              <mxPoint x="795" y="335"/>
+              <mxPoint x="795" y="1846"/>
+            </Array>
+          </mxGeometry>
         </mxCell>
-        <mxCell id="rel_9" value="broadcasts alerts" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#1E293B;strokeWidth=1.8;startArrow=ERmandOne;startFill=0;endArrow=ERmany;endFill=0;" edge="1" parent="1" source="TEAMS" target="ANNOUNCEMENTS">
-          <mxGeometry relative="1" as="geometry"/>
+        <mxCell id="rel_10" value="logs team chat" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#1E293B;strokeWidth=1.8;exitX=0;exitY=0.95;exitDx=0;exitDy=0;entryX=0;entryY=0.4;entryDx=0;entryDy=0;startArrow=ERmandOne;startFill=0;endArrow=ERmany;endFill=0;labelBackgroundColor=#FFFFFF;fontFamily=Arial;fontSize=10;fontColor=#1E293B;" edge="1" parent="1" source="TEAMS" target="MESSAGES">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="860" y="350"/>
+              <mxPoint x="780" y="350"/>
+              <mxPoint x="780" y="2068"/>
+            </Array>
+          </mxGeometry>
         </mxCell>
-        <mxCell id="rel_10" value="logs team chat" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#1E293B;strokeWidth=1.8;startArrow=ERmandOne;startFill=0;endArrow=ERmany;endFill=0;" edge="1" parent="1" source="TEAMS" target="MESSAGES">
-          <mxGeometry relative="1" as="geometry"/>
+        <mxCell id="rel_11" value="requests / accepts swap" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#1E293B;strokeWidth=1.8;exitX=0;exitY=0.7;exitDx=0;exitDy=0;entryX=0;entryY=0.2;entryDx=0;entryDy=0;startArrow=ERmandOne;startFill=0;endArrow=ERmany;endFill=0;labelBackgroundColor=#FFFFFF;fontFamily=Arial;fontSize=10;fontColor=#1E293B;" edge="1" parent="1" source="USERS" target="SUBSTITUTIONS">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="50" y="320"/>
+              <mxPoint x="25" y="320"/>
+              <mxPoint x="25" y="1012"/>
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="rel_12" value="receives join petitions" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#1E293B;strokeWidth=1.8;exitX=0;exitY=0.6;exitDx=0;exitDy=0;entryX=1;entryY=0.3;entryDx=0;entryDy=0;startArrow=ERmandOne;startFill=0;endArrow=ERmany;endFill=0;labelBackgroundColor=#FFFFFF;fontFamily=Arial;fontSize=10;fontColor=#1E293B;" edge="1" parent="1" source="TEAMS" target="REJOIN_REQUESTS">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="860" y="260"/>
+              <mxPoint x="825" y="260"/>
+              <mxPoint x="825" y="1323"/>
+              <mxPoint x="760" y="1323"/>
+            </Array>
+          </mxGeometry>
         </mxCell>
       </root>
     </mxGraphModel>
