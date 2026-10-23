@@ -131,14 +131,7 @@ object TeamRepository {
                 } else {
                     existing.uid.takeIf { it.isNotBlank() && !it.startsWith("user_") } ?: member.uid
                 }
-                val mergedRanges = when {
-                    member.unavailableRanges.isNotEmpty() -> member.unavailableRanges
-                    existing.unavailableRanges.isNotEmpty() -> existing.unavailableRanges
-                    else -> cachedUserRanges[mergedUid]?.toList()
-                        ?: cachedUserRanges[member.uid]?.toList()
-                        ?: (if (emailLower.isNotBlank()) cachedUserRanges["email_$emailLower"]?.toList() else null)
-                        ?: emptyList()
-                }
+                val mergedRanges = member.unavailableRanges.ifEmpty { existing.unavailableRanges }
                 effectiveMember = member.copy(
                     uid = mergedUid,
                     ministryRole = member.ministryRole.ifBlank { existing.ministryRole },
@@ -147,18 +140,7 @@ object TeamRepository {
                 )
                 list[index] = effectiveMember
             } else {
-                val fallbackRanges = if (member.unavailableRanges.isNotEmpty()) {
-                    member.unavailableRanges
-                } else {
-                    cachedUserRanges[member.uid]?.toList()
-                        ?: (if (emailLower.isNotBlank()) cachedUserRanges["email_$emailLower"]?.toList() else null)
-                        ?: emptyList()
-                }
-                effectiveMember = if (fallbackRanges.isNotEmpty() && member.unavailableRanges.isEmpty()) {
-                    member.copy(unavailableRanges = fallbackRanges)
-                } else {
-                    member
-                }
+                effectiveMember = member
                 list.add(effectiveMember)
             }
             sortRoster(list)
@@ -386,24 +368,20 @@ object TeamRepository {
         val deduplicated = deduplicateRoster(members, preferences)
         val sorted = deduplicated.map { m ->
             val emailLower = m.email.trim().lowercase()
-            val effectiveRanges = if (m.unavailableRanges.isNotEmpty()) {
-                m.unavailableRanges
-            } else {
-                cachedUserRanges[m.uid]?.toList()
-                    ?: (if (emailLower.isNotBlank()) cachedUserRanges["email_$emailLower"]?.toList() else null)
-                    ?: emptyList()
-            }
-            val updated = if (effectiveRanges.isNotEmpty() && m.unavailableRanges.isEmpty()) {
-                m.copy(unavailableRanges = effectiveRanges)
-            } else {
-                m
-            }
+            val updated = m
             if (updated.unavailableRanges.isNotEmpty()) {
                 if (updated.uid.isNotBlank()) {
                     cachedUserRanges[updated.uid] = java.util.Collections.synchronizedList(updated.unavailableRanges.toMutableList())
                 }
                 if (emailLower.isNotBlank()) {
                     cachedUserRanges["email_$emailLower"] = java.util.Collections.synchronizedList(updated.unavailableRanges.toMutableList())
+                }
+            } else {
+                if (updated.uid.isNotBlank()) {
+                    cachedUserRanges.remove(updated.uid)
+                }
+                if (emailLower.isNotBlank()) {
+                    cachedUserRanges.remove("email_$emailLower")
                 }
             }
             updated
@@ -491,6 +469,9 @@ object TeamRepository {
                             val rangesJson = serializeRangesJson(m.unavailableRanges)
                             if (m.uid.isNotBlank()) putString("user_unavailable_ranges_${m.uid}", rangesJson)
                             if (emailLower.isNotBlank()) putString("email_unavailable_ranges_$emailLower", rangesJson)
+                        } else {
+                            if (m.uid.isNotBlank()) remove("user_unavailable_ranges_${m.uid}")
+                            if (emailLower.isNotBlank()) remove("email_unavailable_ranges_$emailLower")
                         }
                     }
                 }.apply()
@@ -627,9 +608,8 @@ object TeamRepository {
                     ?: ""
                 val preferredPhoto = existing.photoUri.ifBlank { m.photoUri }.ifBlank { fallbackPhoto }
 
-                // 7. Unavailable ranges union
-                val combinedRanges = (existing.unavailableRanges + m.unavailableRanges)
-                    .distinctBy { it.id.ifBlank { "${it.startDate}_${it.endDate}_${it.reason}" } }
+                // 7. Unavailable ranges: Prefer the fresher / explicit ranges from incoming document
+                val preferredRanges = (existing.unavailableRanges + m.unavailableRanges).distinctBy { it.id.ifBlank { "${it.startDate}_${it.endDate}_${it.reason}" } }
 
                 merged[key] = existing.copy(
                     uid = preferredUid,
@@ -639,7 +619,7 @@ object TeamRepository {
                     role = preferredRole,
                     ministryRole = preferredMinistryRole,
                     photoUri = preferredPhoto,
-                    unavailableRanges = combinedRanges
+                    unavailableRanges = preferredRanges
                 )
             }
         }
@@ -4027,8 +4007,6 @@ object TeamRepository {
             db.collection(TEAMS_COLLECTION)
                 .document(code)
                 .collection(MESSAGES_SUBCOLLECTION)
-                .orderBy("timestamp", Query.Direction.ASCENDING)
-                .limit(200)
                 .addSnapshotListener { snapshot, err ->
                     if (err != null) {
                         android.util.Log.e("TeamRepository", "listenTeamMessages error: ${err.message}")
@@ -4039,6 +4017,7 @@ object TeamRepository {
                         val remoteMessages = snapshot.documents.mapNotNull { doc ->
                             doc.data?.let { ChatMessage.fromMap(it) }
                         }.filter { it.id !in deletedIds }
+                         .sortedBy { it.timestamp }
 
                         // Firestore remote snapshot is authoritative across all devices
                         saveAllChatMessagesLocally(code, remoteMessages, preferences)
@@ -4063,14 +4042,13 @@ object TeamRepository {
         }
         try {
             db.collection(TEAMS_COLLECTION).document(code).collection(MESSAGES_SUBCOLLECTION)
-                .orderBy("timestamp", Query.Direction.ASCENDING)
-                .limit(200)
                 .get()
                 .addOnSuccessListener { snapshot ->
                     val deletedIds = preferences?.getStringSet("deleted_chat_ids_$code", emptySet()) ?: emptySet()
                     val msgs = snapshot.documents.mapNotNull { doc ->
                         doc.data?.let { ChatMessage.fromMap(it) }
                     }.filter { it.id !in deletedIds }
+                     .sortedBy { it.timestamp }
                     saveAllChatMessagesLocally(code, msgs, preferences)
                     onComplete(Result.success(msgs))
                 }

@@ -115,9 +115,9 @@ rules_version = '2';
 //   - senderUid: string (required, 1-128 chars, immutable) - Sender's user ID
 //   - senderName: string (required, 1-100 chars) - Display name of sender
 //   - senderRole: string (optional, 0-50 chars) - Role of sender
-//   - senderPhotoUri: string (optional, 0-500 chars) - Avatar URL
+//   - senderPhotoUri: string (optional, 0-500 chars) - Avatar URI or URL
 //   - text: string (optional, 0-2000 chars) - Message text content
-//   - mediaUrl: string (optional, 0-500 chars) - Attached image URL
+//   - mediaUrl: string (optional, 0-500 chars) - Attached image or media URI / URL
 //   - timestamp: number | timestamp (required, immutable) - Sending timestamp
 //   - isEdited: bool (optional) - Whether the message has been edited
 //   - editedAt: number | timestamp (optional, >= 0) - Timestamp when edited
@@ -483,9 +483,9 @@ service cloud.firestore {
       data.senderUid is string && data.senderUid.size() > 0 && data.senderUid.size() <= 128 &&
       data.senderName is string && data.senderName.size() > 0 && data.senderName.size() <= 100 &&
       (!('senderRole' in data) || (data.senderRole is string && data.senderRole.size() <= 50)) &&
-      (!('senderPhotoUri' in data) || (data.senderPhotoUri is string && data.senderPhotoUri.size() <= 500 && (data.senderPhotoUri == '' || isValidUrl(data.senderPhotoUri)))) &&
+      (!('senderPhotoUri' in data) || (data.senderPhotoUri is string && data.senderPhotoUri.size() <= 500)) &&
       (!('text' in data) || (data.text is string && data.text.size() <= 2000)) &&
-      (!('mediaUrl' in data) || (data.mediaUrl is string && data.mediaUrl.size() <= 500 && (data.mediaUrl == '' || isValidUrl(data.mediaUrl)))) &&
+      (!('mediaUrl' in data) || (data.mediaUrl is string && data.mediaUrl.size() <= 500)) &&
       (('text' in data && data.text.size() > 0) || ('mediaUrl' in data && data.mediaUrl.size() > 0)) &&
       ((data.timestamp is number && data.timestamp >= 0) || (data.timestamp is timestamp)) &&
       (!('isEdited' in data) || data.isEdited is bool) &&

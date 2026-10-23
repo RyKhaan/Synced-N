@@ -33,6 +33,20 @@ data class ChatMessage(
 
     companion object {
         fun fromMap(map: Map<String, Any?>): ChatMessage {
+            val rawTs = map["timestamp"]
+            val parsedTs = when (rawTs) {
+                is Number -> rawTs.toLong()
+                is com.google.firebase.Timestamp -> rawTs.toDate().time
+                is String -> rawTs.toLongOrNull() ?: System.currentTimeMillis()
+                else -> System.currentTimeMillis()
+            }
+            val rawEditedAt = map["editedAt"]
+            val parsedEditedAt = when (rawEditedAt) {
+                is Number -> rawEditedAt.toLong()
+                is com.google.firebase.Timestamp -> rawEditedAt.toDate().time
+                is String -> rawEditedAt.toLongOrNull() ?: 0L
+                else -> 0L
+            }
             return ChatMessage(
                 id = map["id"] as? String ?: "",
                 teamCode = map["teamCode"] as? String ?: "",
@@ -42,9 +56,9 @@ data class ChatMessage(
                 senderPhotoUri = map["senderPhotoUri"] as? String ?: "",
                 text = map["text"] as? String ?: "",
                 mediaUrl = map["mediaUrl"] as? String ?: "",
-                timestamp = (map["timestamp"] as? Number)?.toLong() ?: System.currentTimeMillis(),
+                timestamp = parsedTs,
                 isEdited = (map["isEdited"] as? Boolean) ?: false,
-                editedAt = (map["editedAt"] as? Number)?.toLong() ?: 0L
+                editedAt = parsedEditedAt
             )
         }
     }
