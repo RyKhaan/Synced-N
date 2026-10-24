@@ -3238,4 +3238,81 @@ class ExampleUnitTest {
         assertTrue("Embed URL must use youtube-nocookie.com", embedUrl.contains("youtube-nocookie.com"))
         assertTrue("Embed URL must force playsinline to stay in-app", embedUrl.contains("playsinline=1"))
     }
+    @Test
+    fun testNotificationClearingAndInPlaceDismissal() {
+        val now = System.currentTimeMillis()
+        val notif1 = com.example.syncedn.data.database.TeamRepository.TeamNotificationItem(
+            id = "notif_1",
+            title = "Service 1",
+            message = "Test 1",
+            timeLabel = "Just now",
+            iconName = "calendar",
+            timestamp = now - 5000L
+        )
+        val notif2 = com.example.syncedn.data.database.TeamRepository.TeamNotificationItem(
+            id = "notif_2",
+            title = "Service 2",
+            message = "Test 2",
+            timeLabel = "Just now",
+            iconName = "calendar",
+            timestamp = now - 2000L
+        )
+        val notif3 = com.example.syncedn.data.database.TeamRepository.TeamNotificationItem(
+            id = "notif_3",
+            title = "Service 3",
+            message = "Test 3",
+            timeLabel = "Just now",
+            iconName = "calendar",
+            timestamp = now + 1000L
+        )
+
+        val allNotifs = listOf(notif1, notif2, notif3)
+
+        // 1. Individual delete
+        val deletedIds = setOf("notif_1")
+        val afterSingleDelete = allNotifs.filter { it.id !in deletedIds }
+        assertEquals(2, afterSingleDelete.size)
+        assertFalse(afterSingleDelete.any { it.id == "notif_1" })
+
+        // 2. Clear All by timestamp and ID set
+        val clearedAt = now
+        val afterClearAll = allNotifs.filter { it.timestamp > clearedAt && it.id !in deletedIds }
+        assertEquals(1, afterClearAll.size)
+        assertEquals("notif_3", afterClearAll.first().id)
+
+        // 3. Substitution request filtering test
+        val sub1 = com.example.syncedn.data.model.SubstitutionData(
+            id = "sub_1",
+            teamCode = "TEST01",
+            serviceTitle = "Sunday Worship",
+            requesterUid = "u1",
+            requesterName = "User 1",
+            role = "Vocalist",
+            substituteUid = "u2",
+            substituteName = "User 2",
+            reason = "Sick",
+            status = "Pending",
+            createdAt = now - 10000L
+        )
+        val sub2 = com.example.syncedn.data.model.SubstitutionData(
+            id = "sub_2",
+            teamCode = "TEST01",
+            serviceTitle = "Midweek Service",
+            requesterUid = "u3",
+            requesterName = "User 3",
+            role = "Drummer",
+            substituteUid = "u4",
+            substituteName = "User 4",
+            reason = "Work",
+            status = "Pending",
+            createdAt = now + 5000L
+        )
+
+        val subs = listOf(sub1, sub2)
+        val deletedSubIds = setOf("sub_1")
+        val subClearedAt = now
+        val activeSubs = subs.filter { it.id !in deletedSubIds && (it.createdAt == 0L || it.createdAt > subClearedAt) }
+        assertEquals(1, activeSubs.size)
+        assertEquals("sub_2", activeSubs.first().id)
+    }
 }

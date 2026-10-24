@@ -4384,6 +4384,7 @@ space(48)
     private fun substitutionFeed(col: LinearLayout) {
         val subCol = vertical()
         col.addView(subCol)
+        subFeedCol = subCol
 
         val activeCode = preferences.getString(SessionManager.KEY_TEAM_CODE, "").orEmpty().ifBlank { preferences.getString("teamCode", "").orEmpty() }
         val currentUid = preferences.getString(SessionManager.KEY_USER_ID, "").orEmpty().ifBlank { preferences.getString("userId", "").orEmpty() }.ifBlank { AuthManager.currentUser?.uid.orEmpty() }
@@ -4440,7 +4441,8 @@ space(48)
             }
 
             for (sub in visibleList) {
-                subCol.add(panel().apply {
+                val cardWrapper = vertical()
+                val cardPanel = panel().apply {
                     val headerRow = horizontal().apply { gravity = Gravity.CENTER_VERTICAL }
                     headerRow.add(text(sub.serviceTitle.ifBlank { "Sunday Worship Service" }, 15, Color.rgb(80, 5, 104), bold = true), 0, -2, 1f)
 
@@ -4492,6 +4494,22 @@ space(48)
                         headerRow.add(View(this@MemberActivity), 6, 1)
                         headerRow.add(typeBadge, -2, -2)
                     }
+                    val delBtn = text("✕", 14, Color.GRAY, bold = true, centered = true).apply {
+                        setPadding(dp(8), dp(2), dp(2), dp(2))
+                        isClickable = true; isFocusable = true
+                        contentDescription = "Dismiss substitution request"
+                        setOnClickListener {
+                            TeamRepository.deleteSubstitution(activeCode, sub.id, preferences)
+                            subCol.removeView(cardWrapper)
+                            if (subCol.childCount == 0) {
+                                subCol.add(panel().apply {
+                                    add(text("No substitution requests.", 13, Color.GRAY, centered = true))
+                                }); subCol.space(24)
+                            }
+                            toast("Request removed")
+                        }
+                    }
+                    headerRow.add(delBtn, -2, -2)
                     add(headerRow); space(6)
                     val matchedSvc = storedServices().find { it.optString("id") == sub.serviceId }
                     val dStr = sub.serviceDate.ifBlank { matchedSvc?.optString("date").orEmpty() }
@@ -4651,7 +4669,10 @@ space(48)
                         space(12)
                         add(text("✓ ${sub.substituteName} accepted! Waiting for Leader's final approval.", 11, Color.rgb(14, 116, 144)))
                     }
-                }); subCol.space(16)
+                }
+                cardWrapper.add(cardPanel)
+                cardWrapper.space(16)
+                subCol.add(cardWrapper)
             }
             subCol.space(8)
         }
@@ -4673,13 +4694,44 @@ space(48)
         leaderPosts(col)
     }
 
+    private var subFeedCol: LinearLayout? = null
+    private var recentNotifCol: LinearLayout? = null
     private fun notificationsView(): View = memberPage("Notification", "home") { col ->
         val activeCode = preferences.getString(SessionManager.KEY_TEAM_CODE, "").orEmpty()
             .ifBlank { preferences.getString("teamCode", "").orEmpty() }
             .ifBlank { FirestoreManager.findCodeByTeamName(teamName).orEmpty() }
-        col.add(text("Substitution Request", 15, purple, bold = true)); col.space(12)
+        val subHeader = horizontal().apply { gravity = Gravity.CENTER_VERTICAL }
+        subHeader.add(text("Substitution Request", 15, purple, bold = true), 0, -2, 1f)
+        val clearSubBtn = TextView(this@MemberActivity).apply {
+            text = "Clear All"
+            textSize = 12f
+            setTextColor(Color.rgb(180, 50, 50))
+            setTypeface(typeface, Typeface.BOLD)
+            setPadding(dp(8), dp(4), dp(8), dp(4))
+            isClickable = true
+            isFocusable = true
+            setOnClickListener {
+                AlertDialog.Builder(this@MemberActivity)
+                    .setTitle("Clear Substitution Requests")
+                    .setMessage("Are you sure you want to clear all substitution request notifications?")
+                    .setPositiveButton("Clear All") { _, _ ->
+                        TeamRepository.clearAllSubstitutions(activeCode, preferences, isLeader = false)
+                        subFeedCol?.removeAllViews()
+                        subFeedCol?.add(panel().apply {
+                            add(text("No substitution requests.", 13, Color.GRAY, centered = true))
+                        })
+                        subFeedCol?.space(24)
+                        toast("Substitution requests cleared")
+                    }
+                    .setNegativeButton("Cancel", null)
+                    .show()
+            }
+        }
+        subHeader.add(clearSubBtn, -2, -2)
+        col.add(subHeader); col.space(12)
         substitutionFeed(col)
         col.space(16)
+
         val notifHeader = horizontal().apply { gravity = Gravity.CENTER_VERTICAL }
         notifHeader.add(text("Recent Notifications", 15, purple, bold = true), 0, -2, 1f)
         val clearBtn = TextView(this@MemberActivity).apply {
@@ -4696,7 +4748,12 @@ space(48)
                     .setMessage("Are you sure you want to clear all recent notifications?")
                     .setPositiveButton("Clear All") { _, _ ->
                         TeamRepository.clearAllNotifications(activeCode, preferences)
-                        navigate("notifications")
+                        recentNotifCol?.removeAllViews()
+                        recentNotifCol?.add(panel().apply {
+                            add(text("No recent notifications yet.", 12, Color.GRAY, centered = true))
+                        })
+                        recentNotifCol?.space(12)
+                        toast("Notifications cleared")
                     }
                     .setNegativeButton("Cancel", null)
                     .show()
@@ -4711,17 +4768,21 @@ space(48)
         val activeCode = preferences.getString(SessionManager.KEY_TEAM_CODE, "").orEmpty()
             .ifBlank { preferences.getString("teamCode", "").orEmpty() }
             .ifBlank { FirestoreManager.findCodeByTeamName(teamName).orEmpty() }
-            .ifBlank { FirestoreManager.findCodeByTeamName(teamName).orEmpty() }
         val dynamicItems = TeamRepository.getRecentTeamNotifications(activeCode, preferences)
+        val notifCol = vertical()
+        col.addView(notifCol)
+        recentNotifCol = notifCol
+
         if (dynamicItems.isEmpty()) {
-            col.add(panel().apply {
+            notifCol.add(panel().apply {
                 add(text("No recent notifications yet.", 12, Color.GRAY, centered = true))
             })
-            col.space(12)
+            notifCol.space(12)
             return
         }
         for (notif in dynamicItems) {
-            col.add(panel().apply {
+            val cardWrapper = vertical()
+            val cardPanel = panel().apply {
                 val row = horizontal().apply { gravity = Gravity.CENTER_VERTICAL }
                 val iconBox = FrameLayout(this@MemberActivity).apply {
                     addView(Symbol(this@MemberActivity, notif.iconName, purple), dp(26), dp(26))
@@ -4745,12 +4806,21 @@ space(48)
                     contentDescription = "Delete notification"
                     setOnClickListener {
                         TeamRepository.deleteNotification(notif.id, preferences)
-                        navigate("notifications")
+                        notifCol.removeView(cardWrapper)
+                        if (notifCol.childCount == 0) {
+                            notifCol.add(panel().apply {
+                                add(text("No recent notifications yet.", 12, Color.GRAY, centered = true))
+                            })
+                            notifCol.space(12)
+                        }
                     }
                 }
                 row.add(delBtn, -2, -2)
                 add(row)
-            }); col.space(12)
+            }
+            cardWrapper.add(cardPanel)
+            cardWrapper.space(12)
+            notifCol.add(cardWrapper)
         }
     }
     private val youtubeThumbnailCache = java.util.concurrent.ConcurrentHashMap<String, Bitmap>()

@@ -3243,8 +3243,12 @@ object TeamRepository {
         val code = teamCode.trim().uppercase()
         if (code.isBlank()) return emptyList()
 
+        val deletedIds = preferences?.getStringSet("deleted_substitutions_$code", emptySet()).orEmpty()
+        val clearedAt = preferences?.getLong("substitutions_cleared_at_$code", 0L) ?: 0L
+
         cachedSubstitutions[code]?.let { inMem ->
-            if (inMem.isNotEmpty()) return inMem.toList().sortedByDescending { it.createdAt }
+            val filtered = inMem.filter { it.id !in deletedIds && (it.createdAt == 0L || it.createdAt > clearedAt) }
+            if (filtered.isNotEmpty()) return filtered.sortedByDescending { it.createdAt }
         }
 
         preferences?.let { prefs ->
@@ -3261,7 +3265,10 @@ object TeamRepository {
                             val key = keys.next()
                             map[key] = obj.opt(key)
                         }
-                        list.add(SubstitutionData.fromMap(map))
+                        val item = SubstitutionData.fromMap(map)
+                        if (item.id !in deletedIds && (item.createdAt == 0L || item.createdAt > clearedAt)) {
+                            list.add(item)
+                        }
                     }
                     val sorted = list.sortedByDescending { it.createdAt }
                     cachedSubstitutions[code] = java.util.Collections.synchronizedList(sorted.toMutableList())
@@ -3324,11 +3331,18 @@ object TeamRepository {
                         }
                     }.sortedByDescending { it.createdAt }
 
+                    val deletedIds = preferences?.getStringSet("deleted_substitutions_$code", emptySet()).orEmpty()
+                    val clearedAt = preferences?.getLong("substitutions_cleared_at_$code", 0L) ?: 0L
+
                     // Merge remote substitutions with cached items so local requests are never wiped by empty snapshot
                     val merged = mutableListOf<SubstitutionData>()
-                    merged.addAll(list)
+                    list.forEach { item ->
+                        if (item.id !in deletedIds && (item.createdAt == 0L || item.createdAt > clearedAt)) {
+                            merged.add(item)
+                        }
+                    }
                     cached.forEach { c ->
-                        if (merged.none { it.id == c.id }) {
+                        if (c.id !in deletedIds && (c.createdAt == 0L || c.createdAt > clearedAt) && merged.none { it.id == c.id }) {
                             merged.add(c)
                         }
                     }
@@ -3442,6 +3456,12 @@ object TeamRepository {
             return
         }
 
+        preferences?.let { prefs ->
+            val set = prefs.getStringSet("deleted_substitutions_$code", emptySet())?.toMutableSet() ?: mutableSetOf()
+            set.add(substitutionId)
+            prefs.edit().putStringSet("deleted_substitutions_$code", set).commit()
+        }
+
         removeSubstitutionLocally(code, substitutionId, preferences)
 
         try {
@@ -3460,6 +3480,58 @@ object TeamRepository {
                 }
         } catch (e: Throwable) {
             android.util.Log.e("TeamRepository", "Firestore deleteSubstitution exception: ${e.message}", e)
+            onComplete?.invoke(Result.success(true))
+        }
+    }
+
+    /**
+     * Clears all substitution request notifications for the specified team.
+     * Persists deleted IDs and cleared timestamp, clears local in-memory cache,
+     * and deletes substitution documents from Firestore if caller is team leader.
+     */
+    fun clearAllSubstitutions(
+        teamCode: String,
+        preferences: android.content.SharedPreferences? = null,
+        isLeader: Boolean = false,
+        onComplete: ((Result<Boolean>) -> Unit)? = null
+    ) {
+        val code = teamCode.trim().uppercase()
+        if (code.isBlank()) {
+            onComplete?.invoke(Result.success(true))
+            return
+        }
+
+        val allSubs = getCachedSubstitutions(code, preferences)
+        val allIds = allSubs.map { it.id }.toSet()
+        val now = System.currentTimeMillis()
+
+        preferences?.let { prefs ->
+            val set = prefs.getStringSet("deleted_substitutions_$code", emptySet())?.toMutableSet() ?: mutableSetOf()
+            set.addAll(allIds)
+            prefs.edit()
+                .putStringSet("deleted_substitutions_$code", set)
+                .putLong("substitutions_cleared_at_$code", now)
+                .putString("cached_substitutions_$code", "[]")
+                .commit()
+        }
+
+        cachedSubstitutions[code]?.clear()
+
+        if (isLeader && allIds.isNotEmpty()) {
+            try {
+                for (subId in allIds) {
+                    db.collection(TEAMS_COLLECTION)
+                        .document(code)
+                        .collection(SUBSTITUTIONS_SUBCOLLECTION)
+                        .document(subId)
+                        .delete()
+                }
+                onComplete?.invoke(Result.success(true))
+            } catch (e: Throwable) {
+                android.util.Log.e("TeamRepository", "Error deleting substitutions from Firestore: ${e.message}", e)
+                onComplete?.invoke(Result.success(true))
+            }
+        } else {
             onComplete?.invoke(Result.success(true))
         }
     }
@@ -4244,8 +4316,9 @@ object TeamRepository {
             )
         }
 
+        val clearedAt = preferences?.getLong("notifications_cleared_at", 0L) ?: 0L
         val deletedIds = preferences?.getStringSet("deleted_notifications", emptySet()).orEmpty()
-        return items.filter { it.id !in deletedIds }.sortedByDescending { it.timestamp }.take(25)
+        return items.filter { it.timestamp > clearedAt && it.id !in deletedIds }.sortedByDescending { it.timestamp }.take(50)
     }
 
     /**
@@ -4255,7 +4328,7 @@ object TeamRepository {
         if (notificationId.isBlank() || preferences == null) return
         val set = preferences.getStringSet("deleted_notifications", emptySet())?.toMutableSet() ?: mutableSetOf()
         set.add(notificationId)
-        preferences.edit().putStringSet("deleted_notifications", set).apply()
+        preferences.edit().putStringSet("deleted_notifications", set).commit()
     }
 
     /**
@@ -4263,10 +4336,14 @@ object TeamRepository {
      */
     fun clearAllNotifications(teamCode: String, preferences: android.content.SharedPreferences? = null) {
         if (preferences == null) return
-        val allItems = getRecentTeamNotifications(teamCode, null)
+        val allItems = getRecentTeamNotifications(teamCode, preferences)
         val set = preferences.getStringSet("deleted_notifications", emptySet())?.toMutableSet() ?: mutableSetOf()
         set.addAll(allItems.map { it.id })
-        preferences.edit().putStringSet("deleted_notifications", set).apply()
+        val now = System.currentTimeMillis()
+        preferences.edit()
+            .putStringSet("deleted_notifications", set)
+            .putLong("notifications_cleared_at", now)
+            .commit()
     }
 
     /**
