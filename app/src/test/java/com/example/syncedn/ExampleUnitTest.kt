@@ -3381,4 +3381,120 @@ class ExampleUnitTest {
         assertTrue(cPalette.contains("G"))
         assertTrue(cPalette.contains("Am"))
     }
+
+    @Test
+    fun testStrongPasswordValidationPolicy() {
+        val vu = com.example.syncedn.data.util.ValidationUtils
+
+        // 1. Weak passwords must be rejected
+        assertFalse("Too short (< 8 chars)", vu.isValidStrongPassword("Ab1!xy"))
+        assertFalse("Missing uppercase", vu.isValidStrongPassword("synced@2026"))
+        assertFalse("Missing lowercase", vu.isValidStrongPassword("SYNCED@2026"))
+        assertFalse("Missing number", vu.isValidStrongPassword("SyncedMinistry!"))
+        assertFalse("Missing special char", vu.isValidStrongPassword("Synced2026"))
+
+        val missingSpecialEval = vu.evaluatePassword("Synced2026")
+        assertTrue(missingSpecialEval.hasMinLength)
+        assertTrue(missingSpecialEval.hasUpper)
+        assertTrue(missingSpecialEval.hasLower)
+        assertTrue(missingSpecialEval.hasDigit)
+        assertFalse(missingSpecialEval.hasSpecial)
+        assertFalse(missingSpecialEval.isStrong)
+        assertNotNull(missingSpecialEval.errorMessage())
+
+        // 2. Strong Play Store-compliant passwords must pass
+        val strongEval = vu.evaluatePassword("Synced@2026!")
+        assertTrue(strongEval.hasMinLength)
+        assertTrue(strongEval.hasUpper)
+        assertTrue(strongEval.hasLower)
+        assertTrue(strongEval.hasDigit)
+        assertTrue(strongEval.hasSpecial)
+        assertTrue(strongEval.isStrong)
+        assertEquals(5, strongEval.score)
+        assertEquals("Strong", strongEval.label)
+        assertNull(strongEval.errorMessage())
+    }
+
+    @Test
+    fun testEmailSecurityAndDisposableDomainBlocking() {
+        val vu = com.example.syncedn.data.util.ValidationUtils
+
+        // 1. Legitimate emails pass
+        assertNull(vu.validateEmailForAuth("ryanlloydgenturo@gmail.com"))
+        assertNull(vu.validateEmailForAuth("member.worship@yahoo.com"))
+        assertNull(vu.validateEmailForAuth("leader@outlook.com"))
+
+        // 2. Disposable / temporary / fake domains are blocked
+        assertTrue(vu.isDisposableOrFakeEmail("hacker@tempmail.com"))
+        assertTrue(vu.isDisposableOrFakeEmail("test@mailinator.com"))
+        assertTrue(vu.isDisposableOrFakeEmail("anon@10minutemail.com"))
+        assertTrue(vu.isDisposableOrFakeEmail("burner@yopmail.com"))
+        assertTrue(vu.isDisposableOrFakeEmail("nobody@fake.com"))
+        assertNotNull(vu.validateEmailForAuth("hacker@tempmail.com"))
+
+        // 3. Malformed emails are blocked
+        assertNotNull(vu.validateEmailForAuth(""))
+        assertNotNull(vu.validateEmailForAuth("plainaddress"))
+        assertNotNull(vu.validateEmailForAuth("double..dot@gmail.com"))
+        assertNotNull(vu.validateEmailForAuth("user@.invalid"))
+    }
+
+    @Test
+    fun testLoginRateLimiterBruteForceLockout() {
+        val vu = com.example.syncedn.data.util.ValidationUtils
+        val email = "ratelimit@gmail.com"
+        vu.resetLoginAttempts(email)
+
+        val baseTime = 1_000_000L
+        // First 4 failed attempts do not lock the account
+        for (i in 1..4) {
+            val remaining = vu.recordLoginFailure(email, baseTime + i * 1000L)
+            assertEquals(5 - i, remaining)
+            assertFalse(vu.isLoginLocked(email, baseTime + i * 1000L))
+        }
+
+        // 5th failed attempt triggers 60-second lockout
+        val remAfterFifth = vu.recordLoginFailure(email, baseTime + 5000L)
+        assertEquals(0, remAfterFifth)
+        assertTrue(vu.isLoginLocked(email, baseTime + 10_000L))
+        assertTrue(vu.getLoginLockRemainingSeconds(email, baseTime + 10_000L) in 50..60)
+
+        // After 61 seconds, lockout expires automatically
+        assertFalse(vu.isLoginLocked(email, baseTime + 66_000L))
+
+        // Reset clears lockout immediately
+        vu.recordLoginFailure(email, baseTime + 70_000L)
+        vu.resetLoginAttempts(email)
+        assertFalse(vu.isLoginLocked(email, baseTime + 70_000L))
+    }
+
+    @Test
+    fun testEmailOtpRegistrationFlowAndBruteForceInvalidation() {
+        val otpService = com.example.syncedn.data.auth.EmailOtpService
+        val regRecord = com.example.syncedn.data.auth.EmailOtpService.OtpRecord(
+            email = "newmember@gmail.com",
+            code = "654321",
+            expiresAt = System.currentTimeMillis() + 60_000L,
+            pendingPassword = "SyncedUser#2026",
+            pendingUsername = "NewMember",
+            purpose = "register"
+        )
+        otpService.setRecordForTesting(regRecord)
+
+        // 4 wrong attempts keep record active
+        for (i in 1..4) {
+            val wrongRes = otpService.verifyOtp("00000$i")
+            assertTrue(wrongRes.isFailure)
+            assertNotNull("Record should still be active after $i wrong attempts", otpService.activeRecord)
+        }
+
+        // 5th wrong attempt invalidates the OTP completely to prevent brute-forcing
+        val fifthWrong = otpService.verifyOtp("999999")
+        assertTrue(fifthWrong.isFailure)
+        assertNull("Record must be cleared after 5 failed attempts", otpService.activeRecord)
+
+        // Even the real code now fails until a new OTP is requested
+        val afterLockout = otpService.verifyOtp("654321")
+        assertTrue(afterLockout.isFailure)
+    }
 }

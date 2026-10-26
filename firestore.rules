@@ -151,7 +151,7 @@ rules_version = '2';
 // Document ID: {email} (User's normalized email address)
 // Fields:
 //   - email: string (required, valid email format, 1-100 chars, matches doc ID) - Recipient email
-//   - password: string (required, 6-128 chars) - Updated password after Brevo OTP verification
+//   - password: string (required, 8-128 chars) - Updated password after Brevo OTP verification
 //   - updatedAt: number | timestamp (optional, >= 0) - Timestamp when password was reset
 //
 // ===============================================================
@@ -374,7 +374,7 @@ service cloud.firestore {
       isValidEmail(data.email) &&
       data.email.size() <= 100 &&
       data.password is string &&
-      data.password.size() >= 6 &&
+      data.password.size() >= 8 &&
       data.password.size() <= 128 &&
       (!('updatedAt' in data) || (data.updatedAt is number && data.updatedAt >= 0) || (data.updatedAt is timestamp));
     }
@@ -544,8 +544,9 @@ service cloud.firestore {
     match /users/{userId} {
       allow read: if true;
       allow create: if isValidUser(request.resource.data, userId);
-      allow update: if isValidUser(request.resource.data, userId);
-      allow delete: if isAuthenticated();
+      allow update: if isValidUser(request.resource.data, userId) &&
+                       areImmutableFieldsUnchanged(['uid', 'createdAt']);
+      allow delete: if isOwner(userId);
     }
 
     // ---------------------------------------------------------------
@@ -554,7 +555,8 @@ service cloud.firestore {
     match /teams/{teamCode} {
       allow read: if true;
       allow create: if isValidTeam(request.resource.data, teamCode);
-      allow update: if isValidTeam(request.resource.data, teamCode);
+      allow update: if isValidTeam(request.resource.data, teamCode) &&
+                       areImmutableFieldsUnchanged(['teamCode', 'createdAt']);
       allow delete: if isAuthenticated() && resource.data.leaderUid == request.auth.uid;
 
       // ---------------------------------------------------------------
@@ -600,7 +602,8 @@ service cloud.firestore {
       match /announcements/{announcementId} {
         allow read: if true;
         allow create: if isValidAnnouncement(request.resource.data, announcementId, teamCode);
-        allow update: if isValidAnnouncement(request.resource.data, announcementId, teamCode);
+        allow update: if isValidAnnouncement(request.resource.data, announcementId, teamCode) &&
+                         areImmutableFieldsUnchanged(['id', 'teamCode', 'createdBy', 'createdAt']);
         allow delete: if true;
       }
 

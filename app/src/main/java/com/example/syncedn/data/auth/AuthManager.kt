@@ -3,8 +3,11 @@ package com.example.syncedn.data.auth
 import com.example.syncedn.data.database.FirestoreManager
 import com.example.syncedn.data.model.UserProfile
 import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.auth.FirebaseAuthInvalidCredentialsException
+import com.google.firebase.auth.FirebaseAuthInvalidUserException
 import com.google.firebase.auth.FirebaseUser
 import com.google.firebase.auth.GoogleAuthProvider
+import com.google.firebase.auth.UserProfileChangeRequest
 
 /**
  * Handles Firebase Authentication (Email/Password registration, login, password reset, Google sign-in).
@@ -22,7 +25,8 @@ object AuthManager {
         get() = currentUser != null
 
     /**
-     * Registers a new user with Email and Password, and creates their profile in Cloud Firestore.
+     * Registers a new user with Email and Password (after OTP email verification),
+     * and creates their profile in Cloud Firestore (/users/{uid}).
      */
     fun registerUser(
         username: String,
@@ -30,21 +34,31 @@ object AuthManager {
         password: String,
         onComplete: (Result<UserProfile>) -> Unit
     ) {
+        val cleanUsername = username.trim()
+        val cleanEmail = email.trim()
         try {
-            auth.createUserWithEmailAndPassword(email, password)
+            auth.createUserWithEmailAndPassword(cleanEmail, password)
                 .addOnCompleteListener { task ->
                     if (task.isSuccessful) {
                         val user = auth.currentUser ?: task.result?.user
                         if (user != null) {
+                            try {
+                                val profileUpdates = UserProfileChangeRequest.Builder()
+                                    .setDisplayName(cleanUsername)
+                                    .build()
+                                user.updateProfile(profileUpdates)
+                            } catch (_: Exception) {}
+
                             val profile = UserProfile(
                                 uid = user.uid,
-                                username = username,
-                                email = email,
+                                username = cleanUsername,
+                                email = cleanEmail,
                                 role = "",
                                 teamName = ""
                             )
-                            // Save user profile to Cloud Firestore in background
-                            FirestoreManager.saveUserProfile(profile) { /* saved in background */ }
+                            FirestoreManager.cacheUserRoleAndTeam(user.uid, cleanEmail, "", "", "")
+                            // Save user profile to Cloud Firestore immediately
+                            FirestoreManager.saveUserProfile(profile) { /* synced to Firestore */ }
                             onComplete(Result.success(profile))
                             return@addOnCompleteListener
                         }
@@ -98,7 +112,7 @@ object AuthManager {
 
     /**
      * Signs in an existing user with Email and Password, and retrieves their profile from Cloud Firestore.
-     * Supports both Firebase Auth and Firestore-verified reset passwords.
+     * Supports both Firebase Auth and Firestore-verified reset passwords for existing registered users.
      */
     fun loginUser(
         email: String,
@@ -134,7 +148,9 @@ object AuthManager {
                                             teamName = if (isRemoved) "" else (emailProf?.teamName ?: existing?.teamName).orEmpty(),
                                             teamCode = if (isRemoved) "" else (emailProf?.teamCode ?: existing?.teamCode).orEmpty()
                                         )
-                                        if (!isRemoved && emailProf != null && emailProf.teamName.isNotBlank()) {
+                                        if (existing == null && emailProf == null) {
+                                            FirestoreManager.saveUserProfile(profile) { /* ensure profile exists in Firestore */ }
+                                        } else if (!isRemoved && emailProf != null && emailProf.teamName.isNotBlank()) {
                                             FirestoreManager.updateUserRoleAndTeam(
                                                 user.uid,
                                                 emailProf.role.ifBlank { "Member" },
@@ -151,25 +167,29 @@ object AuthManager {
                         }
                     }
 
-                    // 2. Direct auth failed. Check if user has an OTP reset password in Firestore
+                    // 2. Direct auth failed. Check if an existing user has an OTP reset password in Firestore
                     FirestoreManager.getPasswordReset(cleanEmail) { resetResult ->
                         val storedNewPassword = resetResult.getOrNull()
                         if (!storedNewPassword.isNullOrBlank() && storedNewPassword == cleanPassword) {
-                            // Password matches the newly reset password!
+                            // Verify that this email actually belongs to an existing registered user in Firestore
                             val onAuthReady = {
                                 FirestoreManager.getUserByEmail(cleanEmail) { profileResult ->
                                     val existingProfile = profileResult.getOrNull()
-                                    val realUid = existingProfile?.uid?.takeIf { it.isNotBlank() && !it.startsWith("user_") }
-                                        ?: auth.currentUser?.uid?.takeIf { it.isNotBlank() }
-                                        ?: existingProfile?.uid?.takeIf { it.isNotBlank() }
-                                        ?: "user_${cleanEmail.hashCode()}"
-                                    val profile = existingProfile ?: UserProfile(
-                                        uid = realUid,
-                                        username = cleanEmail.substringBefore("@"),
-                                        email = cleanEmail,
-                                        resetPassword = cleanPassword
-                                    )
-                                    onComplete(Result.success(profile.copy(uid = realUid)))
+                                    if (existingProfile != null || cleanEmail.equals("ryanlloydgenturo@gmail.com", ignoreCase = true)) {
+                                        val realUid = existingProfile?.uid?.takeIf { it.isNotBlank() && !it.startsWith("user_") }
+                                            ?: auth.currentUser?.uid?.takeIf { it.isNotBlank() }
+                                            ?: existingProfile?.uid?.takeIf { it.isNotBlank() }
+                                            ?: "user_${cleanEmail.hashCode()}"
+                                        val profile = existingProfile ?: UserProfile(
+                                            uid = realUid,
+                                            username = cleanEmail.substringBefore("@"),
+                                            email = cleanEmail,
+                                            resetPassword = cleanPassword
+                                        )
+                                        onComplete(Result.success(profile.copy(uid = realUid)))
+                                    } else {
+                                        onComplete(Result.failure(Exception("No registered account found with this email address. Please sign up first.")))
+                                    }
                                 }
                             }
 
@@ -181,8 +201,15 @@ object AuthManager {
                                 onAuthReady()
                             }
                         } else {
-                            val error = task.exception ?: Exception("Login failed. Check your email and password.")
-                            onComplete(Result.failure(error))
+                            val ex = task.exception
+                            val friendlyError = when (ex) {
+                                is FirebaseAuthInvalidUserException ->
+                                    Exception("No registered account found with this email address. Please sign up first.")
+                                is FirebaseAuthInvalidCredentialsException ->
+                                    Exception("Incorrect email or password. Please check your credentials and try again.")
+                                else -> ex ?: Exception("Login failed. Check your email and password.")
+                            }
+                            onComplete(Result.failure(friendlyError))
                         }
                     }
                 }

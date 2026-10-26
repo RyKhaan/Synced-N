@@ -11,7 +11,8 @@ import kotlin.concurrent.thread
 
 /**
  * Service for sending and verifying 6-digit Email OTP via the Brevo (Sendinblue) REST API.
- * Handles generation, expiration, delivery, and verification.
+ * Supports both Pre-Registration Email Verification ("register") and Password Reset ("reset"),
+ * including expiration, resend cooldowns, and brute-force attempt invalidation.
  */
 object EmailOtpService {
     private val BREVO_API_KEY: String by lazy {
@@ -25,12 +26,18 @@ object EmailOtpService {
     private const val SENDER_NAME = "Synced N Ministry"
     private const val BREVO_API_URL = "https://api.brevo.com/v3/smtp/email"
     const val OTP_VALIDITY_MS = 10 * 60 * 1000L // 10 minutes
+    const val MAX_OTP_ATTEMPTS = 5
+    const val RESEND_COOLDOWN_MS = 60 * 1000L // 60 seconds
 
     data class OtpRecord(
         val email: String,
         val code: String,
         val expiresAt: Long,
-        val pendingPassword: String = ""
+        val pendingPassword: String = "",
+        val pendingUsername: String = "",
+        val purpose: String = "reset",
+        val failedAttempts: Int = 0,
+        val sentAt: Long = System.currentTimeMillis()
     )
 
     @Volatile
@@ -45,12 +52,26 @@ object EmailOtpService {
     }
 
     /**
+     * Checks if the user can request a new OTP or if the 60-second resend cooldown is still active.
+     * Returns Pair(canResend, remainingSeconds).
+     */
+    fun canResendOtp(nowMs: Long = System.currentTimeMillis()): Pair<Boolean, Int> {
+        val rec = activeRecord ?: return true to 0
+        val elapsed = nowMs - rec.sentAt
+        if (elapsed >= RESEND_COOLDOWN_MS) return true to 0
+        val remainingSec = ((RESEND_COOLDOWN_MS - elapsed + 999L) / 1000L).toInt().coerceAtLeast(1)
+        return false to remainingSec
+    }
+
+    /**
      * Generates a 6-digit numeric OTP and sends it to the recipient's email address via Brevo.
      * Runs asynchronously on a background worker thread.
      */
     fun sendOtp(
         recipientEmail: String,
         pendingPassword: String = "",
+        pendingUsername: String = "",
+        purpose: String = "reset",
         onResult: (Result<String>) -> Unit
     ) {
         val trimmedEmail = recipientEmail.trim()
@@ -61,14 +82,33 @@ object EmailOtpService {
 
         // Generate 6-digit random verification code
         val generatedCode = (100000..999999).random().toString()
-        val expiresAt = System.currentTimeMillis() + OTP_VALIDITY_MS
+        val now = System.currentTimeMillis()
+        val expiresAt = now + OTP_VALIDITY_MS
 
         activeRecord = OtpRecord(
             email = trimmedEmail,
             code = generatedCode,
             expiresAt = expiresAt,
-            pendingPassword = pendingPassword
+            pendingPassword = pendingPassword,
+            pendingUsername = pendingUsername.trim(),
+            purpose = purpose,
+            failedAttempts = 0,
+            sentAt = now
         )
+
+        val isRegister = purpose.equals("register", ignoreCase = true)
+        val greeting = if (isRegister && pendingUsername.isNotBlank()) {
+            "Welcome to Synced N, <strong>${pendingUsername.trim()}</strong>! Use the 6-digit verification code below to verify your email address and complete your registration:"
+        } else if (isRegister) {
+            "Welcome to Synced N! Use the 6-digit verification code below to verify your email address and complete your registration:"
+        } else {
+            "You requested to reset your password. Use the 6-digit verification code below to proceed:"
+        }
+        val subjectLine = if (isRegister) {
+            "Synced N - Verify Your Email Address"
+        } else {
+            "Synced N - Your Password Reset Verification Code"
+        }
 
         thread {
             var connection: HttpURLConnection? = null
@@ -89,7 +129,7 @@ object EmailOtpService {
                     <div style="font-family: Arial, sans-serif; max-width: 500px; margin: 0 auto; padding: 28px; border: 1px solid #e2e8f0; border-radius: 16px; background-color: #ffffff; text-align: center;">
                         <h2 style="color: #500568; margin-top: 0; font-size: 24px; font-weight: bold;">Synced N Ministry</h2>
                         <p style="color: #4a5568; font-size: 15px; line-height: 1.5; margin: 16px 0;">
-                            You requested to reset your password. Use the 6-digit verification code below to proceed:
+                            $greeting
                         </p>
                         <div style="background-color: #f7eef9; border: 2px dashed #a855f7; border-radius: 12px; padding: 18px; margin: 24px 0;">
                             <span style="font-size: 34px; font-weight: 800; letter-spacing: 8px; color: #500568; font-family: monospace;">$generatedCode</span>
@@ -112,7 +152,7 @@ object EmailOtpService {
                             put("email", trimmedEmail)
                         })
                     })
-                    put("subject", "Synced N - Your Password Reset Verification Code")
+                    put("subject", subjectLine)
                     put("htmlContent", htmlBody)
                 }
 
@@ -144,6 +184,7 @@ object EmailOtpService {
 
     /**
      * Verifies the entered OTP against the active record.
+     * Enforces expiration and invalidates the OTP after 5 failed attempts to prevent brute-force guessing.
      * Returns Result.success(OtpRecord) if valid, or Result.failure with error message.
      */
     fun verifyOtp(enteredCode: String): Result<OtpRecord> {
@@ -161,7 +202,18 @@ object EmailOtpService {
         }
 
         if (record.code != trimmed) {
-            return Result.failure(IllegalArgumentException("Invalid verification code. Please check your email and try again."))
+            val nextFailures = record.failedAttempts + 1
+            if (nextFailures >= MAX_OTP_ATTEMPTS) {
+                activeRecord = null
+                return Result.failure(
+                    IllegalStateException("Too many incorrect attempts. Verification code has been invalidated. Please request a new code.")
+                )
+            }
+            activeRecord = record.copy(failedAttempts = nextFailures)
+            val remaining = MAX_OTP_ATTEMPTS - nextFailures
+            return Result.failure(
+                IllegalArgumentException("Invalid verification code ($remaining attempts remaining). Please check your email and try again.")
+            )
         }
 
         // Successfully verified

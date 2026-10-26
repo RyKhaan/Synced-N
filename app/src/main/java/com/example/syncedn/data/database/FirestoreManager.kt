@@ -567,4 +567,68 @@ object FirestoreManager {
             finishOnce(null)
         }
     }
+
+    /**
+     * Checks whether a given email address belongs to an existing registered user in Firestore (/users)
+     * or in the local cache / preferences.
+     */
+    fun checkEmailExistsInFirestore(
+        email: String,
+        preferences: android.content.SharedPreferences? = null,
+        onComplete: (Boolean) -> Unit
+    ) {
+        val cleanEmail = email.trim()
+        val lowerEmail = cleanEmail.lowercase()
+        if (cleanEmail.isBlank()) {
+            onComplete(false)
+            return
+        }
+
+        val hasLocalCache = localUserRoleTeamByEmail.containsKey(lowerEmail) ||
+            preferences?.getString("email_uid_$lowerEmail", "").orEmpty().isNotBlank() ||
+            lowerEmail == "ryanlloydgenturo@gmail.com"
+
+        val completed = java.util.concurrent.atomic.AtomicBoolean(false)
+        fun finishOnce(exists: Boolean) {
+            if (completed.compareAndSet(false, true)) {
+                onComplete(exists)
+            }
+        }
+
+        try {
+            android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                finishOnce(hasLocalCache)
+            }, 4000L)
+        } catch (_: Exception) {
+            // Ignored in unit test environment
+        }
+
+        try {
+            db.collection(USERS_COLLECTION)
+                .whereEqualTo("email", cleanEmail)
+                .get()
+                .addOnSuccessListener { querySnap ->
+                    if (querySnap != null && !querySnap.isEmpty) {
+                        finishOnce(true)
+                    } else if (cleanEmail != lowerEmail) {
+                        db.collection(USERS_COLLECTION)
+                            .whereEqualTo("email", lowerEmail)
+                            .get()
+                            .addOnSuccessListener { lowerSnap ->
+                                finishOnce((lowerSnap != null && !lowerSnap.isEmpty) || hasLocalCache)
+                            }
+                            .addOnFailureListener {
+                                finishOnce(hasLocalCache)
+                            }
+                    } else {
+                        finishOnce(hasLocalCache)
+                    }
+                }
+                .addOnFailureListener {
+                    finishOnce(hasLocalCache)
+                }
+        } catch (_: Exception) {
+            finishOnce(hasLocalCache)
+        }
+    }
 }

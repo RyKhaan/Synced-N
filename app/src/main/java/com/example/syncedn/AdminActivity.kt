@@ -661,7 +661,7 @@ class AdminActivity : AppCompatActivity() {
                 val previous = when (page) {
                     "login" -> "start"
                     "register", "reset" -> "login"
-                    "otp" -> "reset"
+                    "otp" -> if (successFlow == "register") "register" else "reset"
                     "success" -> "login"
                     "teamChoice" -> "login"
                     "createTeam", "joinTeam" -> "teamChoice"
@@ -1009,10 +1009,16 @@ class AdminActivity : AppCompatActivity() {
             val password = input(UI.loginPassword)
             val emailStr = email.text.toString().trim()
             val passStr = password.text.toString()
+            val emailErr = com.example.syncedn.data.util.ValidationUtils.validateEmailForAuth(emailStr)
             when {
-                emailStr.isBlank() -> invalid(email, "Enter your email address.")
-                !Patterns.EMAIL_ADDRESS.matcher(emailStr).matches() -> invalid(email, "Enter a valid email address.")
-                passStr.length < 6 -> invalid(password, "Password must be at least 6 characters.")
+                emailErr != null -> invalid(email, emailErr)
+                com.example.syncedn.data.util.ValidationUtils.isLoginLocked(emailStr) -> {
+                    val waitSec = com.example.syncedn.data.util.ValidationUtils.getLoginLockRemainingSeconds(emailStr)
+                    val msg = "Too many failed attempts. Please wait ${waitSec}s before trying again."
+                    invalid(password, msg)
+                    toast(msg)
+                }
+                passStr.length < 6 -> invalid(password, "Enter your password (at least 6 characters).")
                 else -> {
                     val loginBtn = findViewById<Button>(UI.loginButton)
                     loginBtn?.isEnabled = false
@@ -1021,6 +1027,7 @@ class AdminActivity : AppCompatActivity() {
                         runOnUiThread {
                             loginBtn?.isEnabled = true
                             if (result.isSuccess) {
+                                com.example.syncedn.data.util.ValidationUtils.resetLoginAttempts(emailStr)
                                 val profile = result.getOrNull()
                                 val uid = com.example.syncedn.data.auth.AuthManager.currentUser?.uid?.takeIf { it.isNotBlank() }
                                     ?: profile?.uid.orEmpty()
@@ -1051,9 +1058,21 @@ class AdminActivity : AppCompatActivity() {
                                     finish()
                                 }
                             } else {
-                                val errorMsg = result.exceptionOrNull()?.localizedMessage ?: "Login failed. Check your email and password."
-                                toast(errorMsg)
-                                invalid(password, "Invalid credentials.")
+                                val rem = com.example.syncedn.data.util.ValidationUtils.recordLoginFailure(emailStr)
+                                val baseMsg = result.exceptionOrNull()?.localizedMessage ?: "Login failed. Check your email and password."
+                                val fullMsg = if (rem == 0) {
+                                    "Too many failed login attempts. Account locked for 60 seconds."
+                                } else if (rem <= 2) {
+                                    "$baseMsg ($rem attempts remaining)"
+                                } else {
+                                    baseMsg
+                                }
+                                toast(fullMsg)
+                                if (baseMsg.contains("No registered account", ignoreCase = true) || baseMsg.contains("No account found", ignoreCase = true)) {
+                                    invalid(email, baseMsg)
+                                } else {
+                                    invalid(password, fullMsg)
+                                }
                             }
                         }
                     }
@@ -1073,36 +1092,55 @@ class AdminActivity : AppCompatActivity() {
             val nameStr = name.text.toString().trim()
             val emailStr = email.text.toString().trim()
             val passStr = password.text.toString()
+            val emailErr = com.example.syncedn.data.util.ValidationUtils.validateEmailForAuth(emailStr)
+            val passEval = com.example.syncedn.data.util.ValidationUtils.evaluatePassword(passStr)
             when {
-                nameStr.isBlank() -> invalid(name, "Enter your username.")
-                !Patterns.EMAIL_ADDRESS.matcher(emailStr).matches() -> invalid(email, "Enter a valid email.")
-                passStr.length < 6 -> invalid(password, "Password must be at least 6 characters.")
+                !com.example.syncedn.data.util.ValidationUtils.isValidUsername(nameStr) ->
+                    invalid(name, "Enter a valid username (1- characters).")
+                emailErr != null -> invalid(email, emailErr)
+                !passEval.isStrong -> invalid(password, passEval.errorMessage() ?: "Use a stronger password.")
                 passStr != confirm.text.toString() -> invalid(confirm, "Passwords do not match.")
+                !com.example.syncedn.data.util.ValidationUtils.isNetworkAvailable(this) ->
+                    toast("No internet connection. Please connect to the internet to verify your email.")
                 else -> {
                     val regBtn = findViewById<Button>(UI.registerButton)
                     regBtn?.isEnabled = false
-                    toast("Creating account...")
-                    AuthManager.registerUser(nameStr, emailStr, passStr) { result ->
+                    toast("Verifying email availability...")
+                    FirestoreManager.checkEmailExistsInFirestore(emailStr, preferences) { alreadyExists ->
                         runOnUiThread {
-                            regBtn?.isEnabled = true
-                            if (result.isSuccess) {
-                                val registeredProfile = result.getOrNull()
-                                displayName = nameStr
-                                fullName = ""
-                                SessionManager.clearPreferencesOnly(preferences)
-                                SessionManager.saveSessionProfile(preferences, registeredProfile, displayName, emailStr)
-                                preferences.edit {
-                                    putString("role", "")
-                                    putString("teamName", "")
-                                    putString("teamCode", "")
-                                }
-                                successFlow = "register"
-                                toast("Account created successfully!")
-                                navigate("success")
+                            if (alreadyExists) {
+                                regBtn?.isEnabled = true
+                                val msg = "This email is already registered. Please log in instead."
+                                invalid(email, msg)
+                                toast(msg)
                             } else {
-                                val errorMsg = result.exceptionOrNull()?.localizedMessage ?: "Registration failed."
-                                toast(errorMsg)
-                                invalid(email, errorMsg)
+                                toast("Sending 6-digit verification code to $emailStr...")
+                                preferences.edit()
+                                    .putString("pendingRegUsername", nameStr)
+                                    .putString("pendingRegEmail", emailStr)
+                                    .putString("pendingRegPassword", passStr)
+                                    .putString("resetEmail", emailStr)
+                                    .putString("resetPendingPassword", passStr)
+                                    .apply()
+                                EmailOtpService.sendOtp(
+                                    recipientEmail = emailStr,
+                                    pendingPassword = passStr,
+                                    pendingUsername = nameStr,
+                                    purpose = "register"
+                                ) { otpResult ->
+                                    runOnUiThread {
+                                        regBtn?.isEnabled = true
+                                        if (otpResult.isSuccess) {
+                                            successFlow = "register"
+                                            toast("Verification code sent to $emailStr! Please check your inbox.")
+                                            navigate("otp")
+                                        } else {
+                                            val errorMsg = otpResult.exceptionOrNull()?.localizedMessage ?: "Failed to send verification code."
+                                            toast(errorMsg)
+                                            invalid(email, "Could not send verification code to this email.")
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
@@ -1121,30 +1159,47 @@ class AdminActivity : AppCompatActivity() {
             val emailStr = email.text.toString().trim()
             val passStr = newPass.text.toString()
             val confirmStr = confirmPass.text.toString()
+            val emailErr = com.example.syncedn.data.util.ValidationUtils.validateEmailForAuth(emailStr)
+            val passEval = com.example.syncedn.data.util.ValidationUtils.evaluatePassword(passStr)
 
             when {
-                emailStr.isBlank() || !Patterns.EMAIL_ADDRESS.matcher(emailStr).matches() ->
-                    invalid(email, "Enter a valid email address.")
-                passStr.length < 6 ->
-                    invalid(newPass, "New password must be at least 6 characters.")
-                passStr != confirmStr ->
-                    invalid(confirmPass, "Passwords do not match.")
+                emailErr != null -> invalid(email, emailErr)
+                !passEval.isStrong -> invalid(newPass, passEval.errorMessage() ?: "Use a stronger password.")
+                passStr != confirmStr -> invalid(confirmPass, "Passwords do not match.")
+                !com.example.syncedn.data.util.ValidationUtils.isNetworkAvailable(this) ->
+                    toast("No internet connection. Please connect to the internet to reset your password.")
                 else -> {
                     val sendBtn = findViewById<Button>(UI.sendCodeButton)
                     sendBtn?.isEnabled = false
-                    toast("Sending 6-digit code to $emailStr...")
-                    preferences.edit().putString("resetEmail", emailStr).putString("resetPendingPassword", passStr).apply()
-                    EmailOtpService.sendOtp(emailStr, pendingPassword = passStr) { result ->
+                    toast("Checking account for $emailStr...")
+                    FirestoreManager.checkEmailExistsInFirestore(emailStr, preferences) { exists ->
                         runOnUiThread {
-                            sendBtn?.isEnabled = true
-                            if (result.isSuccess) {
-                                toast("Verification code sent! Check your email inbox.")
-                                successFlow = "reset"
-                                navigate("otp")
+                            if (!exists) {
+                                sendBtn?.isEnabled = true
+                                val msg = "No registered account found with this email address."
+                                invalid(email, msg)
+                                toast(msg)
                             } else {
-                                val errorMsg = result.exceptionOrNull()?.localizedMessage ?: "Failed to send verification code."
-                                toast(errorMsg)
-                                invalid(email, "Failed to send code.")
+                                toast("Sending 6-digit code to $emailStr...")
+                                preferences.edit().putString("resetEmail", emailStr).putString("resetPendingPassword", passStr).apply()
+                                EmailOtpService.sendOtp(
+                                    recipientEmail = emailStr,
+                                    pendingPassword = passStr,
+                                    purpose = "reset"
+                                ) { result ->
+                                    runOnUiThread {
+                                        sendBtn?.isEnabled = true
+                                        if (result.isSuccess) {
+                                            toast("Verification code sent! Check your email inbox.")
+                                            successFlow = "reset"
+                                            navigate("otp")
+                                        } else {
+                                            val errorMsg = result.exceptionOrNull()?.localizedMessage ?: "Failed to send verification code."
+                                            toast(errorMsg)
+                                            invalid(email, "Failed to send code.")
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
@@ -1167,12 +1222,51 @@ class AdminActivity : AppCompatActivity() {
             val result = EmailOtpService.verifyOtp(codeStr)
             if (result.isSuccess) {
                 val record = result.getOrNull()
-                if (record != null && record.pendingPassword.isNotEmpty()) {
-                    FirestoreManager.savePasswordReset(record.email, record.pendingPassword)
+                val isRegFlow = successFlow == "register" || record?.purpose.equals("register", ignoreCase = true)
+                if (isRegFlow) {
+                    val nameStr = record?.pendingUsername?.takeIf { it.isNotBlank() }
+                        ?: preferences.getString("pendingRegUsername", "").orEmpty()
+                    val emailStr = record?.email?.takeIf { it.isNotBlank() }
+                        ?: preferences.getString("pendingRegEmail", "").orEmpty()
+                    val passStr = record?.pendingPassword?.takeIf { it.isNotBlank() }
+                        ?: preferences.getString("pendingRegPassword", "").orEmpty()
+                    toast("Email verified! Creating your account...")
+                    AuthManager.registerUser(nameStr, emailStr, passStr) { regResult ->
+                        runOnUiThread {
+                            verifyBtn?.isEnabled = true
+                            if (regResult.isSuccess) {
+                                val registeredProfile = regResult.getOrNull()
+                                displayName = nameStr
+                                fullName = ""
+                                SessionManager.clearPreferencesOnly(preferences)
+                                SessionManager.saveSessionProfile(preferences, registeredProfile, displayName, emailStr)
+                                preferences.edit {
+                                    putString("role", "")
+                                    putString("teamName", "")
+                                    putString("teamCode", "")
+                                    remove("pendingRegUsername")
+                                    remove("pendingRegEmail")
+                                    remove("pendingRegPassword")
+                                }
+                                successFlow = "register"
+                                toast("Account created successfully!")
+                                navigate("success")
+                            } else {
+                                val errorMsg = regResult.exceptionOrNull()?.localizedMessage ?: "Registration failed."
+                                toast(errorMsg)
+                                navigate("register")
+                            }
+                        }
+                    }
+                } else {
+                    verifyBtn?.isEnabled = true
+                    if (record != null && record.pendingPassword.isNotEmpty()) {
+                        FirestoreManager.savePasswordReset(record.email, record.pendingPassword)
+                    }
+                    toast("Verification successful! Password reset.")
+                    successFlow = "reset"
+                    navigate("success")
                 }
-                toast("Verification successful! Password reset.")
-                successFlow = "reset"
-                navigate("success")
             } else {
                 verifyBtn?.isEnabled = true
                 val err = result.exceptionOrNull()?.localizedMessage ?: "Invalid or expired verification code."
@@ -1181,7 +1275,6 @@ class AdminActivity : AppCompatActivity() {
             }
         }
     }
-
     private fun setupSuccess() {
         findViewById<TextView>(UI.successMessage).text =
             if (successFlow == "reset") "Password has been successfully reset! You can now log in." else "Your account has been created!"
@@ -1352,6 +1445,107 @@ class AdminActivity : AppCompatActivity() {
         }
         container.add(row,-1,48)
         return container
+    }
+    private fun passwordStrengthBox(passwordFieldId: Int): View {
+        val mutedText = Color.rgb(100, 116, 139)
+        val okColor = Color.rgb(22, 163, 74)
+        val card = vertical().apply {
+            background = GradientDrawable().apply {
+                setColor(Color.rgb(248, 250, 252))
+                cornerRadius = dp(10).toFloat()
+                setStroke(dp(1), Color.rgb(226, 232, 240))
+            }
+            setPadding(dp(12), dp(8), dp(12), dp(8))
+        }
+        val topRow = horizontal()
+        val titleTv = text("Password Requirements", 11, Color.rgb(51, 65, 85), bold = true)
+        val badgeTv = text("Min. 8 chars", 11, mutedText, bold = true)
+        topRow.add(titleTv, 0, -2, 1f)
+        topRow.add(badgeTv, -2, -2)
+        card.add(topRow)
+        card.space(5)
+
+        val barsRow = horizontal()
+        val barViews = List(4) { idx ->
+            View(this).apply {
+                background = GradientDrawable().apply {
+                    setColor(Color.rgb(226, 232, 240))
+                    cornerRadius = dp(2).toFloat()
+                }
+            }.also { v ->
+                val lp = LinearLayout.LayoutParams(0, dp(4), 1f).apply {
+                    if (idx < 3) rightMargin = dp(4)
+                }
+                barsRow.addView(v, lp)
+            }
+        }
+        card.add(barsRow, -1, -2)
+        card.space(6)
+
+        val reqLen = text("○ 8+ characters", 11, mutedText)
+        val reqCase = text("○ Upper & lower (Aa)", 11, mutedText)
+        val reqNum = text("○ Number (0-9)", 11, mutedText)
+        val reqSpec = text("○ Special (!@#$)", 11, mutedText)
+
+        val row1 = horizontal()
+        row1.add(reqLen, 0, -2, 1f)
+        row1.add(reqCase, 0, -2, 1f)
+        card.add(row1)
+        card.space(2)
+        val row2 = horizontal()
+        row2.add(reqNum, 0, -2, 1f)
+        row2.add(reqSpec, 0, -2, 1f)
+        card.add(row2)
+
+        card.post {
+            val edit = findViewById<EditText>(passwordFieldId) ?: return@post
+            edit.addTextChangedListener(object : android.text.TextWatcher {
+                override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+                override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
+                override fun afterTextChanged(s: android.text.Editable?) {
+                    val pass = s?.toString().orEmpty()
+                    val eval = com.example.syncedn.data.util.ValidationUtils.evaluatePassword(pass)
+                    val bothCases = eval.hasUpper && eval.hasLower
+                    val passedRules = listOf(eval.hasMinLength, bothCases, eval.hasDigit, eval.hasSpecial).count { it }
+
+                    reqLen.text = if (eval.hasMinLength) "✓ 8+ characters" else "○ 8+ characters"
+                    reqLen.setTextColor(if (eval.hasMinLength) okColor else mutedText)
+
+                    reqCase.text = if (bothCases) "✓ Upper & lower (Aa)" else "○ Upper & lower (Aa)"
+                    reqCase.setTextColor(if (bothCases) okColor else mutedText)
+
+                    reqNum.text = if (eval.hasDigit) "✓ Number (0-9)" else "○ Number (0-9)"
+                    reqNum.setTextColor(if (eval.hasDigit) okColor else mutedText)
+
+                    reqSpec.text = if (eval.hasSpecial) "✓ Special (!@#$)" else "○ Special (!@#$)"
+                    reqSpec.setTextColor(if (eval.hasSpecial) okColor else mutedText)
+
+                    val activeBarColor = when {
+                        pass.isEmpty() -> Color.rgb(226, 232, 240)
+                        eval.isStrong -> okColor
+                        passedRules >= 3 -> Color.rgb(37, 99, 235)
+                        passedRules == 2 -> Color.rgb(217, 119, 6)
+                        else -> Color.rgb(220, 38, 38)
+                    }
+                    badgeTv.text = when {
+                        pass.isEmpty() -> "Min. 8 chars"
+                        eval.isStrong -> "Strong ✓"
+                        passedRules >= 3 -> "Good"
+                        passedRules == 2 -> "Fair"
+                        else -> "Weak"
+                    }
+                    badgeTv.setTextColor(if (pass.isEmpty()) mutedText else activeBarColor)
+
+                    barViews.forEachIndexed { idx, v ->
+                        (v.background as? GradientDrawable)?.setColor(
+                            if (pass.isNotEmpty() && idx < passedRules.coerceAtLeast(1)) activeBarColor
+                            else Color.rgb(226, 232, 240)
+                        )
+                    }
+                }
+            })
+        }
+        return card
     }
     private fun otpInputGroup(hiddenId: Int = UI.otpCode): View {
         val root = vertical().apply { gravity = Gravity.CENTER_HORIZONTAL }
@@ -1600,27 +1794,42 @@ class AdminActivity : AppCompatActivity() {
                 }
             }
             "register" -> {
-                col.space(15); col.section().apply {
-                    add(heading("Register")); space(16)
-                    add(field(UI.registerName,"Username")); space(10)
-                    add(field(UI.registerPassword,"Password","At least 5 characters",password=true,toggle=UI.registerPasswordToggle)); space(10)
-                    add(field(UI.registerConfirm,"Re-Enter Password","Re-Enter Password",password=true,toggle=UI.registerConfirmToggle)); space(10)
-                    add(field(UI.registerEmail,"Email",email=true)); space(28)
+                col.space(12); col.section().apply {
+                    add(heading("Register")); space(12)
+                    add(field(UI.registerName,"Username")); space(8)
+                    add(field(UI.registerPassword,"Password","At least 8 characters (Aa1!)",password=true,toggle=UI.registerPasswordToggle)); space(6)
+                    add(passwordStrengthBox(UI.registerPassword)); space(8)
+                    add(field(UI.registerConfirm,"Re-Enter Password","Re-Enter Password",password=true,toggle=UI.registerConfirmToggle)); space(8)
+                    add(field(UI.registerEmail,"Email",email=true)); space(20)
                     action(UI.registerButton,"Register"); space(24)
                 }
             }
             "reset" -> {
-                col.space(22); col.section().apply {
-                    add(heading("Reset Password")); space(16)
-                    add(field(UI.resetEmail,"Email",email=true)); space(16)
-                    add(field(UI.resetPassword,"New Password","At least 5 characters",password=true,toggle=UI.resetPasswordToggle)); space(16)
-                    add(field(UI.resetConfirm,"Re-Enter Password","Re-Enter Password",password=true,toggle=UI.resetConfirmToggle)); space(34)
+                col.space(16); col.section().apply {
+                    add(heading("Reset Password")); space(12)
+                    add(field(UI.resetEmail,"Email",email=true)); space(12)
+                    add(field(UI.resetPassword,"New Password","At least 8 characters (Aa1!)",password=true,toggle=UI.resetPasswordToggle)); space(6)
+                    add(passwordStrengthBox(UI.resetPassword)); space(10)
+                    add(field(UI.resetConfirm,"Re-Enter Password","Re-Enter Password",password=true,toggle=UI.resetConfirmToggle)); space(24)
                     action(UI.sendCodeButton,"Send Code"); space(24)
                 }
             }
             "otp" -> {
-                col.space(50); col.section().apply {
-                    add(text("OTP Verification Code", 16, navy, bold = true, centered = true)); space(20)
+                val isRegFlow = successFlow == "register"
+                val targetEmail = if (isRegFlow) {
+                    preferences.getString("pendingRegEmail", "").orEmpty().ifBlank {
+                        preferences.getString("resetEmail", "").orEmpty()
+                    }
+                } else {
+                    preferences.getString("resetEmail", "").orEmpty()
+                }
+                col.space(42); col.section().apply {
+                    add(text("OTP Verification Code", 16, navy, bold = true, centered = true)); space(6)
+                    if (targetEmail.isNotBlank()) {
+                        add(text("Enter the 6-digit code sent to $targetEmail", 12, Color.rgb(100, 116, 139), centered = true)); space(14)
+                    } else {
+                        space(14)
+                    }
                     add(otpInputGroup(UI.otpCode)); space(16)
                     val resendRow = horizontal().apply {
                         gravity = Gravity.CENTER
@@ -1628,24 +1837,49 @@ class AdminActivity : AppCompatActivity() {
                         add(text("Resend", 13, purple, bold = true).apply {
                             isClickable = true; isFocusable = true
                             setOnClickListener {
-                                val emailStr = preferences.getString("resetEmail", "").orEmpty()
-                                val passStr = preferences.getString("resetPendingPassword", "").orEmpty()
+                                val (canResend, waitSec) = EmailOtpService.canResendOtp()
+                                if (!canResend) {
+                                    toast("Please wait ${waitSec}s before requesting another code.")
+                                    return@setOnClickListener
+                                }
+                                val emailStr = if (successFlow == "register") {
+                                    preferences.getString("pendingRegEmail", "").orEmpty().ifBlank {
+                                        preferences.getString("resetEmail", "").orEmpty()
+                                    }
+                                } else {
+                                    preferences.getString("resetEmail", "").orEmpty()
+                                }
+                                val passStr = if (successFlow == "register") {
+                                    preferences.getString("pendingRegPassword", "").orEmpty().ifBlank {
+                                        preferences.getString("resetPendingPassword", "").orEmpty()
+                                    }
+                                } else {
+                                    preferences.getString("resetPendingPassword", "").orEmpty()
+                                }
+                                val userStr = if (successFlow == "register") {
+                                    preferences.getString("pendingRegUsername", "").orEmpty()
+                                } else ""
                                 if (emailStr.isNotBlank()) {
                                     toast("Resending verification code to $emailStr...")
-                                    EmailOtpService.sendOtp(emailStr, passStr) { res ->
+                                    EmailOtpService.sendOtp(
+                                        recipientEmail = emailStr,
+                                        pendingPassword = passStr,
+                                        pendingUsername = userStr,
+                                        purpose = if (successFlow == "register") "register" else "reset"
+                                    ) { res ->
                                         runOnUiThread {
                                             if (res.isSuccess) toast("Verification code sent to $emailStr")
                                             else toast("Failed to resend code: ${res.exceptionOrNull()?.localizedMessage}")
                                         }
                                     }
                                 } else {
-                                    toast("Please request a code from the reset screen.")
+                                    toast(if (successFlow == "register") "Please request a code from the register screen." else "Please request a code from the reset screen.")
                                 }
                             }
                         })
                     }
                     add(resendRow); space(28)
-                    action(UI.verifyOtpButton, "Reset Password"); space(24)
+                    action(UI.verifyOtpButton, if (isRegFlow) "Verify & Register" else "Reset Password"); space(24)
                 }
             }
             "success" -> {
