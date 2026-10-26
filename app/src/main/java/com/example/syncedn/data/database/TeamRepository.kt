@@ -4031,23 +4031,28 @@ object TeamRepository {
             onComplete?.invoke(Result.failure(IllegalArgumentException("Invalid team code or message ID")))
             return
         }
-        preferences?.let {
-            val delKey = "deleted_chat_ids_$code"
-            val currentDeleted = it.getStringSet(delKey, emptySet())?.toMutableSet() ?: mutableSetOf()
-            currentDeleted.add(messageId)
-            it.edit().putStringSet(delKey, currentDeleted).apply()
-        }
 
+        val now = System.currentTimeMillis()
         val cached = getCachedChatMessages(code, preferences)
-        val updatedList = cached.filter { it.id != messageId }
+        val updatedList = cached.map {
+            if (it.id == messageId) {
+                it.copy(isDeleted = true, deletedAt = now, text = "", mediaUrl = "")
+            } else it
+        }
         saveAllChatMessagesLocally(code, updatedList, preferences)
 
         try {
+            val retractionData = mapOf<String, Any>(
+                "isDeleted" to true,
+                "deletedAt" to now,
+                "text" to "",
+                "mediaUrl" to ""
+            )
             db.collection(TEAMS_COLLECTION)
                 .document(code)
                 .collection(MESSAGES_SUBCOLLECTION)
                 .document(messageId)
-                .delete()
+                .update(retractionData)
                 .addOnSuccessListener {
                     onComplete?.invoke(Result.success(Unit))
                 }
@@ -4088,7 +4093,7 @@ object TeamRepository {
                         val deletedIds = preferences?.getStringSet("deleted_chat_ids_$code", emptySet()) ?: emptySet()
                         val remoteMessages = snapshot.documents.mapNotNull { doc ->
                             doc.data?.let { ChatMessage.fromMap(it) }
-                        }.filter { it.id !in deletedIds }
+                        }.map { msg -> if (msg.id in deletedIds) msg.copy(isDeleted = true) else msg }
                          .sortedBy { it.timestamp }
 
                         // Firestore remote snapshot is authoritative across all devices

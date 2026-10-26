@@ -15,7 +15,9 @@ data class ChatMessage(
     val mediaUrl: String = "",
     val timestamp: Long = System.currentTimeMillis(),
     val isEdited: Boolean = false,
-    val editedAt: Long = 0L
+    val editedAt: Long = 0L,
+    val isDeleted: Boolean = false,
+    val deletedAt: Long = 0L
 ) {
     fun toMap(): Map<String, Any> = mapOf(
         "id" to id,
@@ -28,7 +30,9 @@ data class ChatMessage(
         "mediaUrl" to mediaUrl,
         "timestamp" to timestamp,
         "isEdited" to isEdited,
-        "editedAt" to editedAt
+        "editedAt" to editedAt,
+        "isDeleted" to isDeleted,
+        "deletedAt" to deletedAt
     )
 
     companion object {
@@ -47,6 +51,13 @@ data class ChatMessage(
                 is String -> rawEditedAt.toLongOrNull() ?: 0L
                 else -> 0L
             }
+            val rawDeletedAt = map["deletedAt"]
+            val parsedDeletedAt = when (rawDeletedAt) {
+                is Number -> rawDeletedAt.toLong()
+                is com.google.firebase.Timestamp -> rawDeletedAt.toDate().time
+                is String -> rawDeletedAt.toLongOrNull() ?: 0L
+                else -> 0L
+            }
             return ChatMessage(
                 id = map["id"] as? String ?: "",
                 teamCode = map["teamCode"] as? String ?: "",
@@ -58,7 +69,9 @@ data class ChatMessage(
                 mediaUrl = map["mediaUrl"] as? String ?: "",
                 timestamp = parsedTs,
                 isEdited = (map["isEdited"] as? Boolean) ?: false,
-                editedAt = parsedEditedAt
+                editedAt = parsedEditedAt,
+                isDeleted = (map["isDeleted"] as? Boolean) ?: false,
+                deletedAt = parsedDeletedAt
             )
         }
     }

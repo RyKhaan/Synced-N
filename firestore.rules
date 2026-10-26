@@ -121,6 +121,8 @@ rules_version = '2';
 //   - timestamp: number | timestamp (required, immutable) - Sending timestamp
 //   - isEdited: bool (optional) - Whether the message has been edited
 //   - editedAt: number | timestamp (optional, >= 0) - Timestamp when edited
+//   - isDeleted: bool (optional) - Whether the message has been retracted/deleted
+//   - deletedAt: number | timestamp (optional, >= 0) - Timestamp when deleted
 //
 // Subcollection: teams/{teamCode}/reports
 // Document ID: {reportId} (matches id field)
@@ -475,7 +477,8 @@ service cloud.firestore {
     function isValidChatMessage(data, messageId, teamCode) {
       return hasOnlyAllowedFields(data, [
         'id', 'teamCode', 'senderUid', 'senderName', 'senderRole',
-        'senderPhotoUri', 'text', 'mediaUrl', 'timestamp', 'isEdited', 'editedAt'
+        'senderPhotoUri', 'text', 'mediaUrl', 'timestamp', 'isEdited', 'editedAt',
+        'isDeleted', 'deletedAt'
       ]) &&
       hasRequiredFields(data, ['id', 'teamCode', 'senderUid', 'senderName', 'timestamp']) &&
       data.id is string && data.id == messageId &&
@@ -486,10 +489,12 @@ service cloud.firestore {
       (!('senderPhotoUri' in data) || (data.senderPhotoUri is string && data.senderPhotoUri.size() <= 500)) &&
       (!('text' in data) || (data.text is string && data.text.size() <= 2000)) &&
       (!('mediaUrl' in data) || (data.mediaUrl is string && data.mediaUrl.size() <= 500)) &&
-      (('text' in data && data.text.size() > 0) || ('mediaUrl' in data && data.mediaUrl.size() > 0)) &&
+      (('text' in data && data.text.size() > 0) || ('mediaUrl' in data && data.mediaUrl.size() > 0) || ('isDeleted' in data && data.isDeleted == true)) &&
       ((data.timestamp is number && data.timestamp >= 0) || (data.timestamp is timestamp)) &&
       (!('isEdited' in data) || data.isEdited is bool) &&
-      (!('editedAt' in data) || (data.editedAt is number && data.editedAt >= 0) || (data.editedAt is timestamp));
+      (!('editedAt' in data) || (data.editedAt is number && data.editedAt >= 0) || (data.editedAt is timestamp)) &&
+      (!('isDeleted' in data) || data.isDeleted is bool) &&
+      (!('deletedAt' in data) || (data.deletedAt is number && data.deletedAt >= 0) || (data.deletedAt is timestamp));
     }
 
     // Strict validator for /teams/{teamCode}/reports/{reportId} documents

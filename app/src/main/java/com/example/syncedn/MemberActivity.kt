@@ -5271,13 +5271,52 @@ space(48)
             isAntiAlias = true
         }
     }
+    private fun formatChatDateTime(timestamp: Long): String {
+        if (timestamp <= 0L) return ""
+        return try {
+            val phtZone = java.util.TimeZone.getTimeZone("Asia/Manila")
+            val calNow = java.util.Calendar.getInstance(phtZone)
+            val calThen = java.util.Calendar.getInstance(phtZone).apply { timeInMillis = timestamp }
+            val timePart = java.text.SimpleDateFormat("h:mm a", java.util.Locale.US).apply { timeZone = phtZone }.format(java.util.Date(timestamp))
+            val isSameYear = calNow.get(java.util.Calendar.YEAR) == calThen.get(java.util.Calendar.YEAR)
+            val dayDiff = calNow.get(java.util.Calendar.DAY_OF_YEAR) - calThen.get(java.util.Calendar.DAY_OF_YEAR)
+            if (isSameYear && dayDiff == 0) {
+                "Today at $timePart"
+            } else if (isSameYear && dayDiff == 1) {
+                "Yesterday at $timePart"
+            } else {
+                val datePart = java.text.SimpleDateFormat("MMM d", java.util.Locale.US).apply { timeZone = phtZone }.format(java.util.Date(timestamp))
+                "$datePart, $timePart"
+            }
+        } catch (_: Exception) {
+            java.text.SimpleDateFormat("MMM d, h:mm a", java.util.Locale.US).format(java.util.Date(timestamp))
+        }
+    }
+
     private fun buildChatMessageBubble(msg: ChatMessage, currentUid: String): View {
         val maxBubbleWidth = (resources.displayMetrics.widthPixels * 0.72f).toInt()
-        val timeFormat = java.text.SimpleDateFormat("h:mm a", java.util.Locale.getDefault()).apply {
-            timeZone = java.util.TimeZone.getTimeZone("Asia/Manila")
-        }
         val isSelf = (msg.senderUid.isNotBlank() && msg.senderUid == currentUid) ||
                 (msg.senderName.equals(displayName, ignoreCase = true) || msg.senderName.equals(fullName, ignoreCase = true))
+
+        if (msg.isDeleted) {
+            val retractedTime = if (msg.deletedAt > 0L) formatChatDateTime(msg.deletedAt) else formatChatDateTime(msg.timestamp)
+            val row = horizontal().apply {
+                gravity = if (isSelf) Gravity.END else Gravity.START
+                setPadding(0, dp(4), 0, dp(4))
+            }
+            val pill = horizontal().apply {
+                background = GradientDrawable().apply {
+                    setColor(Color.rgb(245, 246, 248))
+                    setStroke(dp(1), Color.rgb(220, 224, 230))
+                    cornerRadius = dp(16).toFloat()
+                }
+                setPadding(dp(12), dp(6), dp(12), dp(6))
+                val retractedLabel = if (isSelf) "⊘ You retracted this message" else "⊘ ${msg.senderName.ifBlank { "Member" }} retracted this message"
+                add(text("$retractedLabel • $retractedTime", 11, Color.rgb(130, 135, 145)).apply { setTypeface(typeface, Typeface.ITALIC) })
+            }
+            row.addView(pill)
+            return row
+        }
 
         if (isSelf) {
             val row = horizontal().apply {
@@ -5287,48 +5326,8 @@ space(48)
             val bubbleContainer = vertical().apply {
                 gravity = Gravity.END
             }
-            val bubble = vertical().apply {
-                background = GradientDrawable().apply {
-                    setColor(Color.rgb(21, 28, 50))
-                    cornerRadii = floatArrayOf(
-                        dp(18).toFloat(), dp(18).toFloat(),
-                        dp(18).toFloat(), dp(18).toFloat(),
-                        dp(4).toFloat(), dp(4).toFloat(),
-                        dp(18).toFloat(), dp(18).toFloat()
-                    )
-                }
-                setPadding(dp(14), dp(10), dp(14), dp(10))
-                if (msg.mediaUrl.isNotBlank()) {
-                    val iv = ImageView(this@MemberActivity).apply {
-                        scaleType = ImageView.ScaleType.CENTER_CROP
-                        outlineProvider = object : ViewOutlineProvider() {
-                            override fun getOutline(view: View, outline: Outline) {
-                                outline.setRoundRect(0, 0, view.width, view.height, dp(12).toFloat())
-                            }
-                        }
-                        clipToOutline = true
-                    }
-                    add(iv, 220, 180)
-                    ImageLoader.loadProfilePhoto(iv, msg.mediaUrl, circular = false)
-                    iv.isClickable = true
-                    iv.isFocusable = true
-                    iv.setOnClickListener { showChatImageViewer(msg.mediaUrl) }
-                    if (msg.text.isNotBlank()) space(6)
-                }
-                if (msg.text.isNotBlank()) {
-                    add(text(msg.text, 14, Color.WHITE).apply {
-                        maxWidth = maxBubbleWidth - dp(28)
-                    })
-                }
-            }
-            bubbleContainer.addView(bubble, LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            ).apply { gravity = Gravity.END })
 
-            bubble.isClickable = true
-            bubble.isFocusable = true
-            bubble.setOnLongClickListener {
+            fun showMessageOptionsDialog() {
                 val options = if (msg.text.isNotBlank()) arrayOf("Edit Message", "Delete Message") else arrayOf("Delete Message")
                 AlertDialog.Builder(this@MemberActivity)
                     .setTitle("Message Options")
@@ -5368,7 +5367,8 @@ space(48)
                                     TeamRepository.deleteChatMessage(curCode, msg.id, preferences) { res ->
                                         runOnUiThread {
                                             if (res.isSuccess) {
-                                                chatMessages.removeAll { it.id == msg.id }
+                                                val idx = chatMessages.indexOfFirst { it.id == msg.id }
+                                                if (idx != -1) chatMessages[idx] = chatMessages[idx].copy(isDeleted = true, deletedAt = System.currentTimeMillis(), text = "", mediaUrl = "")
                                                 navigate("teams")
                                             } else toast("Failed to delete message")
                                         }
@@ -5379,11 +5379,66 @@ space(48)
                         }
                     }
                     .show()
+            }
+
+            val bubble = vertical().apply {
+                background = GradientDrawable().apply {
+                    setColor(Color.rgb(21, 28, 50))
+                    cornerRadii = floatArrayOf(
+                        dp(18).toFloat(), dp(18).toFloat(),
+                        dp(18).toFloat(), dp(18).toFloat(),
+                        dp(4).toFloat(), dp(4).toFloat(),
+                        dp(18).toFloat(), dp(18).toFloat()
+                    )
+                }
+                setPadding(dp(14), dp(10), dp(14), dp(10))
+                if (msg.mediaUrl.isNotBlank()) {
+                    val iv = ImageView(this@MemberActivity).apply {
+                        scaleType = ImageView.ScaleType.CENTER_CROP
+                        outlineProvider = object : ViewOutlineProvider() {
+                            override fun getOutline(view: View, outline: Outline) {
+                                outline.setRoundRect(0, 0, view.width, view.height, dp(12).toFloat())
+                            }
+                        }
+                        clipToOutline = true
+                    }
+                    add(iv, 220, 180)
+                    ImageLoader.loadProfilePhoto(iv, msg.mediaUrl, circular = false)
+                    iv.isClickable = true
+                    iv.isFocusable = true
+                    iv.setOnClickListener { showChatImageViewer(msg.mediaUrl) }
+                    iv.setOnLongClickListener {
+                        showMessageOptionsDialog()
+                        true
+                    }
+                    if (msg.text.isNotBlank()) space(6)
+                }
+                if (msg.text.isNotBlank()) {
+                    add(text(msg.text, 14, Color.WHITE).apply {
+                        maxWidth = maxBubbleWidth - dp(28)
+                    })
+                }
+            }
+            bubbleContainer.addView(bubble, LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { gravity = Gravity.END })
+
+            bubble.isClickable = true
+            bubble.isFocusable = true
+            bubble.setOnLongClickListener {
+                showMessageOptionsDialog()
                 true
             }
 
-            val timeStr = timeFormat.format(java.util.Date(msg.timestamp))
-            val statusLabel = if (msg.isEdited) "$timeStr  (edited)  ✓✓ Delivered" else "$timeStr  ✓✓ Delivered"
+            val sentTimeStr = formatChatDateTime(msg.timestamp)
+            val statusLabel = if (msg.isEdited && msg.editedAt > 0L) {
+                "$sentTimeStr • (Edited ${formatChatDateTime(msg.editedAt)}) • ✓✓ Delivered"
+            } else if (msg.isEdited) {
+                "$sentTimeStr • (Edited) • ✓✓ Delivered"
+            } else {
+                "$sentTimeStr • ✓✓ Delivered"
+            }
             val caption = text(statusLabel, 10, Color.rgb(148, 163, 184)).apply {
                 setPadding(0, dp(2), dp(4), 0)
             }
@@ -5455,8 +5510,14 @@ space(48)
                 ViewGroup.LayoutParams.WRAP_CONTENT
             ).apply { gravity = Gravity.START })
 
-            val timeStr = timeFormat.format(java.util.Date(msg.timestamp))
-            val statusLabel = if (msg.isEdited) "$timeStr  (edited)" else timeStr
+            val sentTimeStr = formatChatDateTime(msg.timestamp)
+            val statusLabel = if (msg.isEdited && msg.editedAt > 0L) {
+                "$sentTimeStr • (Edited ${formatChatDateTime(msg.editedAt)})"
+            } else if (msg.isEdited) {
+                "$sentTimeStr • (Edited)"
+            } else {
+                sentTimeStr
+            }
             val caption = text(statusLabel, 10, Color.rgb(148, 163, 184)).apply {
                 setPadding(dp(4), dp(2), 0, 0)
             }

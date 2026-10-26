@@ -3856,38 +3856,23 @@ class AdminActivity : AppCompatActivity() {
         val artist = plainInput("Artist").apply { setText(currentSong?.artist ?: fallbackJson.optString("artist", songCatalog().find { it.first == selectedSong }?.second ?: "")) }
         val key = plainInput("Key, e.g. C").apply { setText(currentSong?.key ?: fallbackJson.optString("key", "C")) }
         val bpm = plainInput("BPM").apply { inputType = InputType.TYPE_CLASS_NUMBER; setText(currentSong?.bpm?.toString() ?: fallbackJson.optString("bpm", "74")) }
-        val initialSheet = currentSong?.sheet?.ifBlank { currentSong.lyrics } ?: fallbackJson.optString("sheet", fallbackJson.optString("lyrics"))
-        val lyrics = plainInput("Paste or enter lyrics & chords...", true, chordSheet = true).apply { 
+        val lyrics = plainInput("Your licensed lyrics / chords", true, chordSheet = true).apply { 
             setHorizontallyScrolling(true)
-            minLines = 8
-            setText(initialSheet)
+            setText(currentSong?.sheet?.ifBlank { currentSong.lyrics } ?: fallbackJson.optString("sheet", fallbackJson.optString("lyrics"))) 
         }
         val link = plainInput("Reference URL").apply { setText(currentSong?.referenceUrl ?: fallbackJson.optString("link")) }
-
         listOf("Title*" to title, "Artist*" to artist, "Key" to key, "BPM" to bpm).forEach { (label, field) ->
             col.add(text(label, 12, navy, true)); col.space(8); col.add(field, -1, 48); col.space(16)
         }
 
-        // Lyrics & Chords field with Auto-Arrange action
-        col.add(horizontal().apply {
-            add(text("Lyrics & Chords*", 12, navy, true), 0, -2, 1f)
-            add(text("Auto Arrange", 12, purple, bold = true).apply {
-                setPadding(dp(8), dp(4), dp(8), dp(4))
-                isClickable = true
-                isFocusable = true
-                setOnClickListener {
-                    val raw = lyrics.text.toString()
-                    if (raw.isNotBlank()) {
-                        val formatted = SheetPasteFormatter.format(raw)
-                        lyrics.setText(formatted)
-                        toast("Lyrics & chords automatically arranged")
-                    }
-                }
-            }, -2, -2)
-        })
-        col.space(8)
-        col.add(lyrics, -1, -2)
-        col.space(16)
+        // Section Builder & Quick Chord Toolbar
+        val initialRaw = currentSong?.sheet?.ifBlank { currentSong.lyrics } ?: fallbackJson.optString("sheet", fallbackJson.optString("lyrics"))
+        val initialSections = ChordSheet.splitSections(initialRaw)
+
+        data class SectionEntry(var header: String, val input: EditText, val cardView: View)
+        val sectionList = mutableListOf<SectionEntry>()
+        val sectionsContainer = vertical()
+        var focusedSectionInput: EditText? = null
 
         // Transpose Preview views & function
         val previewRoots = listOf("C", "Db", "D", "Eb", "E", "F")
@@ -3902,13 +3887,18 @@ class AdminActivity : AppCompatActivity() {
             setHorizontallyScrolling(false)
         }
 
+        fun getFullAssembledSheet(): String {
+            val pairs = sectionList.map { Pair(it.header, it.input.text.toString()) }
+            return ChordSheet.assembleSections(pairs)
+        }
+
         fun updateTransposePreview(targetChord: String) {
             activePreviewChord = targetChord
             val origKey = key.text.toString().trim().ifBlank { "C" }
             val basePitch = ChordSheet.keyPitch(origKey).coerceAtLeast(0)
             val targetPitch = ChordSheet.pitch(targetChord).coerceAtLeast(0)
             val offset = (targetPitch - basePitch + 12) % 12
-            val sourceText = lyrics.text.toString().ifBlank {
+            val sourceText = getFullAssembledSheet().ifBlank {
                 "[Verse 1]\n[C]Amazing grace how [G]sweet the sound\n[Am]That saved a wretch [F]like me\n\n[Chorus]\n[C]My chains are gone [G]I've been set free"
             }
             previewSheetText.text = ChordSheet.render(sourceText, offset, false, targetChord.contains('b') || targetChord == "F")
@@ -3919,13 +3909,211 @@ class AdminActivity : AppCompatActivity() {
             }
         }
 
-        lyrics.addTextChangedListener(object : android.text.TextWatcher {
-            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
-            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
-            override fun afterTextChanged(s: android.text.Editable?) {
-                updateTransposePreview(activePreviewChord)
+        // Quick Chord Accessory Toolbar (Diatonic chords for current key)
+        val chordPaletteRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(0, dp(4), 0, dp(4))
+        }
+        val chordPaletteScroll = android.widget.HorizontalScrollView(this).apply {
+            isFillViewport = false
+            isHorizontalScrollBarEnabled = false
+            addView(chordPaletteRow)
+        }
+
+        fun refreshChordPalette() {
+            chordPaletteRow.removeAllViews()
+            val activeKey = key.text.toString().trim().ifBlank { "C" }
+            val chords = ChordSheet.getChordPalette(activeKey)
+            chords.forEachIndexed { idx, chord ->
+                val btn = text(chord, 12, navy, true, true).apply {
+                    background = bg(Color.rgb(228, 220, 235), 8)
+                    setPadding(dp(14), dp(6), dp(14), dp(6))
+                    isClickable = true
+                    isFocusable = true
+                    setOnClickListener {
+                        val target = focusedSectionInput ?: sectionList.firstOrNull()?.input
+                        target?.let { et ->
+                            val start = et.selectionStart.coerceAtLeast(0)
+                            val end = et.selectionEnd.coerceAtLeast(0)
+                            val tag = "[$chord]"
+                            et.text.replace(minOf(start, end), maxOf(start, end), tag)
+                            et.setSelection(minOf(start, end) + tag.length)
+                            et.requestFocus()
+                        }
+                    }
+                }
+                val lp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, dp(34)).apply {
+                    if (idx > 0) leftMargin = dp(6)
+                }
+                chordPaletteRow.addView(btn, lp)
             }
+        }
+
+        fun addSectionCard(headerName: String, initialContent: String = "") {
+            var currentHeader = headerName.trim()
+            if (!currentHeader.startsWith("[")) currentHeader = "[$currentHeader"
+            if (!currentHeader.endsWith("]")) currentHeader = "$currentHeader]"
+
+            val sectionInput = plainInput("Enter lyrics & chords for this section (e.g. [Dm]lyrics...)", true).apply {
+                setText(initialContent)
+                minLines = 3
+                setOnFocusChangeListener { _, hasFocus ->
+                    if (hasFocus) focusedSectionInput = this
+                }
+                addTextChangedListener(object : android.text.TextWatcher {
+                    override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+                    override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
+                    override fun afterTextChanged(s: android.text.Editable?) {
+                        updateTransposePreview(activePreviewChord)
+                    }
+                })
+            }
+
+            lateinit var cardPanel: View
+            val headerText = text(currentHeader, 13, purple, bold = true)
+
+            cardPanel = panel().apply {
+                add(horizontal().apply {
+                    add(headerText, 0, -2, 1f)
+                    add(text("Remove", 12, Color.RED).apply {
+                        setPadding(dp(8), dp(4), dp(8), dp(4))
+                        isClickable = true
+                        isFocusable = true
+                        setOnClickListener {
+                            sectionsContainer.removeView(cardPanel)
+                            sectionList.removeAll { it.cardView == cardPanel }
+                            if (focusedSectionInput == sectionInput) {
+                                focusedSectionInput = sectionList.firstOrNull()?.input
+                            }
+                            updateTransposePreview(activePreviewChord)
+                        }
+                    }, -2, -2)
+                })
+                space(8)
+                add(sectionInput, -1, -2)
+            }
+
+            val entry = SectionEntry(currentHeader, sectionInput, cardPanel)
+            sectionList.add(entry)
+            sectionsContainer.addView(cardPanel)
+            sectionsContainer.addView(View(this).apply { minimumHeight = dp(12) })
+            focusedSectionInput = sectionInput
+            updateTransposePreview(activePreviewChord)
+        }
+
+        // Section Picker Chips
+        val standardSections = listOf("Verse 1", "Chorus", "Verse 2", "Bridge", "Pre-Chorus", "Outro")
+        val sectionPickerRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(0, dp(4), 0, dp(4))
+        }
+        val sectionPickerScroll = android.widget.HorizontalScrollView(this).apply {
+            isFillViewport = false
+            isHorizontalScrollBarEnabled = false
+            addView(sectionPickerRow)
+        }
+
+        standardSections.forEachIndexed { idx, secName ->
+            val chip = text("+ $secName", 12, purple, true, true).apply {
+                background = bg(Color.rgb(242, 237, 248), 8, purple)
+                setPadding(dp(10), dp(6), dp(10), dp(6))
+                isClickable = true
+                isFocusable = true
+                setOnClickListener {
+                    addSectionCard(secName)
+                }
+            }
+            val lp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, dp(34)).apply {
+                if (idx > 0) leftMargin = dp(6)
+            }
+            sectionPickerRow.addView(chip, lp)
+        }
+
+        val customChip = text("+ Custom", 12, navy, true, true).apply {
+            background = bg(Color.rgb(230, 230, 235), 8, navy)
+            setPadding(dp(10), dp(6), dp(10), dp(6))
+            isClickable = true
+            isFocusable = true
+            setOnClickListener {
+                val input = EditText(this@AdminActivity).apply { hint = "e.g. Refrain, Tag, Vamp" }
+                AlertDialog.Builder(this@AdminActivity)
+                    .setTitle("Add Custom Section")
+                    .setView(input)
+                    .setPositiveButton("Add") { _, _ ->
+                        val customName = input.text.toString().trim()
+                        if (customName.isNotBlank()) {
+                            addSectionCard(customName)
+                        }
+                    }
+                    .setNegativeButton("Cancel", null)
+                    .show()
+            }
+        }
+        val customLp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, dp(34)).apply {
+            leftMargin = dp(6)
+        }
+        sectionPickerRow.addView(customChip, customLp)
+
+        // UI Header for Song Sections
+        col.add(horizontal().apply {
+            add(text("Song Sections", 12, navy, true), 0, -2, 1f)
+            add(text("Paste Full Lyrics", 12, purple, bold = true).apply {
+                setPadding(dp(8), dp(4), dp(8), dp(4))
+                isClickable = true
+                isFocusable = true
+                setOnClickListener {
+                    val pasteInput = EditText(this@AdminActivity).apply {
+                        hint = "Paste lyrics with Verse/Chorus headers..."
+                        minLines = 6
+                        isSingleLine = false
+                    }
+                    AlertDialog.Builder(this@AdminActivity)
+                        .setTitle("Paste Full Lyrics")
+                        .setMessage("Sections will be auto-detected and split into cards.")
+                        .setView(pasteInput)
+                        .setPositiveButton("Import") { _, _ ->
+                            val pasted = pasteInput.text.toString()
+                            if (pasted.isNotBlank()) {
+                                sectionsContainer.removeAllViews()
+                                sectionList.clear()
+                                val parsed = ChordSheet.splitSections(pasted)
+                                if (parsed.isEmpty()) {
+                                    addSectionCard("Verse 1", pasted)
+                                } else {
+                                    parsed.forEach { (h, body) ->
+                                        addSectionCard(h, body)
+                                    }
+                                }
+                                toast("Imported ${sectionList.size} sections")
+                            }
+                        }
+                        .setNegativeButton("Cancel", null)
+                        .show()
+                }
+            }, -2, -2)
         })
+        col.space(6)
+        col.add(sectionPickerScroll, -1, dp(42))
+        col.space(12)
+
+        // Quick Insert Chords Header & Bar
+        col.add(text("Quick Insert Chord (Tap to insert at cursor)", 12, navy, true))
+        col.space(6)
+        col.add(chordPaletteScroll, -1, dp(42))
+        col.space(16)
+
+        // Add initial section cards
+        if (initialSections.isNotEmpty()) {
+            initialSections.forEach { (h, body) ->
+                addSectionCard(h, body)
+            }
+        } else {
+            addSectionCard("Verse 1")
+            addSectionCard("Chorus")
+        }
+
+        col.add(sectionsContainer)
+        col.space(16)
 
         col.add(text("Reference Link", 12, navy, true)); col.space(8); col.add(link, -1, 48); col.space(20)
 
@@ -3951,12 +4139,14 @@ class AdminActivity : AppCompatActivity() {
             add(previewSheetText, -1, -2)
         }); col.space(24)
 
+        refreshChordPalette()
         updateTransposePreview(activePreviewChord)
 
         key.addTextChangedListener(object : android.text.TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
             override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
             override fun afterTextChanged(s: android.text.Editable?) {
+                refreshChordPalette()
                 updateTransposePreview(activePreviewChord)
             }
         })
@@ -3966,7 +4156,7 @@ class AdminActivity : AppCompatActivity() {
             val artistName = artist.text.toString().trim()
             val tempo = bpm.text.toString().toIntOrNull()
             val songKey = key.text.toString().trim()
-            val sheetContent = lyrics.text.toString().trim()
+            val sheetContent = getFullAssembledSheet()
 
             val refUrl = link.text.toString().trim()
             val normalizedRef = SongData.normalizeReferenceUrl(refUrl)
@@ -3975,7 +4165,6 @@ class AdminActivity : AppCompatActivity() {
                 artistName.isBlank() -> invalid(artist, "Enter an artist.")
                 ChordSheet.keyPitch(songKey) < 0 -> invalid(key, "Enter a key such as C, Eb, F# or Am.")
                 tempo == null || tempo !in 1..400 -> invalid(bpm, "Enter BPM from 1 to 400.")
-                sheetContent.isBlank() -> invalid(lyrics, "Enter lyrics & chords.")
                 else -> {
                     val songId = currentSong?.id?.ifBlank { "song_${System.currentTimeMillis()}" } ?: "song_${System.currentTimeMillis()}"
                     val currentUid = preferences.getString("userId", "").orEmpty().ifBlank { AuthManager.currentUser?.uid.orEmpty() }
@@ -6211,13 +6400,52 @@ class AdminActivity : AppCompatActivity() {
             isAntiAlias = true
         }
     }
+    private fun formatChatDateTime(timestamp: Long): String {
+        if (timestamp <= 0L) return ""
+        return try {
+            val phtZone = java.util.TimeZone.getTimeZone("Asia/Manila")
+            val calNow = java.util.Calendar.getInstance(phtZone)
+            val calThen = java.util.Calendar.getInstance(phtZone).apply { timeInMillis = timestamp }
+            val timePart = java.text.SimpleDateFormat("h:mm a", java.util.Locale.US).apply { timeZone = phtZone }.format(java.util.Date(timestamp))
+            val isSameYear = calNow.get(java.util.Calendar.YEAR) == calThen.get(java.util.Calendar.YEAR)
+            val dayDiff = calNow.get(java.util.Calendar.DAY_OF_YEAR) - calThen.get(java.util.Calendar.DAY_OF_YEAR)
+            if (isSameYear && dayDiff == 0) {
+                "Today at $timePart"
+            } else if (isSameYear && dayDiff == 1) {
+                "Yesterday at $timePart"
+            } else {
+                val datePart = java.text.SimpleDateFormat("MMM d", java.util.Locale.US).apply { timeZone = phtZone }.format(java.util.Date(timestamp))
+                "$datePart, $timePart"
+            }
+        } catch (_: Exception) {
+            java.text.SimpleDateFormat("MMM d, h:mm a", java.util.Locale.US).format(java.util.Date(timestamp))
+        }
+    }
+
     private fun buildChatMessageBubble(msg: ChatMessage, currentUid: String): View {
         val maxBubbleWidth = (resources.displayMetrics.widthPixels * 0.72f).toInt()
-        val timeFormat = java.text.SimpleDateFormat("h:mm a", java.util.Locale.getDefault()).apply {
-            timeZone = java.util.TimeZone.getTimeZone("Asia/Manila")
-        }
         val isSelf = (msg.senderUid.isNotBlank() && msg.senderUid == currentUid) ||
                 (msg.senderName.equals(displayName, ignoreCase = true) || msg.senderName.equals(fullName, ignoreCase = true))
+
+        if (msg.isDeleted) {
+            val retractedTime = if (msg.deletedAt > 0L) formatChatDateTime(msg.deletedAt) else formatChatDateTime(msg.timestamp)
+            val row = horizontal().apply {
+                gravity = if (isSelf) Gravity.END else Gravity.START
+                setPadding(0, dp(4), 0, dp(4))
+            }
+            val pill = horizontal().apply {
+                background = GradientDrawable().apply {
+                    setColor(Color.rgb(245, 246, 248))
+                    setStroke(dp(1), Color.rgb(220, 224, 230))
+                    cornerRadius = dp(16).toFloat()
+                }
+                setPadding(dp(12), dp(6), dp(12), dp(6))
+                val retractedLabel = if (isSelf) "⊘ You retracted this message" else "⊘ ${msg.senderName.ifBlank { "Member" }} retracted this message"
+                add(text("$retractedLabel • $retractedTime", 11, Color.rgb(130, 135, 145)).apply { setTypeface(typeface, Typeface.ITALIC) })
+            }
+            row.addView(pill)
+            return row
+        }
 
         if (isSelf) {
             val row = horizontal().apply {
@@ -6227,48 +6455,8 @@ class AdminActivity : AppCompatActivity() {
             val bubbleContainer = vertical().apply {
                 gravity = Gravity.END
             }
-            val bubble = vertical().apply {
-                background = GradientDrawable().apply {
-                    setColor(Color.rgb(21, 28, 50))
-                    cornerRadii = floatArrayOf(
-                        dp(18).toFloat(), dp(18).toFloat(),
-                        dp(18).toFloat(), dp(18).toFloat(),
-                        dp(4).toFloat(), dp(4).toFloat(),
-                        dp(18).toFloat(), dp(18).toFloat()
-                    )
-                }
-                setPadding(dp(14), dp(10), dp(14), dp(10))
-                if (msg.mediaUrl.isNotBlank()) {
-                    val iv = ImageView(this@AdminActivity).apply {
-                        scaleType = ImageView.ScaleType.CENTER_CROP
-                        outlineProvider = object : ViewOutlineProvider() {
-                            override fun getOutline(view: View, outline: Outline) {
-                                outline.setRoundRect(0, 0, view.width, view.height, dp(12).toFloat())
-                            }
-                        }
-                        clipToOutline = true
-                    }
-                    add(iv, 220, 180)
-                    ImageLoader.loadProfilePhoto(iv, msg.mediaUrl, circular = false)
-                    iv.isClickable = true
-                    iv.isFocusable = true
-                    iv.setOnClickListener { showChatImageViewer(msg.mediaUrl) }
-                    if (msg.text.isNotBlank()) space(6)
-                }
-                if (msg.text.isNotBlank()) {
-                    add(text(msg.text, 14, Color.WHITE).apply {
-                        maxWidth = maxBubbleWidth - dp(28)
-                    })
-                }
-            }
-            bubbleContainer.addView(bubble, LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            ).apply { gravity = Gravity.END })
 
-            bubble.isClickable = true
-            bubble.isFocusable = true
-            bubble.setOnLongClickListener {
+            fun showMessageOptionsDialog() {
                 val options = if (msg.text.isNotBlank()) arrayOf("Edit Message", "Delete Message") else arrayOf("Delete Message")
                 AlertDialog.Builder(this@AdminActivity)
                     .setTitle("Message Options")
@@ -6308,7 +6496,8 @@ class AdminActivity : AppCompatActivity() {
                                     TeamRepository.deleteChatMessage(curCode, msg.id, preferences) { res ->
                                         runOnUiThread {
                                             if (res.isSuccess) {
-                                                chatMessages.removeAll { it.id == msg.id }
+                                                val idx = chatMessages.indexOfFirst { it.id == msg.id }
+                                                if (idx != -1) chatMessages[idx] = chatMessages[idx].copy(isDeleted = true, deletedAt = System.currentTimeMillis(), text = "", mediaUrl = "")
                                                 navigate("teams")
                                             } else toast("Failed to delete message")
                                         }
@@ -6319,11 +6508,66 @@ class AdminActivity : AppCompatActivity() {
                         }
                     }
                     .show()
+            }
+
+            val bubble = vertical().apply {
+                background = GradientDrawable().apply {
+                    setColor(Color.rgb(21, 28, 50))
+                    cornerRadii = floatArrayOf(
+                        dp(18).toFloat(), dp(18).toFloat(),
+                        dp(18).toFloat(), dp(18).toFloat(),
+                        dp(4).toFloat(), dp(4).toFloat(),
+                        dp(18).toFloat(), dp(18).toFloat()
+                    )
+                }
+                setPadding(dp(14), dp(10), dp(14), dp(10))
+                if (msg.mediaUrl.isNotBlank()) {
+                    val iv = ImageView(this@AdminActivity).apply {
+                        scaleType = ImageView.ScaleType.CENTER_CROP
+                        outlineProvider = object : ViewOutlineProvider() {
+                            override fun getOutline(view: View, outline: Outline) {
+                                outline.setRoundRect(0, 0, view.width, view.height, dp(12).toFloat())
+                            }
+                        }
+                        clipToOutline = true
+                    }
+                    add(iv, 220, 180)
+                    ImageLoader.loadProfilePhoto(iv, msg.mediaUrl, circular = false)
+                    iv.isClickable = true
+                    iv.isFocusable = true
+                    iv.setOnClickListener { showChatImageViewer(msg.mediaUrl) }
+                    iv.setOnLongClickListener {
+                        showMessageOptionsDialog()
+                        true
+                    }
+                    if (msg.text.isNotBlank()) space(6)
+                }
+                if (msg.text.isNotBlank()) {
+                    add(text(msg.text, 14, Color.WHITE).apply {
+                        maxWidth = maxBubbleWidth - dp(28)
+                    })
+                }
+            }
+            bubbleContainer.addView(bubble, LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { gravity = Gravity.END })
+
+            bubble.isClickable = true
+            bubble.isFocusable = true
+            bubble.setOnLongClickListener {
+                showMessageOptionsDialog()
                 true
             }
 
-            val timeStr = timeFormat.format(java.util.Date(msg.timestamp))
-            val statusLabel = if (msg.isEdited) "$timeStr  (edited)  ✓✓ Delivered" else "$timeStr  ✓✓ Delivered"
+            val sentTimeStr = formatChatDateTime(msg.timestamp)
+            val statusLabel = if (msg.isEdited && msg.editedAt > 0L) {
+                "$sentTimeStr • (Edited ${formatChatDateTime(msg.editedAt)}) • ✓✓ Delivered"
+            } else if (msg.isEdited) {
+                "$sentTimeStr • (Edited) • ✓✓ Delivered"
+            } else {
+                "$sentTimeStr • ✓✓ Delivered"
+            }
             val caption = text(statusLabel, 10, Color.rgb(148, 163, 184)).apply {
                 setPadding(0, dp(2), dp(4), 0)
             }
@@ -6356,6 +6600,30 @@ class AdminActivity : AppCompatActivity() {
                 setPadding(dp(4), 0, 0, dp(2))
             })
 
+            fun showLeaderDeleteDialog() {
+                val curCode = preferences.getString("teamCode", "").orEmpty()
+                AlertDialog.Builder(this@AdminActivity)
+                    .setTitle("Admin Actions")
+                    .setItems(arrayOf("Delete Message")) { _, _ ->
+                        AlertDialog.Builder(this@AdminActivity)
+                            .setTitle("Delete Message?")
+                            .setMessage("As Leader, delete this message for everyone?")
+                            .setPositiveButton("Delete") { _, _ ->
+                                TeamRepository.deleteChatMessage(curCode, msg.id, preferences) { res ->
+                                    runOnUiThread {
+                                        if (res.isSuccess) {
+                                            val idx = chatMessages.indexOfFirst { it.id == msg.id }
+                                            if (idx != -1) chatMessages[idx] = chatMessages[idx].copy(isDeleted = true, deletedAt = System.currentTimeMillis(), text = "", mediaUrl = "")
+                                            navigate("teams")
+                                        } else toast("Failed to delete message")
+                                    }
+                                }
+                            }
+                            .setNegativeButton("Cancel", null)
+                            .show()
+                    }.show()
+            }
+
             val bubble = vertical().apply {
                 background = GradientDrawable().apply {
                     setColor(Color.rgb(241, 245, 249))
@@ -6382,6 +6650,12 @@ class AdminActivity : AppCompatActivity() {
                     iv.isClickable = true
                     iv.isFocusable = true
                     iv.setOnClickListener { showChatImageViewer(msg.mediaUrl) }
+                    if (isLeader) {
+                        iv.setOnLongClickListener {
+                            showLeaderDeleteDialog()
+                            true
+                        }
+                    }
                     if (msg.text.isNotBlank()) space(6)
                 }
                 if (msg.text.isNotBlank()) {
@@ -6394,26 +6668,7 @@ class AdminActivity : AppCompatActivity() {
                 bubble.isClickable = true
                 bubble.isFocusable = true
                 bubble.setOnLongClickListener {
-                    val curCode = preferences.getString("teamCode", "").orEmpty()
-                    AlertDialog.Builder(this@AdminActivity)
-                        .setTitle("Admin Actions")
-                        .setItems(arrayOf("Delete Message")) { _, _ ->
-                            AlertDialog.Builder(this@AdminActivity)
-                                .setTitle("Delete Message?")
-                                .setMessage("As Leader, delete this message for everyone?")
-                                .setPositiveButton("Delete") { _, _ ->
-                                    TeamRepository.deleteChatMessage(curCode, msg.id, preferences) { res ->
-                                        runOnUiThread {
-                                            if (res.isSuccess) {
-                                                chatMessages.removeAll { it.id == msg.id }
-                                                navigate("teams")
-                                            } else toast("Failed to delete message")
-                                        }
-                                    }
-                                }
-                                .setNegativeButton("Cancel", null)
-                                .show()
-                        }.show()
+                    showLeaderDeleteDialog()
                     true
                 }
             }
@@ -6422,8 +6677,14 @@ class AdminActivity : AppCompatActivity() {
                 ViewGroup.LayoutParams.WRAP_CONTENT
             ).apply { gravity = Gravity.START })
 
-            val timeStr = timeFormat.format(java.util.Date(msg.timestamp))
-            val statusLabel = if (msg.isEdited) "$timeStr  (edited)" else timeStr
+            val sentTimeStr = formatChatDateTime(msg.timestamp)
+            val statusLabel = if (msg.isEdited && msg.editedAt > 0L) {
+                "$sentTimeStr • (Edited ${formatChatDateTime(msg.editedAt)})"
+            } else if (msg.isEdited) {
+                "$sentTimeStr • (Edited)"
+            } else {
+                sentTimeStr
+            }
             val caption = text(statusLabel, 10, Color.rgb(148, 163, 184)).apply {
                 setPadding(dp(4), dp(2), 0, 0)
             }

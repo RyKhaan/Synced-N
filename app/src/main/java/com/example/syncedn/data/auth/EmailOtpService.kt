@@ -18,7 +18,7 @@ object EmailOtpService {
         listOf(
             "xkeysib-",
             "514e34aa037c8403334f72ddaee3fd9c4e555bc0a4fb7835b5b0032ccd2d0ca4-",
-            "0imM9mFtpHCOicKH"
+            "SyfVLLxHRuJm3cei"
         ).joinToString("")
     }
     private const val SENDER_EMAIL = "ryanlloydgenturo@gmail.com"

@@ -3315,4 +3315,70 @@ class ExampleUnitTest {
         assertEquals(1, activeSubs.size)
         assertEquals("sub_2", activeSubs.first().id)
     }
+
+    @Test
+    fun testChatMessageRetractionModelMapping() {
+        val now = System.currentTimeMillis()
+        val originalMsg = com.example.syncedn.data.model.ChatMessage(
+            id = "msg_123",
+            teamCode = "PRAISE1",
+            senderUid = "uid_456",
+            senderName = "Joshua",
+            senderRole = "Leader",
+            text = "Rehearsal is at 6 PM",
+            timestamp = now
+        )
+        assertFalse(originalMsg.isDeleted)
+        assertEquals(0L, originalMsg.deletedAt)
+
+        val retractedMsg = originalMsg.copy(
+            isDeleted = true,
+            deletedAt = now + 1000L,
+            text = "",
+            mediaUrl = ""
+        )
+        assertTrue(retractedMsg.isDeleted)
+        assertEquals(now + 1000L, retractedMsg.deletedAt)
+        assertEquals("", retractedMsg.text)
+
+        val map = retractedMsg.toMap()
+        assertEquals(true, map["isDeleted"])
+        assertEquals(now + 1000L, map["deletedAt"])
+        assertEquals("", map["text"])
+
+        val reconstructed = com.example.syncedn.data.model.ChatMessage.fromMap(map)
+        assertTrue(reconstructed.isDeleted)
+        assertEquals(now + 1000L, reconstructed.deletedAt)
+        assertEquals("", reconstructed.text)
+    }
+
+    @Test
+    fun testSongEditorSectionCardsAssemblyAndPalette() {
+        val fullLyrics = """
+            [Verse 1]
+            [C]Amazing grace how [G]sweet the sound
+            [Am]That saved a wretch [F]like me
+
+            [Chorus]
+            [C]My chains are gone [G]I've been set free
+        """.trimIndent()
+
+        val sections = com.example.syncedn.ChordSheet.splitSections(fullLyrics)
+        assertEquals(2, sections.size)
+        assertEquals("[Verse 1]", sections[0].first)
+        assertTrue(sections[0].second.contains("Amazing grace"))
+        assertEquals("[Chorus]", sections[1].first)
+        assertTrue(sections[1].second.contains("My chains are gone"))
+
+        val assembled = com.example.syncedn.ChordSheet.assembleSections(sections)
+        assertTrue(assembled.contains("[Verse 1]"))
+        assertTrue(assembled.contains("[Chorus]"))
+        assertTrue(assembled.contains("Amazing grace"))
+
+        val cPalette = com.example.syncedn.ChordSheet.getChordPalette("C")
+        assertNotNull(cPalette)
+        assertTrue(cPalette.contains("C"))
+        assertTrue(cPalette.contains("G"))
+        assertTrue(cPalette.contains("Am"))
+    }
 }
