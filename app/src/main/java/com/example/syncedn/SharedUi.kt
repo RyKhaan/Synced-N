@@ -1,13 +1,23 @@
 package com.example.syncedn
 
+import android.animation.ObjectAnimator
+import android.animation.PropertyValuesHolder
+import android.animation.ValueAnimator
 import android.content.Context
+import android.content.res.ColorStateList
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.ColorFilter
 import android.graphics.Paint
 import android.graphics.PixelFormat
 import android.graphics.drawable.Drawable
+import android.graphics.drawable.GradientDrawable
+import android.graphics.drawable.RippleDrawable
+import android.view.MotionEvent
 import android.view.View
+import android.view.animation.AccelerateDecelerateInterpolator
+import android.view.animation.DecelerateInterpolator
+import android.view.animation.OvershootInterpolator
 import androidx.core.graphics.PathParser
 import androidx.core.graphics.withScale
 import androidx.core.graphics.withTranslation
@@ -78,6 +88,79 @@ object UI {
     const val countrySpinner = 1061
     const val languageSpinner = 1062
     const val saveProfileButton = 1063
+}
+
+object UiMotion {
+    fun applyPressScale(view: View, scaleFactor: Float = 0.95f) {
+        view.isClickable = true
+        view.isFocusable = true
+        view.setOnTouchListener { v, event ->
+            when (event.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    v.animate()
+                        .scaleX(scaleFactor)
+                        .scaleY(scaleFactor)
+                        .setDuration(90)
+                        .setInterpolator(DecelerateInterpolator())
+                        .start()
+                }
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    v.animate()
+                        .scaleX(1.0f)
+                        .scaleY(1.0f)
+                        .setDuration(160)
+                        .setInterpolator(OvershootInterpolator(1.4f))
+                        .start()
+                }
+            }
+            false
+        }
+    }
+
+    fun animateScreenEntry(view: View, offsetDp: Float = 14f) {
+        view.alpha = 0f
+        view.translationY = offsetDp * view.resources.displayMetrics.density
+        view.animate()
+            .alpha(1f)
+            .translationY(0f)
+            .setDuration(220)
+            .setInterpolator(DecelerateInterpolator(1.8f))
+            .start()
+    }
+
+    fun animateTabBounce(view: View) {
+        view.scaleX = 0.85f
+        view.scaleY = 0.85f
+        view.animate()
+            .scaleX(1.0f)
+            .scaleY(1.0f)
+            .setDuration(240)
+            .setInterpolator(OvershootInterpolator(2.2f))
+            .start()
+    }
+
+    fun createModernRipple(baseColor: Int, cornerRadiusPx: Float, strokeWidthPx: Int = 0, strokeColor: Int = 0): Drawable {
+        val shape = GradientDrawable().apply {
+            setColor(baseColor)
+            cornerRadius = cornerRadiusPx
+            if (strokeWidthPx > 0 && strokeColor != 0) {
+                setStroke(strokeWidthPx, strokeColor)
+            }
+        }
+        if (android.os.Build.VERSION.SDK_INT >= 21) {
+            val mask = GradientDrawable().apply {
+                setColor(Color.WHITE)
+                cornerRadius = cornerRadiusPx
+            }
+            val r = Color.red(baseColor) / 255.0
+            val g = Color.green(baseColor) / 255.0
+            val b = Color.blue(baseColor) / 255.0
+            val lum = 0.299 * r + 0.587 * g + 0.114 * b
+            val rippleColor = if (lum < 0.55) Color.argb(45, 255, 255, 255) else Color.argb(32, 126, 7, 173)
+            return RippleDrawable(ColorStateList.valueOf(rippleColor), shape, mask)
+        }
+        return shape
+    }
 }
 
 @Suppress("ViewConstructor")

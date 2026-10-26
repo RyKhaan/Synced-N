@@ -2,9 +2,9 @@ name: Android CI/CD & APK Release
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [ "main", "Ui-Redesign" ]
   pull_request:
-    branches: [ "main" ]
+    branches: [ "main", "Ui-Redesign" ]
   workflow_dispatch:
 
 permissions:
