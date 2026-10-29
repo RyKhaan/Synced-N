@@ -737,7 +737,8 @@ object TeamRepository {
                     ?: (if (mWithPhoto.uid.isNotBlank()) p.getString("user_role_${mWithPhoto.uid}", "")?.takeIf { it.isNotBlank() } else null)
             }
             val isExplicitSubLeader = isSubstituteLeader(mWithPhoto.ministryRole) && !mWithPhoto.role.equals("Member", ignoreCase = true)
-            val isDemotedMember = !isPrimary && !isExplicitSubLeader && (
+            val isExplicitWorshipLeader = isWorshipLeader(mWithPhoto.ministryRole, mWithPhoto.role) && !mWithPhoto.role.equals("Member", ignoreCase = true)
+            val isDemotedMember = !isPrimary && !isExplicitSubLeader && !isExplicitWorshipLeader && (
                 mWithPhoto.role.equals("Member", true) ||
                 isOrdinaryMemberRole(mWithPhoto.ministryRole, mWithPhoto.role) ||
                 prefRole.equals("Member", true)
@@ -751,14 +752,14 @@ object TeamRepository {
                 }
             } else if (isExplicitSubLeader) {
                 mWithPhoto.copy(role = "Leader", ministryRole = "Substitute Leader")
-            } else if (isDemotedMember) {
-                val cleanMinistry = if (isSubstituteLeader(mWithPhoto.ministryRole)) "Member" else mWithPhoto.ministryRole.ifBlank { "Member" }
-                mWithPhoto.copy(role = "Member", ministryRole = cleanMinistry)
-            } else if (isWorshipLeader(mWithPhoto.ministryRole, mWithPhoto.role)) {
+            } else if (isExplicitWorshipLeader) {
                 mWithPhoto.copy(
                     role = "Leader",
                     ministryRole = "Worship Leader"
                 )
+            } else if (isDemotedMember) {
+                val cleanMinistry = if (isSubstituteLeader(mWithPhoto.ministryRole)) "Member" else mWithPhoto.ministryRole.ifBlank { "Member" }
+                mWithPhoto.copy(role = "Member", ministryRole = cleanMinistry)
             } else {
                 mWithPhoto.copy(role = "Member", ministryRole = mWithPhoto.ministryRole.ifBlank { "Member" })
             }
@@ -1410,6 +1411,7 @@ object TeamRepository {
         // 2. Update new leader's user document
         val newLeaderRef = db.collection(USERS_COLLECTION).document(newLeaderUid)
         batch.update(newLeaderRef, mapOf<String, Any>(
+            "uid" to newLeaderUid,
             "role" to "Leader",
             "ministryRole" to "Worship Leader"
         ))
@@ -1417,6 +1419,7 @@ object TeamRepository {
         // 3. Update old leader's user document
         val oldLeaderRef = db.collection(USERS_COLLECTION).document(currentLeaderUid)
         batch.update(oldLeaderRef, mapOf<String, Any>(
+            "uid" to currentLeaderUid,
             "role" to "Member",
             "ministryRole" to "Member"
         ))
@@ -1424,13 +1427,14 @@ object TeamRepository {
         batch.commit()
             .addOnSuccessListener {
                 val cleanEmail = newLeaderEmail.trim().lowercase()
+                val cleanOldEmail = oldLeaderEmail.trim().lowercase()
                 for ((_, roster) in cachedRosters) {
                     synchronized(roster) {
-                        val oldIdx = roster.indexOfFirst { it.uid == currentLeaderUid }
+                        val oldIdx = roster.indexOfFirst { it.uid == currentLeaderUid || (cleanOldEmail.isNotBlank() && it.email.equals(cleanOldEmail, true)) }
                         if (oldIdx >= 0) {
                             roster[oldIdx] = roster[oldIdx].copy(role = "Member", ministryRole = "Member")
                         }
-                        val newIdx = roster.indexOfFirst { it.uid == newLeaderUid }
+                        val newIdx = roster.indexOfFirst { it.uid == newLeaderUid || (cleanEmail.isNotBlank() && it.email.equals(cleanEmail, true)) }
                         if (newIdx >= 0) {
                             roster[newIdx] = roster[newIdx].copy(role = "Leader", ministryRole = "Worship Leader")
                         }
@@ -1443,11 +1447,56 @@ object TeamRepository {
                         putString(com.example.syncedn.data.auth.SessionManager.KEY_ROLE, "Member")
                         putString("ministryRole", "Member")
                         putString(com.example.syncedn.data.auth.SessionManager.KEY_MINISTRY_ROLE, "Member")
+                        if (currentLeaderUid.isNotBlank()) {
+                            putString("user_role_$currentLeaderUid", "Member")
+                            putString("user_ministry_$currentLeaderUid", "Member")
+                        }
+                        if (cleanOldEmail.isNotBlank()) {
+                            putString("email_role_$cleanOldEmail", "Member")
+                            putString("email_ministry_$cleanOldEmail", "Member")
+                        }
+                        if (newLeaderUid.isNotBlank()) {
+                            putString("user_role_$newLeaderUid", "Leader")
+                            putString("user_ministry_$newLeaderUid", "Worship Leader")
+                        }
+                        if (cleanEmail.isNotBlank()) {
+                            putString("email_role_$cleanEmail", "Leader")
+                            putString("email_ministry_$cleanEmail", "Worship Leader")
+                        }
                         val cleanTeamLower = preferences.getString("teamName", "").orEmpty().trim().lowercase()
                         if (cleanTeamLower.isNotBlank() && cleanEmail.isNotBlank()) {
                             putString("team_leader_email_$cleanTeamLower", cleanEmail)
                         }
+                        try {
+                            val map = org.json.JSONObject(preferences.getString(com.example.syncedn.data.auth.SessionManager.KEY_MEMBER_ROLES, "{}").orEmpty())
+                            if (currentLeaderUid.isNotBlank()) map.put(currentLeaderUid, "Member")
+                            if (cleanOldEmail.isNotBlank()) map.put(cleanOldEmail, "Member")
+                            if (newLeaderUid.isNotBlank()) map.put(newLeaderUid, "Worship Leader")
+                            if (cleanEmail.isNotBlank()) map.put(cleanEmail, "Worship Leader")
+                            if (newLeaderName.isNotBlank()) map.put(newLeaderName, "Worship Leader")
+                            putString(com.example.syncedn.data.auth.SessionManager.KEY_MEMBER_ROLES, map.toString())
+                        } catch (_: Throwable) {}
                     }
+                }
+                if (cleanEmail.isNotBlank()) {
+                    try {
+                        db.collection(USERS_COLLECTION)
+                            .whereEqualTo("email", cleanEmail)
+                            .get()
+                            .addOnSuccessListener { snap ->
+                                if (snap != null) {
+                                    for (doc in snap.documents) {
+                                        if (doc.id != newLeaderUid) {
+                                            doc.reference.update(mapOf(
+                                                "uid" to doc.id,
+                                                "role" to "Leader",
+                                                "ministryRole" to "Worship Leader"
+                                            ))
+                                        }
+                                    }
+                                }
+                            }
+                    } catch (_: Throwable) {}
                 }
                 onComplete(Result.success(Unit))
             }

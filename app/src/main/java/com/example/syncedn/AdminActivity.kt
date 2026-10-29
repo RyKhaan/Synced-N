@@ -731,7 +731,7 @@ class AdminActivity : AppCompatActivity() {
 
         // 2. Permanent Worship Leader in Firestore
         if (TeamRepository.isWorshipLeader(remoteMinistryRole, remoteRole)) {
-            val wasSub = currentMinistry.equals("Substitute Leader", ignoreCase = true)
+            val wasNotWorshipLeader = !currentMinistry.equals("Worship Leader", ignoreCase = true)
             preferences.edit {
                 putString("role", "Leader")
                 putString(SessionManager.KEY_ROLE, "Leader")
@@ -744,12 +744,26 @@ class AdminActivity : AppCompatActivity() {
                 if (emailLower.isNotBlank()) {
                     putString("email_role_$emailLower", "Leader")
                     putString("email_ministry_$emailLower", "Worship Leader")
+                    val sig = com.example.syncedn.data.util.ValidationUtils.computeSessionHmac(emailLower, "Leader", myUid)
+                    if (sig.isNotBlank()) putString("session_hmac_sig_$emailLower", sig)
                 }
                 if (cleanTeamLower.isNotBlank() && emailLower.isNotBlank()) {
                     putString("team_leader_email_$cleanTeamLower", emailLower)
                 }
+                try {
+                    val map = org.json.JSONObject(preferences.getString(SessionManager.KEY_MEMBER_ROLES, "{}").orEmpty())
+                    if (myUid.isNotBlank()) map.put(myUid, "Worship Leader")
+                    if (emailLower.isNotBlank()) map.put(emailLower, "Worship Leader")
+                    putString(SessionManager.KEY_MEMBER_ROLES, map.toString())
+                } catch (_: Throwable) {}
             }
-            if (wasSub) {
+            if (wasNotWorshipLeader) {
+                teamRoster = teamRoster.map { m ->
+                    if ((myUid.isNotBlank() && m.uid == myUid) ||
+                        (emailLower.isNotBlank() && m.email.trim().lowercase() == emailLower)) {
+                        m.copy(role = "Leader", ministryRole = "Worship Leader")
+                    } else m
+                }
                 com.example.syncedn.data.auth.SyncedMessagingService.dispatchSystemNotification(
                     this@AdminActivity,
                     preferences,
@@ -759,6 +773,10 @@ class AdminActivity : AppCompatActivity() {
                 runOnUiThread {
                     if (!isFinishing && !isDestroyed) {
                         toast("You are now the Worship Leader of $teamName!")
+                        updateRosterViews()
+                        if (page in listOf("home", "roleEdit", "teams")) {
+                            navigate(page, triggerRefresh = false)
+                        }
                     }
                 }
             }
@@ -3035,7 +3053,8 @@ class AdminActivity : AppCompatActivity() {
                 val isPrimaryLeader = emailLower == "ryanlloydgenturo@gmail.com" ||
                                       m.fullName.equals("Ryan Lloyd Genturo", ignoreCase = true)
                 val isExplicitSubInModel = TeamRepository.isSubstituteLeader(m.ministryRole) && !m.role.equals("Member", ignoreCase = true)
-                val isExplicitlyMember = !isPrimaryLeader && !isExplicitSubInModel && (
+                val isExplicitWorshipInModel = TeamRepository.isWorshipLeader(m.ministryRole, m.role) && !m.role.equals("Member", ignoreCase = true)
+                val isExplicitlyMember = !isPrimaryLeader && !isExplicitSubInModel && !isExplicitWorshipInModel && (
                     m.role.equals("Member", true) ||
                     TeamRepository.isOrdinaryMemberRole(m.ministryRole, m.role) ||
                     preferences.getString("user_role_${m.uid}", "").equals("Member", true) ||

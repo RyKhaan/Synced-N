@@ -3846,5 +3846,24 @@ class ExampleUnitTest {
         )
         assertEquals("Guitarist", memberPrefs.getString("email_ministry_sub1@test.com", ""))
         assertEquals("Member", memberPrefs.getString("email_role_sub1@test.com", ""))
+
+        // 4. Transfer Leadership to Substitute Leader / Member:
+        //    Even when preferences previously had email_role_ = "Member" or ministryRole = "Substitute Leader",
+        //    when the Worship Leader leaves and transfers leadership (ministryRole="Worship Leader", role="Leader"),
+        //    deduplicateRoster must NEVER overwrite Worship Leader back to Member!
+        val transferredRaw = listOf(
+            com.example.syncedn.data.model.TeamMember(
+                uid = "uid_sub_1",
+                fullName = "Sub Member",
+                username = "sub1",
+                email = "sub1@test.com",
+                role = "Leader",
+                ministryRole = "Worship Leader",
+                teamCode = "GRC001"
+            )
+        )
+        val dedupedAfterTransfer = repo.deduplicateRoster(transferredRaw, memberPrefs)
+        assertEquals("Worship Leader", dedupedAfterTransfer.single().ministryRole)
+        assertEquals("Leader", dedupedAfterTransfer.single().role)
     }
 }
