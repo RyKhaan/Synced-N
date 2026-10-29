@@ -150,6 +150,7 @@ open class MemberActivity : AppCompatActivity() {
     private var rosterListener: com.google.firebase.firestore.ListenerRegistration? = null
     private var customRolesListener: com.google.firebase.firestore.ListenerRegistration? = null
     private var userMembershipListener: com.google.firebase.firestore.ListenerRegistration? = null
+    private var teamDocListener: com.google.firebase.firestore.ListenerRegistration? = null
     private var userEmailMembershipListener: com.google.firebase.firestore.ListenerRegistration? = null
     private var isShowingRemovedDialog = false
     private var isSwitchingToLeaderDashboard = false
@@ -305,6 +306,12 @@ open class MemberActivity : AppCompatActivity() {
             }
         }
         substitutionsListener?.remove()
+        teamDocListener?.remove()
+        teamDocListener = TeamRepository.subscribeToTeam(code, preferences) {
+            runOnUiThread {
+                handleTeamDeletedRemotely()
+            }
+        }
         substitutionsListener = TeamRepository.subscribeToSubstitutions(code, preferences) { _ ->
             runOnUiThread {
                 if (!isFinishing && !isDestroyed) {
@@ -709,6 +716,7 @@ open class MemberActivity : AppCompatActivity() {
         }
         if (myCurrentEmail.isNotBlank()) {
             userEmailMembershipListener?.remove()
+        teamDocListener?.remove()
             userEmailMembershipListener = com.google.firebase.firestore.FirebaseFirestore.getInstance()
                 .collection("users").whereEqualTo("email", myCurrentEmail)
                 .addSnapshotListener { snapshot, error ->
@@ -839,7 +847,9 @@ open class MemberActivity : AppCompatActivity() {
         userMembershipListener?.remove()
         userMembershipListener = null
         userEmailMembershipListener?.remove()
+        teamDocListener?.remove()
         userEmailMembershipListener = null
+        teamDocListener = null
     }
 
     override fun onSaveInstanceState(outState: Bundle) {
@@ -3138,6 +3148,28 @@ open class MemberActivity : AppCompatActivity() {
     private val lineupSongs = mutableListOf("Amazing Grace", "Way Maker", "Goodness of God", "Build My Life")
     private var teamRoster: List<TeamMember> = emptyList()
 
+    private fun handleTeamDeletedRemotely() {
+        if (isFinishing || isDestroyed) return
+        val currentCode = preferences.getString("teamCode", "").orEmpty()
+        if (currentCode.isBlank() && page == "teamChoice") return
+        toast("The team has been deleted by the leader.")
+        val uid = currentUserId()
+        if (uid.isNotBlank()) {
+            FirestoreManager.clearUserTeam(uid)
+        }
+        preferences.edit {
+            remove("teamCode")
+            remove("teamName")
+            remove(SessionManager.KEY_TEAM_CODE)
+            remove("saved_team_code")
+            remove("saved_team_name")
+            remove("last_active_team_code")
+            remove("ministryRole")
+        }
+        teamRoster = emptyList()
+        navigate("teamChoice")
+    }
+
     private fun getActiveRoster(): List<TeamMember> {
         val currentCode = preferences.getString("teamCode", "").orEmpty()
             .ifBlank { FirestoreManager.findCodeByTeamName(teamName).orEmpty() }
@@ -3581,36 +3613,86 @@ open class MemberActivity : AppCompatActivity() {
         val onClick: () -> Unit
     )
 
+    private fun normalizeToIsoDate(raw: String): String {
+        val trimmed = raw.trim()
+        if (trimmed.matches(Regex("""^\d{4}-\d{2}-\d{2}$"""))) return trimmed
+        val tz = java.util.TimeZone.getTimeZone("Asia/Manila")
+        val patterns = listOf(
+            "MMM d, yyyy",
+            "MMM dd, yyyy",
+            "MMMM d, yyyy",
+            "MMMM dd, yyyy",
+            "d MMM yyyy",
+            "dd MMM yyyy",
+            "yyyy/MM/dd",
+            "MM/dd/yyyy",
+            "M/d/yyyy"
+        )
+        for (pat in patterns) {
+            try {
+                val sdf = java.text.SimpleDateFormat(pat, java.util.Locale.US).apply {
+                    timeZone = tz
+                    isLenient = false
+                }
+                val parsed = sdf.parse(trimmed)
+                if (parsed != null) {
+                    return java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).apply {
+                        timeZone = tz
+                    }.format(parsed)
+                }
+            } catch (_: Exception) {}
+        }
+        return trimmed
+    }
+
     private fun isEventPast(dateStr: String, endTimeStr: String, startTimeStr: String = ""): Boolean {
         if (dateStr.isBlank()) return false
-        val today = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).format(java.util.Date())
-        if (dateStr < today) return true
-        if (dateStr > today) return false
+        val isoDate = normalizeToIsoDate(dateStr)
+        val tz = java.util.TimeZone.getTimeZone("Asia/Manila")
+        val today = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).apply {
+            timeZone = tz
+        }.format(java.util.Date())
 
-        val now = java.util.Calendar.getInstance()
-        val currentMinutes = now.get(java.util.Calendar.HOUR_OF_DAY) * 60 + now.get(java.util.Calendar.MINUTE)
-        val timeToParse = endTimeStr.ifBlank { startTimeStr }
+        if (isoDate < today) return true
+        if (isoDate > today) return false
+
+        val cal = java.util.Calendar.getInstance(tz)
+        val currentMinutes = cal.get(java.util.Calendar.HOUR_OF_DAY) * 60 + cal.get(java.util.Calendar.MINUTE)
+        val effEnd = if (endTimeStr.contains("–") || endTimeStr.contains("-")) {
+            endTimeStr.split(Regex("""[–—\-]""")).last().trim()
+        } else {
+            endTimeStr.trim()
+        }
+        val effStart = if (startTimeStr.contains("–") || startTimeStr.contains("-")) {
+            startTimeStr.split(Regex("""[–—\-]""")).first().trim()
+        } else {
+            startTimeStr.trim()
+        }
+        val timeToParse = effEnd.ifBlank { effStart }
         if (timeToParse.isBlank()) return false
 
         val eventMinutes = parseTimeToMinutes(timeToParse) ?: return false
-        val thresholdMinutes = if (endTimeStr.isBlank()) eventMinutes + 120 else eventMinutes
+        val thresholdMinutes = if (effEnd.isBlank()) eventMinutes + 120 else eventMinutes
         return currentMinutes >= thresholdMinutes
     }
 
     private fun parseTimeToMinutes(raw: String): Int? {
         return try {
             val trimmed = raw.trim().uppercase()
-            if (trimmed.contains("AM") || trimmed.contains("PM")) {
-                val isPm = trimmed.contains("PM")
-                val clean = trimmed.replace("AM", "").replace("PM", "").trim()
+            val target = if (trimmed.contains("–") || trimmed.contains("-")) {
+                trimmed.split(Regex("""[–—\-]""")).last().trim()
+            } else trimmed
+            if (target.contains("AM") || target.contains("PM")) {
+                val isPm = target.contains("PM")
+                val clean = target.replace("AM", "").replace("PM", "").trim()
                 val parts = clean.split(":")
                 var hour = parts[0].trim().toInt()
                 val minute = if (parts.size > 1) parts[1].trim().toInt() else 0
                 if (isPm && hour < 12) hour += 12
                 if (!isPm && hour == 12) hour = 0
                 hour * 60 + minute
-            } else if (trimmed.contains(":")) {
-                val parts = trimmed.split(":")
+            } else if (target.contains(":")) {
+                val parts = target.split(":")
                 val hour = parts[0].trim().toInt()
                 val minute = if (parts.size > 1) parts[1].trim().toInt() else 0
                 hour * 60 + minute
@@ -3689,7 +3771,7 @@ open class MemberActivity : AppCompatActivity() {
                 val rVenue = rehObj?.optString("venue").orEmpty()
                     .ifBlank { record.optString("rehearsalVenue").orEmpty() }
                     .ifBlank { venue }
-                val rIsPast = isEventPast(rDate, rEnd, rStart)
+                val rIsPast = isEventPast(rDate, rEnd.ifBlank { rTime }, rStart)
 
                 cardItems.add(ScheduleCardItem(
                     title = "$title (Rehearsal)",

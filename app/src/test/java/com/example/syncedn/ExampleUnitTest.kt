@@ -3960,4 +3960,201 @@ class ExampleUnitTest {
         assertEquals("Member", dedupedDemoted2.first().role)
         assertEquals("Keyboardist", dedupedDemoted2.first().ministryRole)
     }
+
+    @Test
+    fun testRehearsalScheduleDateNormalizationAndTimeSync() {
+        fun normalizeToIsoDate(raw: String): String {
+            val trimmed = raw.trim()
+            if (trimmed.matches(Regex("""^\d{4}-\d{2}-\d{2}$"""))) return trimmed
+            val tz = java.util.TimeZone.getTimeZone("Asia/Manila")
+            val patterns = listOf(
+                "MMM d, yyyy",
+                "MMM dd, yyyy",
+                "MMMM d, yyyy",
+                "MMMM dd, yyyy",
+                "d MMM yyyy",
+                "dd MMM yyyy",
+                "yyyy/MM/dd",
+                "MM/dd/yyyy",
+                "M/d/yyyy"
+            )
+            for (pat in patterns) {
+                try {
+                    val sdf = java.text.SimpleDateFormat(pat, java.util.Locale.US).apply {
+                        timeZone = tz
+                        isLenient = false
+                    }
+                    val parsed = sdf.parse(trimmed)
+                    if (parsed != null) {
+                        return java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).apply {
+                            timeZone = tz
+                        }.format(parsed)
+                    }
+                } catch (_: Exception) {}
+            }
+            return trimmed
+        }
+
+        fun parseTimeToMinutes(raw: String): Int? {
+            return try {
+                val trimmed = raw.trim().uppercase()
+                val target = if (trimmed.contains("–") || trimmed.contains("-")) {
+                    trimmed.split(Regex("""[–—\-]""")).last().trim()
+                } else trimmed
+                if (target.contains("AM") || target.contains("PM")) {
+                    val isPm = target.contains("PM")
+                    val clean = target.replace("AM", "").replace("PM", "").trim()
+                    val parts = clean.split(":")
+                    var hour = parts[0].trim().toInt()
+                    val minute = if (parts.size > 1) parts[1].trim().toInt() else 0
+                    if (isPm && hour < 12) hour += 12
+                    if (!isPm && hour == 12) hour = 0
+                    hour * 60 + minute
+                } else if (target.contains(":")) {
+                    val parts = target.split(":")
+                    val hour = parts[0].trim().toInt()
+                    val minute = if (parts.size > 1) parts[1].trim().toInt() else 0
+                    hour * 60 + minute
+                } else null
+            } catch (_: Exception) { null }
+        }
+
+        fun isEventPast(dateStr: String, endTimeStr: String, startTimeStr: String = "", fixedNowMinutes: Int = 1200): Boolean {
+            if (dateStr.isBlank()) return false
+            val isoDate = normalizeToIsoDate(dateStr)
+            val tz = java.util.TimeZone.getTimeZone("Asia/Manila")
+            val today = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).apply {
+                timeZone = tz
+            }.format(java.util.Date())
+
+            if (isoDate < today) return true
+            if (isoDate > today) return false
+
+            val currentMinutes = fixedNowMinutes // simulate 8:00 PM (20:00 = 1200 mins)
+            val effEnd = if (endTimeStr.contains("–") || endTimeStr.contains("-")) {
+                endTimeStr.split(Regex("""[–—\-]""")).last().trim()
+            } else {
+                endTimeStr.trim()
+            }
+            val effStart = if (startTimeStr.contains("–") || startTimeStr.contains("-")) {
+                startTimeStr.split(Regex("""[–—\-]""")).first().trim()
+            } else {
+                startTimeStr.trim()
+            }
+            val timeToParse = effEnd.ifBlank { effStart }
+            if (timeToParse.isBlank()) return false
+
+            val eventMinutes = parseTimeToMinutes(timeToParse) ?: return false
+            val thresholdMinutes = if (effEnd.isBlank()) eventMinutes + 120 else eventMinutes
+            return currentMinutes >= thresholdMinutes
+        }
+
+        // 1. Date normalization
+        assertEquals("2026-10-13", normalizeToIsoDate("Oct 13, 2026"))
+        assertEquals("2026-10-13", normalizeToIsoDate("October 13, 2026"))
+        assertEquals("2026-10-13", normalizeToIsoDate("2026-10-13"))
+        assertEquals("2026-10-13", normalizeToIsoDate("13 Oct 2026"))
+
+        // 2. Time range parsing
+        assertEquals(21 * 60, parseTimeToMinutes("7:00PM – 9:00PM")) // end time 9:00 PM = 1260 mins
+        assertEquals(19 * 60, parseTimeToMinutes("19:00")) // 19:00 = 1140 mins
+
+        // 3. Past and future evaluations
+        val tz = java.util.TimeZone.getTimeZone("Asia/Manila")
+        val todayStr = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).apply { timeZone = tz }.format(java.util.Date())
+        val yesterdayStr = "2020-01-01"
+        val nextYearStr = "2030-01-01"
+
+        assertTrue("Past date is always past", isEventPast(yesterdayStr, "9:00PM"))
+        assertFalse("Future date is never past", isEventPast(nextYearStr, "9:00PM"))
+
+        // Today at 8:00 PM (1200 mins):
+        // Rehearsal ending at 7:00 PM (1140 mins) should be PAST:
+        assertTrue("Event ended at 7:00 PM is past at 8:00 PM", isEventPast(todayStr, "7:00PM", fixedNowMinutes = 1200))
+        // Rehearsal ending at 9:00 PM (1260 mins) should NOT be past at 8:00 PM:
+        assertFalse("Event ending at 9:00 PM is not past at 8:00 PM", isEventPast(todayStr, "7:00PM – 9:00PM", fixedNowMinutes = 1200))
+        // Rehearsal ending at 8:00 PM (1200 mins) IS past at 8:00 PM:
+        assertTrue("Event ending at 8:00 PM is past at 8:00 PM", isEventPast(todayStr, "8:00PM", fixedNowMinutes = 1200))
+    }
+
+    @Test
+    fun testTeamDeletionAndDeletedTeamCodeValidation() {
+        val repo = com.example.syncedn.data.database.TeamRepository
+        val fm = com.example.syncedn.data.database.FirestoreManager
+        val prefs = FakePreferences()
+
+        repo.clearCache()
+        fm.clearLocalTeams()
+
+        // 1. Create a valid team
+        val testCode = "DEL001"
+        val testName = "Delete Test Team"
+        fm.registerLocalTeam(testCode, testName)
+        assertEquals(testName, fm.getLocalTeamName(testCode))
+
+        // 2. Leader deletes the team
+        repo.deleteTeam(testCode, leaderUid = "leader_123", preferences = prefs)
+        assertTrue("Team code must be marked as deleted in repository", repo.isTeamDeleted(testCode, prefs))
+        assertNull("Team must be removed from FirestoreManager local registry", fm.getLocalTeamName(testCode))
+
+        // 3. User attempts to join with the deleted team code
+        var deleteErrorMsg = ""
+        fm.getTeamByCode(testCode) { res ->
+            if (res.isFailure) {
+                deleteErrorMsg = res.exceptionOrNull()?.message.orEmpty()
+            }
+        }
+        assertEquals("This team has been deleted.", deleteErrorMsg)
+
+        // 4. User attempts to join with a non-existent code
+        var missingErrorMsg = ""
+        fm.getTeamByCode("ZZ9999") { res ->
+            if (res.isFailure) {
+                missingErrorMsg = res.exceptionOrNull()?.message.orEmpty()
+            }
+        }
+        assertEquals("This team code is deleted or does not exist.", missingErrorMsg)
+    }
+
+    @Test
+    fun testClearAllTeamReports() {
+        val repo = com.example.syncedn.data.database.TeamRepository
+        val prefs = FakePreferences()
+        val code = "REP001"
+
+        repo.clearCache()
+
+        // Seed report locally
+        repo.submitTeamReport(
+            teamCode = code,
+            reporterUid = "uid_rep_1",
+            reporterName = "Reporter One",
+            reason = "Test report 1",
+            preferences = prefs
+        )
+        repo.submitTeamReport(
+            teamCode = code,
+            reporterUid = "uid_rep_2",
+            reporterName = "Reporter Two",
+            reason = "Test report 2",
+            preferences = prefs
+        )
+
+        // Verify reports exist in cache and preferences
+        var cached = emptyList<Map<String, Any>>()
+        repo.getTeamReports(code, prefs) { cached = it }
+        assertEquals(2, cached.size)
+
+        // Clear all reports
+        var success = false
+        repo.clearAllTeamReports(code, prefs) { res ->
+            success = res.isSuccess
+        }
+        assertTrue("clearAllTeamReports should succeed", success)
+
+        // Verify cache and preferences are now empty
+        repo.getTeamReports(code, prefs) { cached = it }
+        assertEquals(0, cached.size)
+        assertEquals("[]", prefs.getString("cached_reports_$code", ""))
+    }
 }

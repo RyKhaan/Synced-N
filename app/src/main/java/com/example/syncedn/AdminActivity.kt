@@ -512,6 +512,12 @@ class AdminActivity : AppCompatActivity() {
                     updateRosterViews()
                 }
             }
+            teamDocListener?.remove()
+            teamDocListener = TeamRepository.subscribeToTeam(activeCode, preferences) {
+                runOnUiThread {
+                    handleTeamDeletedRemotely()
+                }
+            }
         }
 
         val myAdminUid = com.example.syncedn.data.auth.AuthManager.currentUser?.uid?.takeIf { it.isNotBlank() }
@@ -536,6 +542,7 @@ class AdminActivity : AppCompatActivity() {
             }
             if (myAdminEmail.isNotBlank()) {
                 userEmailMembershipListener?.remove()
+        teamDocListener?.remove()
                 userEmailMembershipListener = com.google.firebase.firestore.FirebaseFirestore.getInstance()
                     .collection("users").whereEqualTo("email", myAdminEmail)
                     .addSnapshotListener { snapshot, error ->
@@ -893,6 +900,7 @@ class AdminActivity : AppCompatActivity() {
         rejoinRequestsListener?.remove()
         userMembershipListener?.remove()
         userEmailMembershipListener?.remove()
+        teamDocListener?.remove()
         servicesListener = null
         substitutionsListener = null
         rosterListener = null
@@ -900,6 +908,7 @@ class AdminActivity : AppCompatActivity() {
         rejoinRequestsListener = null
         userMembershipListener = null
         userEmailMembershipListener = null
+        teamDocListener = null
         super.onDestroy()
     }
 
@@ -3018,11 +3027,35 @@ class AdminActivity : AppCompatActivity() {
     private var customRolesListener: com.google.firebase.firestore.ListenerRegistration? = null
     private var rejoinRequestsListener: com.google.firebase.firestore.ListenerRegistration? = null
     private var userMembershipListener: com.google.firebase.firestore.ListenerRegistration? = null
+    private var teamDocListener: com.google.firebase.firestore.ListenerRegistration? = null
     private var activeServiceIndex = -1
     private var roleMember = "Angelo Daniel"
     private var roleMemberUid = ""
     private var roleMemberEmail = ""
     private var teamRoster: List<TeamMember> = emptyList()
+
+    private fun handleTeamDeletedRemotely() {
+        if (isFinishing || isDestroyed) return
+        val currentCode = preferences.getString("teamCode", "").orEmpty()
+        if (currentCode.isBlank() && page == "teamChoice") return
+        toast("The team has been deleted by the leader.")
+        val uid = currentUserId()
+        if (uid.isNotBlank()) {
+            FirestoreManager.clearUserTeam(uid)
+        }
+        preferences.edit {
+            remove("teamCode")
+            remove("teamName")
+            remove(SessionManager.KEY_TEAM_CODE)
+            remove("saved_team_code")
+            remove("saved_team_name")
+            remove("last_active_team_code")
+            remove("leaderRoles")
+        }
+        teamRoster = emptyList()
+        leaderRoles.clear()
+        navigate("teamChoice")
+    }
 
     private fun getActiveRoster(): List<TeamMember> {
         val currentCode = preferences.getString("teamCode", "").orEmpty()
@@ -4145,36 +4178,86 @@ class AdminActivity : AppCompatActivity() {
         val onClick: () -> Unit
     )
 
+    private fun normalizeToIsoDate(raw: String): String {
+        val trimmed = raw.trim()
+        if (trimmed.matches(Regex("""^\d{4}-\d{2}-\d{2}$"""))) return trimmed
+        val tz = java.util.TimeZone.getTimeZone("Asia/Manila")
+        val patterns = listOf(
+            "MMM d, yyyy",
+            "MMM dd, yyyy",
+            "MMMM d, yyyy",
+            "MMMM dd, yyyy",
+            "d MMM yyyy",
+            "dd MMM yyyy",
+            "yyyy/MM/dd",
+            "MM/dd/yyyy",
+            "M/d/yyyy"
+        )
+        for (pat in patterns) {
+            try {
+                val sdf = java.text.SimpleDateFormat(pat, java.util.Locale.US).apply {
+                    timeZone = tz
+                    isLenient = false
+                }
+                val parsed = sdf.parse(trimmed)
+                if (parsed != null) {
+                    return java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).apply {
+                        timeZone = tz
+                    }.format(parsed)
+                }
+            } catch (_: Exception) {}
+        }
+        return trimmed
+    }
+
     private fun isEventPast(dateStr: String, endTimeStr: String, startTimeStr: String = ""): Boolean {
         if (dateStr.isBlank()) return false
-        val today = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).format(java.util.Date())
-        if (dateStr < today) return true
-        if (dateStr > today) return false
+        val isoDate = normalizeToIsoDate(dateStr)
+        val tz = java.util.TimeZone.getTimeZone("Asia/Manila")
+        val today = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).apply {
+            timeZone = tz
+        }.format(java.util.Date())
 
-        val now = java.util.Calendar.getInstance()
-        val currentMinutes = now.get(java.util.Calendar.HOUR_OF_DAY) * 60 + now.get(java.util.Calendar.MINUTE)
-        val timeToParse = endTimeStr.ifBlank { startTimeStr }
+        if (isoDate < today) return true
+        if (isoDate > today) return false
+
+        val cal = java.util.Calendar.getInstance(tz)
+        val currentMinutes = cal.get(java.util.Calendar.HOUR_OF_DAY) * 60 + cal.get(java.util.Calendar.MINUTE)
+        val effEnd = if (endTimeStr.contains("–") || endTimeStr.contains("-")) {
+            endTimeStr.split(Regex("""[–—\-]""")).last().trim()
+        } else {
+            endTimeStr.trim()
+        }
+        val effStart = if (startTimeStr.contains("–") || startTimeStr.contains("-")) {
+            startTimeStr.split(Regex("""[–—\-]""")).first().trim()
+        } else {
+            startTimeStr.trim()
+        }
+        val timeToParse = effEnd.ifBlank { effStart }
         if (timeToParse.isBlank()) return false
 
         val eventMinutes = parseTimeToMinutes(timeToParse) ?: return false
-        val thresholdMinutes = if (endTimeStr.isBlank()) eventMinutes + 120 else eventMinutes
+        val thresholdMinutes = if (effEnd.isBlank()) eventMinutes + 120 else eventMinutes
         return currentMinutes >= thresholdMinutes
     }
 
     private fun parseTimeToMinutes(raw: String): Int? {
         return try {
             val trimmed = raw.trim().uppercase()
-            if (trimmed.contains("AM") || trimmed.contains("PM")) {
-                val isPm = trimmed.contains("PM")
-                val clean = trimmed.replace("AM", "").replace("PM", "").trim()
+            val target = if (trimmed.contains("–") || trimmed.contains("-")) {
+                trimmed.split(Regex("""[–—\-]""")).last().trim()
+            } else trimmed
+            if (target.contains("AM") || target.contains("PM")) {
+                val isPm = target.contains("PM")
+                val clean = target.replace("AM", "").replace("PM", "").trim()
                 val parts = clean.split(":")
                 var hour = parts[0].trim().toInt()
                 val minute = if (parts.size > 1) parts[1].trim().toInt() else 0
                 if (isPm && hour < 12) hour += 12
                 if (!isPm && hour == 12) hour = 0
                 hour * 60 + minute
-            } else if (trimmed.contains(":")) {
-                val parts = trimmed.split(":")
+            } else if (target.contains(":")) {
+                val parts = target.split(":")
                 val hour = parts[0].trim().toInt()
                 val minute = if (parts.size > 1) parts[1].trim().toInt() else 0
                 hour * 60 + minute
@@ -4223,7 +4306,7 @@ class AdminActivity : AppCompatActivity() {
                 val rVenue = rehObj?.optString("venue").orEmpty()
                     .ifBlank { record.optString("rehearsalVenue").orEmpty() }
                     .ifBlank { venue }
-                val rIsPast = isEventPast(rDate, rEnd, rStart)
+                val rIsPast = isEventPast(rDate, rEnd.ifBlank { rTime }, rStart)
 
                 items.add(ScheduleCardItem(
                     title = "$title (Rehearsal)",
@@ -7626,6 +7709,15 @@ class AdminActivity : AppCompatActivity() {
     }
     private fun teamDetailsView(): View {
         val root = FrameLayout(this).apply { setBackgroundColor(Color.WHITE) }
+        val userEmail = preferences.getString("email", "").orEmpty().trim().lowercase()
+        val cleanTeamLower = teamName.trim().lowercase()
+        val teamLeaderEmail = preferences.getString("team_leader_email_$cleanTeamLower", "").orEmpty().trim().lowercase()
+        val userMinistry = preferences.getString("ministryRole", "").orEmpty()
+        val userRole = preferences.getString("role", "").orEmpty()
+        val isSubLeader = userMinistry.equals("Substitute Leader", ignoreCase = true)
+        val isLeaderAccount = userEmail == "ryanlloydgenturo@gmail.com" ||
+                              (!isSubLeader && teamLeaderEmail.isNotBlank() && teamLeaderEmail == userEmail) ||
+                              (!isSubLeader && userRole.equals("Leader", ignoreCase = true))
 
         val mainCol = vertical().apply { setBackgroundColor(Color.WHITE) }
         mainCol.add(teamHeader(), -1, 88)
@@ -7745,6 +7837,9 @@ class AdminActivity : AppCompatActivity() {
                 val cardsCol = vertical()
                 scroll.addView(cardsCol, android.widget.FrameLayout.LayoutParams(-1, -2))
 
+                val countLabel = text("Total reports: ${reportsList.size}", 12, Color.rgb(100, 116, 139))
+                lateinit var clearAllBtn: View
+
                 fun renderCards(currentReports: List<Map<String, Any>>) {
                     cardsCol.removeAllViews()
                     if (currentReports.isEmpty()) {
@@ -7800,6 +7895,8 @@ class AdminActivity : AppCompatActivity() {
                                                         if (res.isSuccess) {
                                                             toast("Report deleted.")
                                                             val updated = currentReports.filter { it["id"] != reportId }
+                                                            countLabel.text = "Total reports: ${updated.size}"
+                                                            if (updated.isEmpty()) clearAllBtn.visibility = View.GONE
                                                             renderCards(updated)
                                                         } else {
                                                             toast("Failed to delete report.")
@@ -7824,6 +7921,52 @@ class AdminActivity : AppCompatActivity() {
                         cardsCol.space(12)
                     }
                 }
+
+                val headerRow = horizontal().apply {
+                    gravity = Gravity.CENTER_VERTICAL
+                    add(countLabel, 0, -2, 1f)
+                    clearAllBtn = text("Clear All", 12, Color.rgb(239, 68, 68), bold = true, centered = true).apply {
+                        background = GradientDrawable().apply {
+                            setColor(Color.rgb(254, 242, 242))
+                            setStroke(dp(1), Color.rgb(254, 202, 202))
+                            cornerRadius = dp(8).toFloat()
+                        }
+                        setPadding(dp(12), dp(6), dp(12), dp(6))
+                        isClickable = true
+                        isFocusable = true
+                        visibility = if (reportsList.isNotEmpty()) View.VISIBLE else View.GONE
+                        setOnClickListener {
+                            AlertDialog.Builder(this@AdminActivity)
+                                .setTitle("Clear All Reports?")
+                                .setMessage("Are you sure you want to delete all reports for this team? This action cannot be undone.")
+                                .setPositiveButton("Clear All") { _, _ ->
+                                    val prog = @Suppress("DEPRECATION") android.app.ProgressDialog(this@AdminActivity).apply {
+                                        setMessage("Clearing all reports...")
+                                        setCancelable(false)
+                                        show()
+                                    }
+                                    TeamRepository.clearAllTeamReports(activeCode, preferences) { res ->
+                                        runOnUiThread {
+                                            prog.dismiss()
+                                            if (res.isSuccess) {
+                                                toast("All team reports cleared.")
+                                                clearAllBtn.visibility = View.GONE
+                                                countLabel.text = "Total reports: 0"
+                                                renderCards(emptyList())
+                                            } else {
+                                                toast("Failed to clear reports.")
+                                            }
+                                        }
+                                    }
+                                }
+                                .setNegativeButton("Cancel", null)
+                                .show()
+                        }
+                    }
+                    add(clearAllBtn, -2, -2)
+                }
+                dialogView.add(headerRow)
+                dialogView.space(8)
 
                 renderCards(reportsList)
                 dialogView.add(scroll, -1, dp(380))
@@ -7973,6 +8116,60 @@ class AdminActivity : AppCompatActivity() {
 
             executeLeaveTeamAction(uid, activeCode)
         })
+
+        if (isLeaderAccount) {
+            col.space(4)
+            val deleteAction = horizontal().apply {
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(0, dp(4), 0, dp(4))
+                add(Symbol(this@AdminActivity, "trash", Color.rgb(239, 68, 68)), 28, 28)
+                add(text("Delete Team", 15, Color.rgb(239, 68, 68), true).apply {
+                    setPadding(dp(16), 0, 0, 0)
+                }, 0, 48, 1f)
+                isFocusable = true; isClickable = true
+                contentDescription = "Delete Team"
+                setOnClickListener {
+                    AlertDialog.Builder(this@AdminActivity)
+                        .setTitle("Delete Team?")
+                        .setMessage("Are you sure you want to permanently delete \"$teamName\"? All team schedules, chats, songs, rosters, and reports will be removed. All members will be disconnected and redirected to the team selection page. This action cannot be undone.")
+                        .setPositiveButton("Delete Team") { _, _ ->
+                            val progress = @Suppress("DEPRECATION") android.app.ProgressDialog(this@AdminActivity).apply {
+                                setMessage("Deleting team...")
+                                setCancelable(false)
+                                show()
+                            }
+                            val activeCode = preferences.getString("teamCode", "").orEmpty()
+                            val myUid = currentUserId()
+                            TeamRepository.deleteTeam(activeCode, myUid, preferences) { res ->
+                                runOnUiThread {
+                                    progress.dismiss()
+                                    if (res.isSuccess) {
+                                        toast("Team has been deleted.")
+                                        FirestoreManager.clearUserTeam(myUid)
+                                        preferences.edit {
+                                            remove("teamCode")
+                                            remove("teamName")
+                                            remove(SessionManager.KEY_TEAM_CODE)
+                                            remove("saved_team_code")
+                                            remove("saved_team_name")
+                                            remove("last_active_team_code")
+                                            remove("leaderRoles")
+                                        }
+                                        teamRoster = emptyList()
+                                        leaderRoles.clear()
+                                        navigate("teamChoice")
+                                    } else {
+                                        toast("Failed to delete team: ${res.exceptionOrNull()?.message}")
+                                    }
+                                }
+                            }
+                        }
+                        .setNegativeButton("Cancel", null)
+                        .show()
+                }
+            }
+            col.add(deleteAction)
+        }
 
         // Overlay Sheet (Add Role or Remove Member)
         if (activeTeamSheet != null) {

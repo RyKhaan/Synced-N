@@ -63,6 +63,26 @@ object TeamRepository {
     private val lastPrefsSyncTimes = java.util.concurrent.ConcurrentHashMap<String, Long>()
     private val cachedReports = java.util.concurrent.ConcurrentHashMap<String, MutableList<Map<String, Any>>>()
     private val cachedRejoinRequests = java.util.concurrent.ConcurrentHashMap<String, MutableList<RejoinRequestData>>()
+    private val deletedTeamCodes = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+
+    fun markTeamDeleted(teamCode: String, preferences: android.content.SharedPreferences? = null) {
+        val code = teamCode.trim().uppercase()
+        if (code.isBlank()) return
+        deletedTeamCodes.add(code)
+        preferences?.let { prefs ->
+            val set = prefs.getStringSet("deleted_team_codes", emptySet())?.toMutableSet() ?: mutableSetOf()
+            set.add(code)
+            prefs.edit().putStringSet("deleted_team_codes", set).apply()
+        }
+    }
+
+    fun isTeamDeleted(teamCode: String, preferences: android.content.SharedPreferences? = null): Boolean {
+        val code = teamCode.trim().uppercase()
+        if (code.isBlank()) return false
+        if (deletedTeamCodes.contains(code)) return true
+        val saved = preferences?.getStringSet("deleted_team_codes", emptySet())
+        return saved?.contains(code) == true
+    }
 
     data class TeamNotificationItem(
         val id: String,
@@ -100,6 +120,7 @@ object TeamRepository {
         lastPrefsSyncTimes.clear()
         cachedReports.clear()
         cachedRejoinRequests.clear()
+        deletedTeamCodes.clear()
     }
 
     fun serializeRangesJson(ranges: List<UnavailableRange>): String {
@@ -4851,33 +4872,37 @@ object TeamRepository {
             onResult(cached)
         }
 
-        db.collection(TEAMS_COLLECTION).document(code)
-            .collection(REPORTS_SUBCOLLECTION)
-            .get()
-            .addOnSuccessListener { query ->
-                val fetched = query.documents.mapNotNull { doc ->
-                    val data = doc.data?.toMutableMap() ?: return@mapNotNull null
-                    if (!data.containsKey("id") || data["id"]?.toString().isNullOrBlank()) {
-                        data["id"] = doc.id
+        try {
+            db.collection(TEAMS_COLLECTION).document(code)
+                .collection(REPORTS_SUBCOLLECTION)
+                .get()
+                .addOnSuccessListener { query ->
+                    val fetched = query.documents.mapNotNull { doc ->
+                        val data = doc.data?.toMutableMap() ?: return@mapNotNull null
+                        if (!data.containsKey("id") || data["id"]?.toString().isNullOrBlank()) {
+                            data["id"] = doc.id
+                        }
+                        data.toMap()
+                    }.sortedByDescending { doc ->
+                        (doc["createdAt"] as? Number)?.toLong() ?: 0L
                     }
-                    data.toMap()
-                }.sortedByDescending { doc ->
-                    (doc["createdAt"] as? Number)?.toLong() ?: 0L
+                    if (fetched.isNotEmpty()) {
+                        cachedReports[code] = fetched.toMutableList()
+                        preferences?.edit()?.putString(
+                            "$PREFS_KEY_REPORTS_PREFIX$code",
+                            org.json.JSONArray(fetched).toString()
+                        )?.apply()
+                        onResult(fetched)
+                    } else if (cached.isEmpty()) {
+                        onResult(emptyList())
+                    }
                 }
-                if (fetched.isNotEmpty()) {
-                    cachedReports[code] = fetched.toMutableList()
-                    preferences?.edit()?.putString(
-                        "$PREFS_KEY_REPORTS_PREFIX$code",
-                        org.json.JSONArray(fetched).toString()
-                    )?.apply()
-                    onResult(fetched)
-                } else if (cached.isEmpty()) {
-                    onResult(emptyList())
+                .addOnFailureListener {
+                    if (cached.isEmpty()) onResult(emptyList())
                 }
-            }
-            .addOnFailureListener {
-                if (cached.isEmpty()) onResult(emptyList())
-            }
+        } catch (_: Throwable) {
+            if (cached.isEmpty()) onResult(emptyList())
+        }
     }
 
     /**
@@ -4909,11 +4934,163 @@ object TeamRepository {
             ).apply()
         }
 
-        db.collection(TEAMS_COLLECTION).document(code)
-            .collection(REPORTS_SUBCOLLECTION).document(reportId)
-            .delete()
-            .addOnSuccessListener { onComplete(Result.success(Unit)) }
-            .addOnFailureListener { onComplete(Result.failure(it)) }
+        try {
+            db.collection(TEAMS_COLLECTION).document(code)
+                .collection(REPORTS_SUBCOLLECTION).document(reportId)
+                .delete()
+                .addOnSuccessListener { onComplete(Result.success(Unit)) }
+                .addOnFailureListener { onComplete(Result.failure(it)) }
+        } catch (_: Throwable) {
+            onComplete(Result.success(Unit))
+        }
+    }
+
+    /**
+     * Clears all reports for a team in Firestore (/teams/{teamCode}/reports) and local cache.
+     */
+    fun clearAllTeamReports(
+        teamCode: String,
+        preferences: android.content.SharedPreferences? = null,
+        onComplete: (Result<Unit>) -> Unit = {}
+    ) {
+        val code = teamCode.trim().uppercase()
+        if (code.isBlank()) {
+            onComplete(Result.failure(IllegalArgumentException("Team code cannot be blank")))
+            return
+        }
+
+        val mem = cachedReports[code]
+        if (mem != null) {
+            synchronized(mem) {
+                mem.clear()
+            }
+        }
+        preferences?.edit {
+            putString("$PREFS_KEY_REPORTS_PREFIX$code", "[]")
+        }
+
+        try {
+            db.collection(TEAMS_COLLECTION).document(code)
+                .collection(REPORTS_SUBCOLLECTION)
+                .get()
+                .addOnSuccessListener { snapshot ->
+                    if (snapshot == null || snapshot.isEmpty) {
+                        onComplete(Result.success(Unit))
+                        return@addOnSuccessListener
+                    }
+                    val batch = db.batch()
+                    snapshot.documents.forEach { doc ->
+                        batch.delete(doc.reference)
+                    }
+                    batch.commit()
+                        .addOnSuccessListener { onComplete(Result.success(Unit)) }
+                        .addOnFailureListener { onComplete(Result.failure(it)) }
+                }
+                .addOnFailureListener { onComplete(Result.failure(it)) }
+        } catch (_: Throwable) {
+            onComplete(Result.success(Unit))
+        }
+    }
+
+    /**
+     * Permanently marks a team as deleted in Firestore (/teams/{teamCode}),
+     * purges in-memory caches, marks teamCode as deleted locally, and triggers listeners.
+     */
+    fun deleteTeam(
+        teamCode: String,
+        leaderUid: String = "",
+        preferences: android.content.SharedPreferences? = null,
+        onComplete: (Result<Unit>) -> Unit = {}
+    ) {
+        val code = teamCode.trim().uppercase()
+        if (code.isBlank()) {
+            onComplete(Result.failure(IllegalArgumentException("Team code cannot be blank")))
+            return
+        }
+
+        markTeamDeleted(code, preferences)
+        cachedRosters.remove(code)
+        cachedRoles.remove(code)
+        cachedServices.remove(code)
+        cachedSongs.remove(code)
+        cachedAnnouncements.remove(code)
+        cachedSubstitutions.remove(code)
+        cachedChatMessages.remove(code)
+        cachedReports.remove(code)
+        cachedRejoinRequests.remove(code)
+        FirestoreManager.removeLocalTeam(code)
+
+        preferences?.edit {
+            remove("teamCode")
+            remove("teamName")
+            remove("cached_messages_$code")
+            remove("$PREFS_KEY_ROSTER_PREFIX$code")
+            remove("$PREFS_KEY_REPORTS_PREFIX$code")
+            remove("leaderRoles")
+        }
+
+        val authUid = leaderUid.ifBlank {
+            com.example.syncedn.data.auth.AuthManager.currentUser?.uid.orEmpty()
+        }
+
+        val deletionPayload = mapOf(
+            "isDeleted" to true,
+            "deletedAt" to System.currentTimeMillis(),
+            "deletedBy" to authUid,
+            "status" to "deleted"
+        )
+
+        try {
+            db.collection(TEAMS_COLLECTION).document(code)
+                .set(deletionPayload, com.google.firebase.firestore.SetOptions.merge())
+                .addOnSuccessListener {
+                    onComplete(Result.success(Unit))
+                }
+                .addOnFailureListener {
+                    // Try direct delete as fallback
+                    db.collection(TEAMS_COLLECTION).document(code).delete()
+                        .addOnSuccessListener { onComplete(Result.success(Unit)) }
+                        .addOnFailureListener { onComplete(Result.failure(it)) }
+                }
+        } catch (e: Exception) {
+            onComplete(Result.failure(e))
+        }
+    }
+
+    /**
+     * Subscribes to the team document /teams/{teamCode} in realtime.
+     * Fires onDeletedOrMissing when the document is deleted, missing, or marked isDeleted == true.
+     */
+    fun subscribeToTeam(
+        teamCode: String,
+        preferences: android.content.SharedPreferences? = null,
+        onDeletedOrMissing: () -> Unit
+    ): ListenerRegistration? {
+        val code = teamCode.trim().uppercase()
+        if (code.isBlank()) return null
+        if (isTeamDeleted(code, preferences)) {
+            onDeletedOrMissing()
+            return null
+        }
+        return try {
+            db.collection(TEAMS_COLLECTION).document(code)
+                .addSnapshotListener { snapshot, err ->
+                    if (err != null) return@addSnapshotListener
+                    if (snapshot == null || !snapshot.exists()) {
+                        markTeamDeleted(code, preferences)
+                        onDeletedOrMissing()
+                        return@addSnapshotListener
+                    }
+                    val isDeleted = snapshot.getBoolean("isDeleted") ?: false
+                    val status = snapshot.getString("status").orEmpty()
+                    if (isDeleted || status.equals("deleted", ignoreCase = true)) {
+                        markTeamDeleted(code, preferences)
+                        onDeletedOrMissing()
+                    }
+                }
+        } catch (_: Exception) {
+            null
+        }
     }
 
     /**

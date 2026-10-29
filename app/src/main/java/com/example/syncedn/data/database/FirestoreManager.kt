@@ -146,6 +146,14 @@ object FirestoreManager {
     }
 
     /**
+     * Removes a team code from the local in-memory registry.
+     */
+    fun removeLocalTeam(teamCode: String) {
+        val cleanCode = teamCode.trim().uppercase()
+        localTeams.remove(cleanCode)
+    }
+
+    /**
      * Looks up a team name by its 6-character code in the local in-memory registry.
      */
     fun getLocalTeamName(teamCode: String): String? {
@@ -285,6 +293,11 @@ object FirestoreManager {
             return
         }
 
+        if (com.example.syncedn.data.database.TeamRepository.isTeamDeleted(cleanCode)) {
+            onComplete(Result.failure(IllegalArgumentException("This team has been deleted.")))
+            return
+        }
+
         // 1. Check local team registry first for instant verification
         val cachedTeamName = getLocalTeamName(cleanCode)
         if (!cachedTeamName.isNullOrBlank()) {
@@ -304,7 +317,7 @@ object FirestoreManager {
             android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
                 finishOnce(
                     Result.failure(
-                        IllegalArgumentException("Invalid team code. Please check with your Team Leader.")
+                        IllegalArgumentException("This team code is deleted or does not exist.")
                     )
                 )
             }, 1500L)
@@ -318,6 +331,14 @@ object FirestoreManager {
                 .get()
                 .addOnSuccessListener { snapshot ->
                     if (snapshot != null && snapshot.exists()) {
+                        val isDeleted = snapshot.getBoolean("isDeleted") ?: false
+                        val status = snapshot.getString("status").orEmpty()
+                        if (isDeleted || status.equals("deleted", ignoreCase = true)) {
+                            com.example.syncedn.data.database.TeamRepository.markTeamDeleted(cleanCode)
+                            removeLocalTeam(cleanCode)
+                            finishOnce(Result.failure(IllegalArgumentException("This team has been deleted.")))
+                            return@addOnSuccessListener
+                        }
                         val foundTeamName = snapshot.getString("teamName").orEmpty()
                         if (foundTeamName.isNotBlank()) {
                             registerLocalTeam(cleanCode, foundTeamName)
@@ -327,23 +348,50 @@ object FirestoreManager {
                     }
                     finishOnce(
                         Result.failure(
-                            IllegalArgumentException("Invalid team code. Please check with your Team Leader.")
+                            IllegalArgumentException("This team code is deleted or does not exist.")
                         )
                     )
                 }
                 .addOnFailureListener {
                     finishOnce(
                         Result.failure(
-                            IllegalArgumentException("Invalid team code. Please check with your Team Leader.")
+                            IllegalArgumentException("This team code is deleted or does not exist.")
                         )
                     )
                 }
         } catch (_: Exception) {
             finishOnce(
                 Result.failure(
-                    IllegalArgumentException("Invalid team code. Please check with your Team Leader.")
+                    IllegalArgumentException("This team code is deleted or does not exist.")
                 )
             )
+        }
+    }
+
+    /**
+     * Clears team affiliation from user profile in Firestore: /users/{uid}
+     */
+    fun clearUserTeam(
+        uid: String,
+        onComplete: ((Result<Unit>) -> Unit)? = null
+    ) {
+        if (uid.isBlank()) {
+            onComplete?.invoke(Result.success(Unit))
+            return
+        }
+        val updates = mapOf<String, Any>(
+            "teamCode" to "",
+            "teamName" to "",
+            "role" to "Member",
+            "ministryRole" to ""
+        )
+        try {
+            db.collection(USERS_COLLECTION).document(uid)
+                .set(updates, com.google.firebase.firestore.SetOptions.merge())
+                .addOnSuccessListener { onComplete?.invoke(Result.success(Unit)) }
+                .addOnFailureListener { onComplete?.invoke(Result.failure(it)) }
+        } catch (e: Exception) {
+            onComplete?.invoke(Result.failure(e))
         }
     }
 

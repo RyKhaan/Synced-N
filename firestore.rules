@@ -37,6 +37,10 @@ rules_version = '2';
 //   - leaderName: string (required, 1-100 chars) - Full name or display name of the team leader
 //   - roles: list (optional, max 50 items) - Customized ministry roles list for the team
 //   - removedMembers: list (optional, max 200 items) - Member IDs or names removed by the leader
+//   - isDeleted: bool (optional) - Soft deletion indicator
+//   - deletedAt: number | timestamp (optional, >= 0) - Soft deletion timestamp
+//   - deletedBy: string (optional, 0-128 chars) - UID of leader who deleted the team
+//   - status: string (optional, 0-50 chars) - Team status (e.g., "active", "archived", "deleted")
 //   - createdAt: number | timestamp (optional, >= 0, immutable) - Team creation timestamp
 //
 // Subcollection: teams/{teamCode}/services
@@ -118,6 +122,9 @@ rules_version = '2';
 //   - senderPhotoUri: string (optional, 0-500 chars) - Avatar URI or URL
 //   - text: string (optional, 0-2000 chars) - Message text content
 //   - mediaUrl: string (optional, 0-500 chars) - Attached image or media URI / URL
+//   - replyToId: string (optional, 0-128 chars) - ID of message being replied to
+//   - replyToSender: string (optional, 0-100 chars) - Sender display name of message being replied to
+//   - replyToText: string (optional, 0-2000 chars) - Snippet text of message being replied to
 //   - timestamp: number | timestamp (required, immutable) - Sending timestamp
 //   - isEdited: bool (optional) - Whether the message has been edited
 //   - editedAt: number | timestamp (optional, >= 0) - Timestamp when edited
@@ -345,7 +352,8 @@ service cloud.firestore {
     // Strict validator for /teams/{teamCode} documents
     function isValidTeam(data, teamCode) {
       return hasOnlyAllowedFields(data, [
-        'teamCode', 'teamName', 'leaderUid', 'leaderName', 'roles', 'removedMembers', 'createdAt'
+        'teamCode', 'teamName', 'leaderUid', 'leaderName', 'roles', 'removedMembers',
+        'isDeleted', 'deletedAt', 'deletedBy', 'status', 'createdAt'
       ]) &&
       hasRequiredFields(data, ['teamCode', 'teamName', 'leaderUid', 'leaderName']) &&
       data.teamCode is string &&
@@ -362,6 +370,10 @@ service cloud.firestore {
       data.leaderName.size() <= 100 &&
       (!('roles' in data) || (data.roles is list && data.roles.size() <= 50)) &&
       (!('removedMembers' in data) || (data.removedMembers is list && data.removedMembers.size() <= 200)) &&
+      (!('isDeleted' in data) || data.isDeleted is bool) &&
+      (!('deletedAt' in data) || (data.deletedAt is number && data.deletedAt >= 0) || (data.deletedAt is timestamp)) &&
+      (!('deletedBy' in data) || (data.deletedBy is string && data.deletedBy.size() <= 128)) &&
+      (!('status' in data) || (data.status is string && data.status.size() <= 50)) &&
       (!('createdAt' in data) || (data.createdAt is number && data.createdAt >= 0) || (data.createdAt is timestamp));
     }
 
@@ -477,7 +489,8 @@ service cloud.firestore {
     function isValidChatMessage(data, messageId, teamCode) {
       return hasOnlyAllowedFields(data, [
         'id', 'teamCode', 'senderUid', 'senderName', 'senderRole',
-        'senderPhotoUri', 'text', 'mediaUrl', 'timestamp', 'isEdited', 'editedAt',
+        'senderPhotoUri', 'text', 'mediaUrl', 'replyToId', 'replyToSender',
+        'replyToText', 'timestamp', 'isEdited', 'editedAt',
         'isDeleted', 'deletedAt'
       ]) &&
       hasRequiredFields(data, ['id', 'teamCode', 'senderUid', 'senderName', 'timestamp']) &&
@@ -489,6 +502,9 @@ service cloud.firestore {
       (!('senderPhotoUri' in data) || (data.senderPhotoUri is string && data.senderPhotoUri.size() <= 500)) &&
       (!('text' in data) || (data.text is string && data.text.size() <= 2000)) &&
       (!('mediaUrl' in data) || (data.mediaUrl is string && data.mediaUrl.size() <= 500)) &&
+      (!('replyToId' in data) || (data.replyToId is string && data.replyToId.size() <= 128)) &&
+      (!('replyToSender' in data) || (data.replyToSender is string && data.replyToSender.size() <= 100)) &&
+      (!('replyToText' in data) || (data.replyToText is string && data.replyToText.size() <= 2000)) &&
       (('text' in data && data.text.size() > 0) || ('mediaUrl' in data && data.mediaUrl.size() > 0) || ('isDeleted' in data && data.isDeleted == true)) &&
       ((data.timestamp is number && data.timestamp >= 0) || (data.timestamp is timestamp)) &&
       (!('isEdited' in data) || data.isEdited is bool) &&
@@ -557,7 +573,7 @@ service cloud.firestore {
       allow create: if isValidTeam(request.resource.data, teamCode);
       allow update: if isValidTeam(request.resource.data, teamCode) &&
                        areImmutableFieldsUnchanged(['teamCode', 'createdAt']);
-      allow delete: if isAuthenticated() && resource.data.leaderUid == request.auth.uid;
+      allow delete: if isAuthenticated() && (resource.data.leaderUid == request.auth.uid || !('leaderUid' in resource.data));
 
       // ---------------------------------------------------------------
       // Subcollection: Services (/teams/{teamCode}/services/{serviceId})
