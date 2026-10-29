@@ -39,6 +39,20 @@ object SessionManager {
     }
 
     /**
+     * Immediately wipes temporary registration/reset credentials from SharedPreferences and RAM.
+     */
+    fun clearPendingAuthCredentials(preferences: SharedPreferences) {
+        EmailOtpService.clear()
+        preferences.edit {
+            remove("pendingRegUsername")
+            remove("pendingRegEmail")
+            remove("pendingRegPassword")
+            remove("resetEmail")
+            remove("resetPendingPassword")
+        }
+    }
+
+    /**
      * Clears cached session fields from SharedPreferences and in-memory caches
      * for a fresh user sign-in or registration without signing out of Firebase Auth.
      */

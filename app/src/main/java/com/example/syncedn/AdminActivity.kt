@@ -815,8 +815,8 @@ class AdminActivity : AppCompatActivity() {
         }
         ViewCompat.requestApplyInsets(root)
         when (page) {
-            "start" -> click(UI.getStartedButton) { navigate("login") }
-            "login" -> setupLogin()
+            "start" -> { SessionManager.clearPendingAuthCredentials(preferences); click(UI.getStartedButton) { navigate("login") } }
+            "login" -> { SessionManager.clearPendingAuthCredentials(preferences); setupLogin() }
             "register" -> setupRegister()
             "reset" -> setupReset()
             "otp" -> setupOtp()

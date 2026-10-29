@@ -3588,4 +3588,33 @@ class ExampleUnitTest {
         val upgraded = com.example.syncedn.data.storage.ImageLoader.normalizeSecureImageUrl("http://res.cloudinary.com/ffb3fdkm/image/upload/v1/avatar.jpg")
         assertEquals("https://res.cloudinary.com/ffb3fdkm/image/upload/v1/avatar.jpg", upgraded)
     }
+
+    @Test
+    fun testPendingAuthCredentialsWipedOnCleanupAndLogout() {
+        val prefs = FakePreferences()
+        prefs.edit()
+            .putString("pendingRegUsername", "TempUser")
+            .putString("pendingRegEmail", "temp@gmail.com")
+            .putString("pendingRegPassword", "SecretPass#2026")
+            .putString("resetEmail", "temp@gmail.com")
+            .putString("resetPendingPassword", "SecretPass#2026")
+            .apply()
+
+        com.example.syncedn.data.auth.EmailOtpService.setRecordForTesting(
+            com.example.syncedn.data.auth.EmailOtpService.OtpRecord(
+                email = "temp@gmail.com",
+                code = "123456",
+                expiresAt = System.currentTimeMillis() + 60_000L,
+                pendingPassword = "SecretPass#2026"
+            )
+        )
+
+        com.example.syncedn.data.auth.SessionManager.clearPendingAuthCredentials(prefs)
+
+        assertEquals("", prefs.getString("pendingRegPassword", ""))
+        assertEquals("", prefs.getString("resetPendingPassword", ""))
+        assertEquals("", prefs.getString("pendingRegEmail", ""))
+        assertEquals("", prefs.getString("resetEmail", ""))
+        assertNull(com.example.syncedn.data.auth.EmailOtpService.activeRecord)
+    }
 }
