@@ -930,7 +930,14 @@ open class MemberActivity : AppCompatActivity() {
         }
         ViewCompat.requestApplyInsets(root)
         when (page) {
-            "start" -> { SessionManager.clearPendingAuthCredentials(preferences); click(UI.getStartedButton) { navigate("login") } }
+            "start" -> {
+                SessionManager.clearPendingAuthCredentials(preferences)
+                click(UI.getStartedButton) {
+                    val indicator = findViewById<View>(9999)
+                    indicator?.visibility = View.VISIBLE
+                    indicator?.postDelayed({ navigate("login") }, 400) ?: navigate("login")
+                }
+            }
             "login" -> { SessionManager.clearPendingAuthCredentials(preferences); setupLogin() }
             "register" -> setupRegister()
             "reset" -> setupReset()
@@ -1532,7 +1539,7 @@ open class MemberActivity : AppCompatActivity() {
         click(UI.calendarButton) { navigate("calendar") }
         click(UI.songsButton) { selectedSheetService = null; songsReturnPage = "home"; navigate("songs") }
         click(UI.scheduleCard) { openHomeSecondUpcoming() }
-        click(UI.homeTab) { toast("You are on Home.") }
+        click(UI.homeTab) { /* already on Home */ }
         click(UI.scheduleTab) { schedule() }
         click(UI.teamsTab) { navigate("teams") }
         click(UI.settingsTab) { navigate("settings") }
@@ -2109,20 +2116,6 @@ open class MemberActivity : AppCompatActivity() {
             scaleType = ImageView.ScaleType.CENTER_CROP
         }, FrameLayout.LayoutParams(-1, -1))
 
-        // The supplied branded artwork matches the reference's large logo and lettering.
-        // Only its top artwork is used; the button and caption remain native controls.
-        val brandedTop = image("welcome_artwork", "Synced N").apply {
-            val original = (drawable as android.graphics.drawable.BitmapDrawable).bitmap
-            val scaleX = original.width.toFloat() / 360f
-            val scaleY = original.height.toFloat() / 590f
-            val cropHeight = (280 * scaleY).toInt().coerceAtMost(original.height)
-            setImageBitmap(bitmaps.getOrPut("landing_branded_top") {
-                Bitmap.createBitmap(original, 0, 0, original.width, cropHeight)
-            })
-            scaleType = ImageView.ScaleType.FIT_XY
-        }
-        addView(brandedTop, FrameLayout.LayoutParams(-1, dp(280), Gravity.TOP or Gravity.CENTER_HORIZONTAL))
-
         val footer = vertical().apply {
             gravity = Gravity.CENTER_HORIZONTAL
             add(button(UI.getStartedButton, "Get Started", 180).apply {
@@ -2131,29 +2124,11 @@ open class MemberActivity : AppCompatActivity() {
             space(16)
             add(text("Church Ministry Management", 15, Color.WHITE, centered = true))
             space(20)
-            add(landingIndicator(), 32, 32)
+            add(landingIndicator().apply { id = 9999; visibility = View.GONE }, 32, 32)
         }
         addView(footer, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply {
             bottomMargin = dp(48)
         })
-        addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
-            val availableWidth = width - paddingLeft - paddingRight
-            val availableHeight = height - paddingTop - paddingBottom
-            if (availableWidth > 0 && availableHeight > 0) {
-                val scale = maxOf(availableWidth / 360f, availableHeight / 800f)
-                val photoTop = (availableHeight - 800f * scale) / 2f
-                val brandWidth = (360f * scale).toInt()
-                val brandHeight = (280f * scale).toInt()
-                val brandPosition = brandedTop.layoutParams as FrameLayout.LayoutParams
-                if (brandPosition.width != brandWidth || brandPosition.height != brandHeight || brandPosition.topMargin != photoTop.toInt()) {
-                    brandedTop.post {
-                        brandedTop.layoutParams = brandPosition.apply {
-                            width = brandWidth; height = brandHeight; topMargin = photoTop.toInt()
-                        }
-                    }
-                }
-            }
-        }
     }
     private fun landingIndicator(): View = object : View(this) {
         private val ink = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -2859,7 +2834,7 @@ open class MemberActivity : AppCompatActivity() {
                 .show()
         }
         click(UI.homeTab) {navigate("home")};click(UI.scheduleTab) {schedule()}
-        click(UI.teamsTab) {navigate("teams")};click(UI.settingsTab) {toast("You are on Settings.")}
+        click(UI.teamsTab) {navigate("teams")};click(UI.settingsTab) { /* already on Settings */ }
     }
     private fun profileField(
         id: Int,
@@ -3024,6 +2999,13 @@ open class MemberActivity : AppCompatActivity() {
                 if (cached.isNotEmpty()) chatMessages.addAll(cached)
             }
 
+            val repId = replyingToMessage?.id.orEmpty()
+            val repSender = replyingToMessage?.senderName.orEmpty()
+            val repText = replyingToMessage?.text?.takeIf { it.isNotBlank() }
+                ?: if (replyingToMessage?.mediaUrl?.isNotBlank() == true) "📷 Photo" else ""
+            replyingToMessage = null
+            chatReplyBar?.visibility = View.GONE
+
             val localMsg = ChatMessage(
                 id = localMsgId,
                 teamCode = currentCode,
@@ -3032,7 +3014,10 @@ open class MemberActivity : AppCompatActivity() {
                 senderRole = preferences.getString("ministryRole", "Member").orEmpty(),
                 senderPhotoUri = currentPhoto,
                 mediaUrl = uri.toString(),
-                timestamp = System.currentTimeMillis()
+                timestamp = System.currentTimeMillis(),
+                replyToId = repId,
+                replyToSender = repSender,
+                replyToText = repText
             )
             chatMessages.add(localMsg)
             TeamRepository.saveChatMessageLocally(currentCode, localMsg, preferences)
@@ -3128,6 +3113,24 @@ open class MemberActivity : AppCompatActivity() {
     private var selectedSubstituteName: String = ""
     private var songsReturnPage = "home"
     private val chatMessages = mutableListOf<ChatMessage>()
+    private var replyingToMessage: ChatMessage? = null
+    private var chatReplyBar: View? = null
+    private var chatReplySenderText: TextView? = null
+    private var chatReplySnippetText: TextView? = null
+    private var chatMessageInput: EditText? = null
+
+    private fun startReplyingTo(msg: ChatMessage) {
+        replyingToMessage = msg
+        val repSender = msg.senderName.ifBlank { "Member" }
+        val repSnippet = msg.text.takeIf { it.isNotBlank() }
+            ?: if (msg.mediaUrl.isNotBlank()) "📷 Photo" else "Message"
+        chatReplySenderText?.text = "Replying to $repSender"
+        chatReplySnippetText?.text = repSnippet
+        chatReplyBar?.visibility = View.VISIBLE
+        chatMessageInput?.requestFocus()
+        val imm = getSystemService(android.content.Context.INPUT_METHOD_SERVICE) as? android.view.inputmethod.InputMethodManager
+        chatMessageInput?.let { imm?.showSoftInput(it, android.view.inputmethod.InputMethodManager.SHOW_IMPLICIT) }
+    }
     private var chatListener: ListenerRegistration? = null
     private var chatScrollView: StableScrollView? = null
     private var chatMessagesCol: LinearLayout? = null
@@ -3568,6 +3571,53 @@ open class MemberActivity : AppCompatActivity() {
             setOnClickListener { action() }
         }
     }
+    private data class ScheduleCardItem(
+        val title: String,
+        val date: String,
+        val time: String,
+        val venue: String,
+        val isRehearsal: Boolean,
+        val isPast: Boolean,
+        val onClick: () -> Unit
+    )
+
+    private fun isEventPast(dateStr: String, endTimeStr: String, startTimeStr: String = ""): Boolean {
+        if (dateStr.isBlank()) return false
+        val today = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).format(java.util.Date())
+        if (dateStr < today) return true
+        if (dateStr > today) return false
+
+        val now = java.util.Calendar.getInstance()
+        val currentMinutes = now.get(java.util.Calendar.HOUR_OF_DAY) * 60 + now.get(java.util.Calendar.MINUTE)
+        val timeToParse = endTimeStr.ifBlank { startTimeStr }
+        if (timeToParse.isBlank()) return false
+
+        val eventMinutes = parseTimeToMinutes(timeToParse) ?: return false
+        val thresholdMinutes = if (endTimeStr.isBlank()) eventMinutes + 120 else eventMinutes
+        return currentMinutes >= thresholdMinutes
+    }
+
+    private fun parseTimeToMinutes(raw: String): Int? {
+        return try {
+            val trimmed = raw.trim().uppercase()
+            if (trimmed.contains("AM") || trimmed.contains("PM")) {
+                val isPm = trimmed.contains("PM")
+                val clean = trimmed.replace("AM", "").replace("PM", "").trim()
+                val parts = clean.split(":")
+                var hour = parts[0].trim().toInt()
+                val minute = if (parts.size > 1) parts[1].trim().toInt() else 0
+                if (isPm && hour < 12) hour += 12
+                if (!isPm && hour == 12) hour = 0
+                hour * 60 + minute
+            } else if (trimmed.contains(":")) {
+                val parts = trimmed.split(":")
+                val hour = parts[0].trim().toInt()
+                val minute = if (parts.size > 1) parts[1].trim().toInt() else 0
+                hour * 60 + minute
+            } else null
+        } catch (_: Exception) { null }
+    }
+
     private fun scheduleView(): View {
         val root = vertical().apply {
             setBackgroundColor(Color.WHITE)
@@ -3603,13 +3653,66 @@ open class MemberActivity : AppCompatActivity() {
 
         val realServices = storedServices()
         val activeCode = preferences.getString("teamCode", "").orEmpty()
-        val today = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).format(java.util.Date())
-        val filteredReal = realServices.filter { srv ->
-            val date = srv.optString("date")
-            val isPast = date.isNotBlank() && date < today
+
+        val cardItems = mutableListOf<ScheduleCardItem>()
+        realServices.forEach { record ->
+            val title = record.optString("title", "Sunday Worship Service")
+            val date = record.optString("date")
+            val start = record.optString("start")
+            val end = record.optString("end")
+            val time = if (start.isNotBlank() && end.isNotBlank()) "${formatServiceTime(start)} – ${formatServiceTime(end)}" else if (start.isNotBlank()) formatServiceTime(start) else "6:00AM – 11:00AM"
+            val venue = record.optString("venue", "Main Sanctuary")
+            val isPast = isEventPast(date, end, start)
+
+            cardItems.add(ScheduleCardItem(
+                title = title,
+                date = date,
+                time = time,
+                venue = venue,
+                isRehearsal = false,
+                isPast = isPast,
+                onClick = {
+                    selectSheetService(record)
+                    selectedService = title; serviceReturnPage = "schedule"
+                    preferences.edit().putString("serviceTime", time).putString("serviceDate", date).putString("serviceVenue", venue).apply()
+                    navigate("service")
+                }
+            ))
+
+            val rehObj = record.optJSONObject("rehearsal")
+            val rDate = rehObj?.optString("date").orEmpty().ifBlank { record.optString("rehearsalDate").orEmpty() }
+            if (rDate.isNotBlank()) {
+                val rStart = rehObj?.optString("start").orEmpty().ifBlank { record.optString("rehearsalStart").orEmpty() }
+                val rEnd = rehObj?.optString("end").orEmpty().ifBlank { record.optString("rehearsalEnd").orEmpty() }
+                val rTime = if (rStart.isNotBlank() && rEnd.isNotBlank()) "${formatServiceTime(rStart)} – ${formatServiceTime(rEnd)}"
+                            else if (rStart.isNotBlank()) formatServiceTime(rStart) else "7:00PM – 9:00PM"
+                val rVenue = rehObj?.optString("venue").orEmpty()
+                    .ifBlank { record.optString("rehearsalVenue").orEmpty() }
+                    .ifBlank { venue }
+                val rIsPast = isEventPast(rDate, rEnd, rStart)
+
+                cardItems.add(ScheduleCardItem(
+                    title = "$title (Rehearsal)",
+                    date = rDate,
+                    time = rTime,
+                    venue = "$rVenue • Rehearsal",
+                    isRehearsal = true,
+                    isPast = rIsPast,
+                    onClick = {
+                        selectSheetService(record)
+                        selectedService = title; serviceReturnPage = "schedule"
+                        preferences.edit().putString("serviceTime", rTime).putString("serviceDate", rDate).putString("serviceVenue", rVenue).apply()
+                        navigate("service")
+                    }
+                ))
+            }
+        }
+
+        val sortedReal = cardItems.sortedBy { it.date }
+        val filteredReal = sortedReal.filter { item ->
             when (scheduleFilter) {
-                "Past" -> isPast
-                "Upcoming" -> !isPast
+                "Past" -> item.isPast
+                "Upcoming" -> !item.isPast
                 else -> true
             }
         }
@@ -3621,35 +3724,30 @@ open class MemberActivity : AppCompatActivity() {
                 })
                 col.space(16)
             } else {
-                filteredReal.forEach { record ->
-                    val title = record.optString("title", "Sunday Worship Service")
-                    val date = record.optString("date")
-                    val badgeDate = formatBadgeDate(date)
-                    val start = record.optString("start")
-                    val end = record.optString("end")
-                    val time = if (start.isNotBlank() && end.isNotBlank()) "${formatServiceTime(start)} – ${formatServiceTime(end)}" else if (start.isNotBlank()) formatServiceTime(start) else "6:00AM – 11:00AM"
-                    val venue = record.optString("venue", "Main Sanctuary")
+                filteredReal.forEach { item ->
+                    val badgeDate = formatBadgeDate(item.date)
+                    val badgeBg = if (item.isRehearsal) {
+                        GradientDrawable(GradientDrawable.Orientation.TL_BR,
+                            intArrayOf(Color.rgb(59, 130, 246), Color.rgb(37, 99, 235))).apply { cornerRadius = dp(14).toFloat() }
+                    } else {
+                        GradientDrawable(GradientDrawable.Orientation.TL_BR,
+                            intArrayOf(purple, Color.rgb(167, 0, 214))).apply { cornerRadius = dp(14).toFloat() }
+                    }
 
                     val row = horizontal().apply {
-                        background = bg(Color.WHITE, 20, if (preferences.getString("serviceDate", "") == date) purple else Color.rgb(230, 230, 235))
+                        background = bg(Color.WHITE, 20, if (preferences.getString("serviceDate", "") == item.date) purple else Color.rgb(230, 230, 235))
                         elevation = dp(3).toFloat(); setPadding(dp(8), dp(10), dp(12), dp(10))
                         add(text(badgeDate, 15, Color.WHITE, bold = true, centered = true).apply {
-                            background = GradientDrawable(GradientDrawable.Orientation.TL_BR,
-                                intArrayOf(purple, Color.rgb(167, 0, 214))).apply { cornerRadius = dp(14).toFloat() }
+                            background = badgeBg
                         }, 60, 66)
                         add(vertical().apply {
                             setPadding(dp(12), 0, dp(8), 0)
-                            add(text(title, 13, navy, true)); space(4); add(text(time, 11, navy))
-                            space(3); add(text(venue, 11, navy))
+                            add(text(item.title, 13, navy, true)); space(4); add(text(item.time, 11, navy))
+                            space(3); add(text(item.venue, 11, if (item.isRehearsal) Color.rgb(59, 130, 246) else navy))
                         }, 0, -2, 1f)
                         add(Symbol(this@MemberActivity, "arrow", Color.GRAY), 18, 24)
                         isClickable = true; isFocusable = true
-                        setOnClickListener {
-                            selectSheetService(record)
-                            selectedService = title; serviceReturnPage = "schedule"
-                            preferences.edit().putString("serviceTime", time).putString("serviceDate", date).putString("serviceVenue", venue).apply()
-                            navigate("service")
-                        }
+                        setOnClickListener { item.onClick() }
                     }
                     col.add(row); col.space(16)
                 }
@@ -5591,13 +5689,19 @@ open class MemberActivity : AppCompatActivity() {
             }
 
             fun showMessageOptionsDialog() {
-                val options = if (msg.text.isNotBlank()) arrayOf("Edit Message", "Delete Message") else arrayOf("Delete Message")
+                val opts = mutableListOf<String>()
+                opts.add("Reply")
+                if (msg.text.isNotBlank()) opts.add("Edit Message")
+                opts.add("Delete Message")
+                val options = opts.toTypedArray()
                 AlertDialog.Builder(this@MemberActivity)
                     .setTitle("Message Options")
                     .setItems(options) { _, which ->
                         val action = options[which]
                         val curCode = preferences.getString("teamCode", "").orEmpty()
-                        if (action == "Edit Message") {
+                        if (action == "Reply") {
+                            startReplyingTo(msg)
+                        } else if (action == "Edit Message") {
                             val input = EditText(this@MemberActivity).apply {
                                 setText(msg.text)
                                 setSelection(msg.text.length)
@@ -5655,6 +5759,28 @@ open class MemberActivity : AppCompatActivity() {
                     )
                 }
                 setPadding(dp(14), dp(10), dp(14), dp(10))
+                if (msg.replyToText.isNotBlank() || msg.replyToSender.isNotBlank()) {
+                    val quoteBox = horizontal().apply {
+                        background = GradientDrawable().apply {
+                            setColor(Color.argb(45, 255, 255, 255))
+                            cornerRadius = dp(8).toFloat()
+                        }
+                        setPadding(dp(8), dp(4), dp(8), dp(4))
+                        val accent = View(this@MemberActivity).apply { setBackgroundColor(Color.WHITE) }
+                        add(accent, dp(3), -1)
+                        space(6)
+                        val quoteCol = vertical().apply {
+                            add(text(msg.replyToSender.ifBlank { "Member" }, 11, Color.WHITE, bold = true))
+                            add(text(msg.replyToText, 11, Color.rgb(226, 232, 240)).apply {
+                                maxLines = 2
+                                ellipsize = android.text.TextUtils.TruncateAt.END
+                            })
+                        }
+                        add(quoteCol, 0, -2, 1f)
+                    }
+                    add(quoteBox, -1, -2)
+                    space(6)
+                }
                 if (msg.mediaUrl.isNotBlank()) {
                     val iv = ImageView(this@MemberActivity).apply {
                         scaleType = ImageView.ScaleType.CENTER_CROP
@@ -5734,6 +5860,18 @@ open class MemberActivity : AppCompatActivity() {
                 setPadding(dp(4), 0, 0, dp(2))
             })
 
+            fun showOtherMessageOptionsDialog() {
+                val opts = arrayOf("Reply")
+                AlertDialog.Builder(this@MemberActivity)
+                    .setTitle("Message Options")
+                    .setItems(opts) { _, which ->
+                        val action = opts[which]
+                        if (action == "Reply") {
+                            startReplyingTo(msg)
+                        }
+                    }.show()
+            }
+
             val bubble = vertical().apply {
                 background = GradientDrawable().apply {
                     setColor(Color.rgb(241, 245, 249))
@@ -5745,6 +5883,28 @@ open class MemberActivity : AppCompatActivity() {
                     )
                 }
                 setPadding(dp(14), dp(10), dp(14), dp(10))
+                if (msg.replyToText.isNotBlank() || msg.replyToSender.isNotBlank()) {
+                    val quoteBox = horizontal().apply {
+                        background = GradientDrawable().apply {
+                            setColor(Color.rgb(226, 232, 240))
+                            cornerRadius = dp(8).toFloat()
+                        }
+                        setPadding(dp(8), dp(4), dp(8), dp(4))
+                        val accent = View(this@MemberActivity).apply { setBackgroundColor(purple) }
+                        add(accent, dp(3), -1)
+                        space(6)
+                        val quoteCol = vertical().apply {
+                            add(text(msg.replyToSender.ifBlank { "Member" }, 11, navy, bold = true))
+                            add(text(msg.replyToText, 11, Color.rgb(71, 85, 105)).apply {
+                                maxLines = 2
+                                ellipsize = android.text.TextUtils.TruncateAt.END
+                            })
+                        }
+                        add(quoteCol, 0, -2, 1f)
+                    }
+                    add(quoteBox, -1, -2)
+                    space(6)
+                }
                 if (msg.mediaUrl.isNotBlank()) {
                     val iv = ImageView(this@MemberActivity).apply {
                         scaleType = ImageView.ScaleType.CENTER_CROP
@@ -5760,6 +5920,10 @@ open class MemberActivity : AppCompatActivity() {
                     iv.isClickable = true
                     iv.isFocusable = true
                     iv.setOnClickListener { showChatImageViewer(msg.mediaUrl) }
+                    iv.setOnLongClickListener {
+                        showOtherMessageOptionsDialog()
+                        true
+                    }
                     if (msg.text.isNotBlank()) space(6)
                 }
                 if (msg.text.isNotBlank()) {
@@ -5767,6 +5931,12 @@ open class MemberActivity : AppCompatActivity() {
                         maxWidth = maxBubbleWidth - dp(28)
                     })
                 }
+            }
+            bubble.isClickable = true
+            bubble.isFocusable = true
+            bubble.setOnLongClickListener {
+                showOtherMessageOptionsDialog()
+                true
             }
             bubbleContainer.addView(bubble, LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT,
@@ -5974,23 +6144,14 @@ open class MemberActivity : AppCompatActivity() {
                         val mRole = if (it.role.equals("Member", true) && it.ministryRole.equals("Substitute Leader", true)) "Member" else it.ministryRole
                         mRole.equals(role, ignoreCase = true)
                     }
-                    col.add(horizontal().apply {
-                        setPadding(dp(40), 0, dp(20), 0)
-                        add(Symbol(this@MemberActivity, "music", Color.BLACK), 56, 52)
-                        add(vertical().apply {
-                            setPadding(dp(20), 0, dp(8), 0)
-                            add(text(role, 14, navy, true)); space(4)
-                            add(text("${people.size} member${if (people.size == 1) "" else "s"}", 12, Color.BLACK))
-                        }, 0, -2, 1f)
-                        add(Symbol(this@MemberActivity, "arrow", Color.rgb(65, 80, 100)).apply {
-                            if (expandedRole == role) rotation = 90f
-                        }, 28, 28)
-                        isFocusable = true; contentDescription = "$role, ${people.size} members"
-                        setOnClickListener { expandedRole = if (expandedRole == role) null else role; navigate("teams") }
-                    }, -1, 64)
-                    if (expandedRole == role) {
-                        col.space(8)
-                        val members = vertical().apply {
+                    val isInitiallyExpanded = expandedRole == role
+                    val arrowView = Symbol(this@MemberActivity, "arrow", Color.rgb(65, 80, 100)).apply {
+                        rotation = if (isInitiallyExpanded) 90f else 0f
+                    }
+                    val membersBox = vertical().apply {
+                        visibility = if (isInitiallyExpanded) View.VISIBLE else View.GONE
+                        setPadding(0, dp(8), 0, dp(12))
+                        val card = vertical().apply {
                             setPadding(dp(20), dp(20), dp(20), dp(20))
                             background = GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,
                                 intArrayOf(Color.rgb(21, 28, 50), Color.rgb(57, 79, 150))).apply {
@@ -6018,9 +6179,28 @@ open class MemberActivity : AppCompatActivity() {
                                 }
                             }
                         }
-                        col.add(members, -1, -2)
-                        col.space(12)
+                        add(card, -1, -2)
                     }
+
+                    val rowHeader = horizontal().apply {
+                        setPadding(dp(40), 0, dp(20), 0)
+                        add(Symbol(this@MemberActivity, "music", Color.BLACK), 56, 52)
+                        add(vertical().apply {
+                            setPadding(dp(20), 0, dp(8), 0)
+                            add(text(role, 14, navy, true)); space(4)
+                            add(text("${people.size} member${if (people.size == 1) "" else "s"}", 12, Color.BLACK))
+                        }, 0, -2, 1f)
+                        add(arrowView, 28, 28)
+                        isFocusable = true; contentDescription = "$role, ${people.size} members"
+                        setOnClickListener {
+                            val willExpand = membersBox.visibility != View.VISIBLE
+                            expandedRole = if (willExpand) role else null
+                            membersBox.visibility = if (willExpand) View.VISIBLE else View.GONE
+                            arrowView.animate().rotation(if (willExpand) 90f else 0f).setDuration(180).start()
+                        }
+                    }
+                    col.add(rowHeader, -1, 64)
+                    col.add(membersBox, -1, -2)
                 }
             }
             else -> {
@@ -6054,6 +6234,42 @@ open class MemberActivity : AppCompatActivity() {
             }
         }
         if (teamTab == "Team Chat") {
+            val replyBar = horizontal().apply {
+                visibility = if (replyingToMessage != null) View.VISIBLE else View.GONE
+                setBackgroundColor(Color.rgb(243, 244, 246))
+                setPadding(dp(16), dp(6), dp(16), dp(6))
+                val accent = View(this@MemberActivity).apply { setBackgroundColor(purple) }
+                add(accent, dp(3), -1)
+                space(8)
+                val textCol = vertical().apply {
+                    val repSender = replyingToMessage?.senderName.orEmpty().ifBlank { "Member" }
+                    val repSnippet = replyingToMessage?.text?.takeIf { it.isNotBlank() }
+                        ?: if (replyingToMessage?.mediaUrl?.isNotBlank() == true) "📷 Photo" else "Message"
+                    val senderTv = text("Replying to $repSender", 11, purple, bold = true)
+                    val snippetTv = text(repSnippet, 11, Color.rgb(100, 116, 139)).apply {
+                        maxLines = 1
+                        ellipsize = android.text.TextUtils.TruncateAt.END
+                    }
+                    chatReplySenderText = senderTv
+                    chatReplySnippetText = snippetTv
+                    add(senderTv)
+                    add(snippetTv)
+                }
+                add(textCol, 0, -2, 1f)
+                val cancelBtn = text("✕", 14, Color.GRAY, centered = true).apply {
+                    setPadding(dp(8), dp(4), dp(8), dp(4))
+                    isClickable = true
+                    isFocusable = true
+                    setOnClickListener {
+                        replyingToMessage = null
+                        visibility = View.GONE
+                    }
+                }
+                add(cancelBtn, -2, -2)
+            }
+            chatReplyBar = replyBar
+            root.add(replyBar, -1, -2)
+
             val composer = horizontal().apply { setPadding(dp(12), dp(8), dp(12), dp(12)) }
             fun choosePhoto() {
                 val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply { addCategory(Intent.CATEGORY_OPENABLE); type = "image/*" }
@@ -6077,15 +6293,20 @@ open class MemberActivity : AppCompatActivity() {
             })
             val entry = horizontal().apply { background = bg(Color.rgb(217, 217, 217), 24) }
             val message = plainInput("Message").apply { background = null }
+            chatMessageInput = message
             entry.add(message, 0, 44, 1f)
-            val send = text("☺", 24, Color.BLACK, centered = true).apply {
-                contentDescription = "Insert emoji or send message"; isFocusable = true
+            val send = text("➤", 20, Color.rgb(148, 163, 184), centered = true).apply {
+                contentDescription = "Send message"; isFocusable = true
                 setOnClickListener {
-                    if (message.text.isBlank()) {
-                        message.setText("🙂")
-                        message.setSelection(message.text.length)
-                    } else {
-                        val textToSend = message.text.toString().trim()
+                    val textToSend = message.text.toString().trim()
+                    if (textToSend.isNotBlank()) {
+                        val repId = replyingToMessage?.id.orEmpty()
+                        val repSender = replyingToMessage?.senderName.orEmpty()
+                        val repText = replyingToMessage?.text?.takeIf { it.isNotBlank() }
+                            ?: if (replyingToMessage?.mediaUrl?.isNotBlank() == true) "📷 Photo" else ""
+                        replyingToMessage = null
+                        chatReplyBar?.visibility = View.GONE
+
                         if (chatMessages.isEmpty()) {
                             val cached = TeamRepository.getCachedChatMessages(currentCode, preferences)
                             if (cached.isNotEmpty()) chatMessages.addAll(cached)
@@ -6101,7 +6322,10 @@ open class MemberActivity : AppCompatActivity() {
                             senderRole = preferences.getString("ministryRole", "Member").orEmpty(),
                             senderPhotoUri = currentPhoto,
                             text = textToSend,
-                            timestamp = System.currentTimeMillis()
+                            timestamp = System.currentTimeMillis(),
+                            replyToId = repId,
+                            replyToSender = repSender,
+                            replyToText = repText
                         )
                         chatMessages.add(newMsg)
                         TeamRepository.sendChatMessage(currentCode, newMsg, preferences)
@@ -6118,8 +6342,8 @@ open class MemberActivity : AppCompatActivity() {
             message.addTextChangedListener(object : android.text.TextWatcher {
                 override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
                 override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
-                    send.text = if (s.isNullOrBlank()) "☺" else "➤"
-                    send.contentDescription = if (s.isNullOrBlank()) "Insert emoji" else "Send message"
+                    val hasText = !s.isNullOrBlank()
+                    send.setTextColor(if (hasText) purple else Color.rgb(148, 163, 184))
                 }
                 override fun afterTextChanged(s: android.text.Editable?) {}
             })

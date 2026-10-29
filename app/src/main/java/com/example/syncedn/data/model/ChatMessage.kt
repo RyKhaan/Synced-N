@@ -2,7 +2,7 @@ package com.example.syncedn.data.model
 
 /**
  * Data model for Team Chat messages exchanged in Synced N.
- * Supports text, Cloudinary photo attachments, sender metadata, timestamps, and edit tracking.
+ * Supports text, Cloudinary photo attachments, sender metadata, timestamps, edit tracking, and reply threads.
  */
 data class ChatMessage(
     val id: String = "",
@@ -17,7 +17,10 @@ data class ChatMessage(
     val isEdited: Boolean = false,
     val editedAt: Long = 0L,
     val isDeleted: Boolean = false,
-    val deletedAt: Long = 0L
+    val deletedAt: Long = 0L,
+    val replyToId: String = "",
+    val replyToSender: String = "",
+    val replyToText: String = ""
 ) {
     fun toMap(): Map<String, Any> = mapOf(
         "id" to id,
@@ -32,7 +35,10 @@ data class ChatMessage(
         "isEdited" to isEdited,
         "editedAt" to editedAt,
         "isDeleted" to isDeleted,
-        "deletedAt" to deletedAt
+        "deletedAt" to deletedAt,
+        "replyToId" to replyToId,
+        "replyToSender" to replyToSender,
+        "replyToText" to replyToText
     )
 
     companion object {
@@ -71,7 +77,10 @@ data class ChatMessage(
                 isEdited = (map["isEdited"] as? Boolean) ?: false,
                 editedAt = parsedEditedAt,
                 isDeleted = (map["isDeleted"] as? Boolean) ?: false,
-                deletedAt = parsedDeletedAt
+                deletedAt = parsedDeletedAt,
+                replyToId = map["replyToId"] as? String ?: "",
+                replyToSender = map["replyToSender"] as? String ?: "",
+                replyToText = map["replyToText"] as? String ?: ""
             )
         }
     }

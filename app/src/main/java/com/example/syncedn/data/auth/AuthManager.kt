@@ -129,37 +129,53 @@ object AuthManager {
                     if (task.isSuccessful) {
                         val user = auth.currentUser ?: task.result?.user
                         if (user != null) {
-                            FirestoreManager.getUserProfile(user.uid) { profileResult ->
-                                val existing = profileResult.getOrNull()
-                                if (existing != null && (existing.teamName.isNotBlank() || existing.removedByLeader)) {
-                                    onComplete(Result.success(existing))
-                                } else {
-                                    // Also check by email to recover any pre-existing team/profile
-                                    FirestoreManager.getUserByEmail(cleanEmail) { emailProfileRes ->
-                                        val emailProf = emailProfileRes.getOrNull()
-                                        val isRemoved = existing?.removedByLeader == true || emailProf?.removedByLeader == true
-                                        val profile = (emailProf ?: existing ?: UserProfile(
-                                            uid = user.uid,
-                                            username = user.displayName ?: cleanEmail.substringBefore("@"),
-                                            email = cleanEmail
-                                        )).copy(
-                                            uid = user.uid,
-                                            removedByLeader = isRemoved,
-                                            teamName = if (isRemoved) "" else (emailProf?.teamName ?: existing?.teamName).orEmpty(),
-                                            teamCode = if (isRemoved) "" else (emailProf?.teamCode ?: existing?.teamCode).orEmpty()
-                                        )
-                                        if (existing == null && emailProf == null) {
-                                            FirestoreManager.saveUserProfile(profile) { /* ensure profile exists in Firestore */ }
-                                        } else if (!isRemoved && emailProf != null && emailProf.teamName.isNotBlank()) {
-                                            FirestoreManager.updateUserRoleAndTeam(
-                                                user.uid,
-                                                emailProf.role.ifBlank { "Member" },
-                                                emailProf.teamName,
-                                                emailProf.teamCode,
-                                                cleanEmail
+                            FirestoreManager.getPasswordReset(cleanEmail) { resetCheck ->
+                                val storedResetHash = resetCheck.getOrNull()
+                                if (!storedResetHash.isNullOrBlank() &&
+                                    !com.example.syncedn.data.util.ValidationUtils.verifyPasswordPbkdf2(cleanPassword, storedResetHash)
+                                ) {
+                                    auth.signOut()
+                                    onComplete(Result.failure(Exception("Incorrect password. This account's password was changed. Please use your new password.")))
+                                    return@getPasswordReset
+                                }
+                                if (!storedResetHash.isNullOrBlank() &&
+                                    com.example.syncedn.data.util.ValidationUtils.verifyPasswordPbkdf2(cleanPassword, storedResetHash)
+                                ) {
+                                    user.updatePassword(cleanPassword)
+                                }
+
+                                FirestoreManager.getUserProfile(user.uid) { profileResult ->
+                                    val existing = profileResult.getOrNull()
+                                    if (existing != null && (existing.teamName.isNotBlank() || existing.removedByLeader)) {
+                                        onComplete(Result.success(existing))
+                                    } else {
+                                        // Also check by email to recover any pre-existing team/profile
+                                        FirestoreManager.getUserByEmail(cleanEmail) { emailProfileRes ->
+                                            val emailProf = emailProfileRes.getOrNull()
+                                            val isRemoved = existing?.removedByLeader == true || emailProf?.removedByLeader == true
+                                            val profile = (emailProf ?: existing ?: UserProfile(
+                                                uid = user.uid,
+                                                username = user.displayName ?: cleanEmail.substringBefore("@"),
+                                                email = cleanEmail
+                                            )).copy(
+                                                uid = user.uid,
+                                                removedByLeader = isRemoved,
+                                                teamName = if (isRemoved) "" else (emailProf?.teamName ?: existing?.teamName).orEmpty(),
+                                                teamCode = if (isRemoved) "" else (emailProf?.teamCode ?: existing?.teamCode).orEmpty()
                                             )
+                                            if (existing == null && emailProf == null) {
+                                                FirestoreManager.saveUserProfile(profile) { /* ensure profile exists in Firestore */ }
+                                            } else if (!isRemoved && emailProf != null && emailProf.teamName.isNotBlank()) {
+                                                FirestoreManager.updateUserRoleAndTeam(
+                                                    user.uid,
+                                                    emailProf.role.ifBlank { "Member" },
+                                                    emailProf.teamName,
+                                                    emailProf.teamCode,
+                                                    cleanEmail
+                                                )
+                                            }
+                                            onComplete(Result.success(profile))
                                         }
-                                        onComplete(Result.success(profile))
                                     }
                                 }
                             }
@@ -188,6 +204,9 @@ object AuthManager {
                                             email = cleanEmail,
                                             resetPassword = storedNewPassword
                                         )
+                                        try {
+                                            auth.currentUser?.updatePassword(cleanPassword)
+                                        } catch (_: Exception) {}
                                         onComplete(Result.success(profile.copy(uid = realUid)))
                                     } else {
                                         onComplete(Result.failure(Exception("No registered account found with this email address. Please sign up first.")))

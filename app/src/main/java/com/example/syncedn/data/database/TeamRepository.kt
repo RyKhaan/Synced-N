@@ -4855,7 +4855,13 @@ object TeamRepository {
             .collection(REPORTS_SUBCOLLECTION)
             .get()
             .addOnSuccessListener { query ->
-                val fetched = query.documents.mapNotNull { it.data }.sortedByDescending { doc ->
+                val fetched = query.documents.mapNotNull { doc ->
+                    val data = doc.data?.toMutableMap() ?: return@mapNotNull null
+                    if (!data.containsKey("id") || data["id"]?.toString().isNullOrBlank()) {
+                        data["id"] = doc.id
+                    }
+                    data.toMap()
+                }.sortedByDescending { doc ->
                     (doc["createdAt"] as? Number)?.toLong() ?: 0L
                 }
                 if (fetched.isNotEmpty()) {
@@ -4872,6 +4878,42 @@ object TeamRepository {
             .addOnFailureListener {
                 if (cached.isEmpty()) onResult(emptyList())
             }
+    }
+
+    /**
+     * Deletes a team report from Firestore (/teams/{teamCode}/reports/{reportId}) and updates local cache.
+     */
+    fun deleteTeamReport(
+        teamCode: String,
+        reportId: String,
+        preferences: android.content.SharedPreferences? = null,
+        onComplete: (Result<Unit>) -> Unit = {}
+    ) {
+        val code = teamCode.trim().uppercase()
+        if (code.isBlank() || reportId.isBlank()) {
+            onComplete(Result.failure(IllegalArgumentException("Team code and report ID cannot be blank")))
+            return
+        }
+
+        val mem = cachedReports[code]
+        if (mem != null) {
+            synchronized(mem) {
+                mem.removeAll { it["id"] == reportId }
+            }
+        }
+        preferences?.let { prefs ->
+            val updated = mem?.toList() ?: emptyList()
+            prefs.edit().putString(
+                "$PREFS_KEY_REPORTS_PREFIX$code",
+                org.json.JSONArray(updated).toString()
+            ).apply()
+        }
+
+        db.collection(TEAMS_COLLECTION).document(code)
+            .collection(REPORTS_SUBCOLLECTION).document(reportId)
+            .delete()
+            .addOnSuccessListener { onComplete(Result.success(Unit)) }
+            .addOnFailureListener { onComplete(Result.failure(it)) }
     }
 
     /**
