@@ -320,21 +320,6 @@ open class MemberActivity : AppCompatActivity() {
                 if (!isFinishing && !isDestroyed) {
                     teamRoster = updatedRoster
                     updateRosterViews()
-
-                    val currentUid = currentUserId()
-                    val currentEmail = preferences.getString("email", "").orEmpty().trim().lowercase()
-                    val myEntry = updatedRoster.find { m ->
-                        (currentUid.isNotBlank() && m.uid == currentUid) ||
-                        (currentEmail.isNotBlank() && m.email.trim().lowercase() == currentEmail)
-                    }
-                    if (myEntry != null) {
-                        handleSelfRoleSync(
-                            remoteMinistryRole = myEntry.ministryRole,
-                            remoteRole = myEntry.role,
-                            myUid = currentUid,
-                            myEmail = currentEmail
-                        )
-                    }
                 }
             }
         }
@@ -443,40 +428,49 @@ open class MemberActivity : AppCompatActivity() {
         val cleanTeam = teamName.trim().lowercase()
         val currentPref = preferences.getString("ministryRole", "").orEmpty()
         val currentRolePref = preferences.getString("role", "").orEmpty()
+        val now = System.currentTimeMillis()
+        val lastRoleSwitchTime = preferences.getLong("last_role_switch_time_$myUid", 0L)
+        val lastSwitchedRole = preferences.getString("last_switched_role_$myUid", "").orEmpty()
 
         // 1. Check Substitute Leader FIRST (because Substitute Leader also has role == "Leader" in Firestore!)
         if (TeamRepository.isSubstituteLeader(remoteMinistryRole) && !remoteRole.equals("Member", ignoreCase = true)) {
-            val wasAlreadySub = currentPref.equals("Substitute Leader", ignoreCase = true) &&
-                lastObservedMinistryRole.equals("Substitute Leader", ignoreCase = true)
-            lastObservedMinistryRole = "Substitute Leader"
-            preferences.edit {
-                putString("role", "Leader")
-                putString(SessionManager.KEY_ROLE, "Leader")
-                putString("ministryRole", "Substitute Leader")
-                putString(SessionManager.KEY_MINISTRY_ROLE, "Substitute Leader")
-                if (myUid.isNotBlank()) {
-                    putString("user_role_$myUid", "Leader")
-                    putString("user_ministry_$myUid", "Substitute Leader")
-                }
-                if (emailLower.isNotBlank()) {
-                    putString("email_role_$emailLower", "Leader")
-                    putString("email_ministry_$emailLower", "Substitute Leader")
-                    val sig = com.example.syncedn.data.util.ValidationUtils.computeSessionHmac(emailLower, "Leader", myUid)
-                    if (sig.isNotBlank()) putString("session_hmac_sig_$emailLower", sig)
-                }
-                if (cleanTeam.isNotBlank() && preferences.getString("team_leader_email_$cleanTeam", "").equals(emailLower, ignoreCase = true)) {
-                    remove("team_leader_email_$cleanTeam")
-                }
-                try {
-                    val map = org.json.JSONObject(preferences.getString(SessionManager.KEY_MEMBER_ROLES, "{}").orEmpty())
-                    if (myUid.isNotBlank()) map.put(myUid, "Substitute Leader")
-                    if (emailLower.isNotBlank()) map.put(emailLower, "Substitute Leader")
-                    putString(SessionManager.KEY_MEMBER_ROLES, map.toString())
-                } catch (_: Throwable) {}
+            if (now - lastRoleSwitchTime < 3000L && lastSwitchedRole == "Substitute Leader") {
+                return
             }
+            lastObservedMinistryRole = "Substitute Leader"
+            val editor = preferences.edit()
+                .putString("role", "Leader")
+                .putString(SessionManager.KEY_ROLE, "Leader")
+                .putString("ministryRole", "Substitute Leader")
+                .putString(SessionManager.KEY_MINISTRY_ROLE, "Substitute Leader")
+                .putLong("last_role_switch_time_$myUid", now)
+                .putString("last_switched_role_$myUid", "Substitute Leader")
+            if (myUid.isNotBlank()) {
+                editor.putString("user_role_$myUid", "Leader")
+                editor.putString("user_ministry_$myUid", "Substitute Leader")
+            }
+            if (emailLower.isNotBlank()) {
+                editor.putString("email_role_$emailLower", "Leader")
+                editor.putString("email_ministry_$emailLower", "Substitute Leader")
+                val sig = com.example.syncedn.data.util.ValidationUtils.computeSessionHmac(emailLower, "Leader", myUid)
+                if (sig.isNotBlank()) editor.putString("session_hmac_sig_$emailLower", sig)
+            }
+            if (cleanTeam.isNotBlank() && preferences.getString("team_leader_email_$cleanTeam", "").equals(emailLower, ignoreCase = true)) {
+                editor.remove("team_leader_email_$cleanTeam")
+            }
+            try {
+                val map = org.json.JSONObject(preferences.getString(SessionManager.KEY_MEMBER_ROLES, "{}").orEmpty())
+                if (myUid.isNotBlank()) map.put(myUid, "Substitute Leader")
+                if (emailLower.isNotBlank()) map.put(emailLower, "Substitute Leader")
+                editor.putString(SessionManager.KEY_MEMBER_ROLES, map.toString())
+            } catch (_: Throwable) {}
+            editor.commit()
+
+            val lastNotifiedRole = preferences.getString("last_notified_role_$myUid", "").orEmpty()
             if (!isAuthOrOnboardingScreen) {
                 isSwitchingToLeaderDashboard = true
-                if (!wasAlreadySub) {
+                if (lastNotifiedRole != "Substitute Leader") {
+                    preferences.edit().putString("last_notified_role_$myUid", "Substitute Leader").commit()
                     com.example.syncedn.data.auth.SyncedMessagingService.dispatchSystemNotification(
                         this@MemberActivity,
                         preferences,
@@ -500,31 +494,37 @@ open class MemberActivity : AppCompatActivity() {
 
         // 2. Check Permanent Worship Leader (never true for Substitute Leader)
         if (TeamRepository.isWorshipLeader(remoteMinistryRole, remoteRole)) {
-            val wasAlreadyWorshipLeader = currentPref.equals("Worship Leader", ignoreCase = true) &&
-                lastObservedMinistryRole.equals("Worship Leader", ignoreCase = true)
-            lastObservedMinistryRole = "Worship Leader"
-            preferences.edit {
-                putString("role", "Leader")
-                putString(SessionManager.KEY_ROLE, "Leader")
-                putString("ministryRole", "Worship Leader")
-                putString(SessionManager.KEY_MINISTRY_ROLE, "Worship Leader")
-                if (myUid.isNotBlank()) {
-                    putString("user_role_$myUid", "Leader")
-                    putString("user_ministry_$myUid", "Worship Leader")
-                }
-                if (emailLower.isNotBlank()) {
-                    putString("email_role_$emailLower", "Leader")
-                    putString("email_ministry_$emailLower", "Worship Leader")
-                    val sig = com.example.syncedn.data.util.ValidationUtils.computeSessionHmac(emailLower, "Leader", myUid)
-                    if (sig.isNotBlank()) putString("session_hmac_sig_$emailLower", sig)
-                }
-                if (cleanTeam.isNotBlank() && emailLower.isNotBlank()) {
-                    putString("team_leader_email_$cleanTeam", emailLower)
-                }
+            if (now - lastRoleSwitchTime < 3000L && lastSwitchedRole == "Worship Leader") {
+                return
             }
+            lastObservedMinistryRole = "Worship Leader"
+            val editor = preferences.edit()
+                .putString("role", "Leader")
+                .putString(SessionManager.KEY_ROLE, "Leader")
+                .putString("ministryRole", "Worship Leader")
+                .putString(SessionManager.KEY_MINISTRY_ROLE, "Worship Leader")
+                .putLong("last_role_switch_time_$myUid", now)
+                .putString("last_switched_role_$myUid", "Worship Leader")
+            if (myUid.isNotBlank()) {
+                editor.putString("user_role_$myUid", "Leader")
+                editor.putString("user_ministry_$myUid", "Worship Leader")
+            }
+            if (emailLower.isNotBlank()) {
+                editor.putString("email_role_$emailLower", "Leader")
+                editor.putString("email_ministry_$emailLower", "Worship Leader")
+                val sig = com.example.syncedn.data.util.ValidationUtils.computeSessionHmac(emailLower, "Leader", myUid)
+                if (sig.isNotBlank()) editor.putString("session_hmac_sig_$emailLower", sig)
+            }
+            if (cleanTeam.isNotBlank() && emailLower.isNotBlank()) {
+                editor.putString("team_leader_email_$cleanTeam", emailLower)
+            }
+            editor.commit()
+
+            val lastNotifiedRole = preferences.getString("last_notified_role_$myUid", "").orEmpty()
             if (!isAuthOrOnboardingScreen) {
                 isSwitchingToLeaderDashboard = true
-                if (!wasAlreadyWorshipLeader) {
+                if (lastNotifiedRole != "Worship Leader") {
+                    preferences.edit().putString("last_notified_role_$myUid", "Worship Leader").commit()
                     com.example.syncedn.data.auth.SyncedMessagingService.dispatchSystemNotification(
                         this@MemberActivity,
                         preferences,
@@ -547,45 +547,49 @@ open class MemberActivity : AppCompatActivity() {
         }
 
         // 3. Ordinary Member Role
-        val resolvedMinistry = if (remoteMinistryRole.isNotBlank() && !TeamRepository.isSubstituteLeader(remoteMinistryRole)) {
+        val resolvedMinistry = if (remoteMinistryRole.isNotBlank() && !TeamRepository.isSubstituteLeader(remoteMinistryRole) && !remoteMinistryRole.equals("Worship Leader", ignoreCase = true)) {
             remoteMinistryRole
         } else {
             "Member"
         }
-        val previousRole = lastObservedMinistryRole.ifBlank { currentPref }
-        val roleMeaningfullyChanged = previousRole.isNotBlank() && !previousRole.equals(resolvedMinistry, ignoreCase = true)
+        val lastNotifiedRole = preferences.getString("last_notified_role_$myUid", "").orEmpty()
+        val roleMeaningfullyChanged = lastNotifiedRole.isNotBlank() && !lastNotifiedRole.equals(resolvedMinistry, ignoreCase = true)
         val needsPrefSync = roleMeaningfullyChanged ||
             !currentPref.equals(resolvedMinistry, ignoreCase = true) ||
             !currentRolePref.equals("Member", ignoreCase = true)
         lastObservedMinistryRole = resolvedMinistry
 
         if (needsPrefSync) {
-            preferences.edit {
-                putString("role", "Member")
-                putString(SessionManager.KEY_ROLE, "Member")
-                putString("ministryRole", resolvedMinistry)
-                putString(SessionManager.KEY_MINISTRY_ROLE, resolvedMinistry)
-                if (myUid.isNotBlank()) {
-                    putString("user_role_$myUid", "Member")
-                    putString("user_ministry_$myUid", resolvedMinistry)
-                }
-                if (emailLower.isNotBlank()) {
-                    putString("email_role_$emailLower", "Member")
-                    putString("email_ministry_$emailLower", resolvedMinistry)
-                    val sig = com.example.syncedn.data.util.ValidationUtils.computeSessionHmac(emailLower, "Member", myUid)
-                    if (sig.isNotBlank()) putString("session_hmac_sig_$emailLower", sig)
-                }
-                if (cleanTeam.isNotBlank() && preferences.getString("team_leader_email_$cleanTeam", "").equals(emailLower, ignoreCase = true)) {
-                    remove("team_leader_email_$cleanTeam")
-                }
-                try {
-                    val map = org.json.JSONObject(preferences.getString(SessionManager.KEY_MEMBER_ROLES, "{}").orEmpty())
-                    if (myUid.isNotBlank()) map.put(myUid, resolvedMinistry)
-                    if (emailLower.isNotBlank()) map.put(emailLower, resolvedMinistry)
-                    putString(SessionManager.KEY_MEMBER_ROLES, map.toString())
-                } catch (_: Throwable) {}
+            val editor = preferences.edit()
+                .putString("role", "Member")
+                .putString(SessionManager.KEY_ROLE, "Member")
+                .putString("ministryRole", resolvedMinistry)
+                .putString(SessionManager.KEY_MINISTRY_ROLE, resolvedMinistry)
+                .putLong("last_role_switch_time_$myUid", now)
+                .putString("last_switched_role_$myUid", resolvedMinistry)
+            if (myUid.isNotBlank()) {
+                editor.putString("user_role_$myUid", "Member")
+                editor.putString("user_ministry_$myUid", resolvedMinistry)
             }
+            if (emailLower.isNotBlank()) {
+                editor.putString("email_role_$emailLower", "Member")
+                editor.putString("email_ministry_$emailLower", resolvedMinistry)
+                val sig = com.example.syncedn.data.util.ValidationUtils.computeSessionHmac(emailLower, "Member", myUid)
+                if (sig.isNotBlank()) editor.putString("session_hmac_sig_$emailLower", sig)
+            }
+            if (cleanTeam.isNotBlank() && preferences.getString("team_leader_email_$cleanTeam", "").equals(emailLower, ignoreCase = true)) {
+                editor.remove("team_leader_email_$cleanTeam")
+            }
+            try {
+                val map = org.json.JSONObject(preferences.getString(SessionManager.KEY_MEMBER_ROLES, "{}").orEmpty())
+                if (myUid.isNotBlank()) map.put(myUid, resolvedMinistry)
+                if (emailLower.isNotBlank()) map.put(emailLower, resolvedMinistry)
+                editor.putString(SessionManager.KEY_MEMBER_ROLES, map.toString())
+            } catch (_: Throwable) {}
+            editor.commit()
+
             if (roleMeaningfullyChanged && !isAuthOrOnboardingScreen) {
+                preferences.edit().putString("last_notified_role_$myUid", resolvedMinistry).commit()
                 com.example.syncedn.data.auth.SyncedMessagingService.dispatchSystemNotification(
                     this@MemberActivity,
                     preferences,
@@ -709,8 +713,11 @@ open class MemberActivity : AppCompatActivity() {
                 .collection("users").whereEqualTo("email", myCurrentEmail)
                 .addSnapshotListener { snapshot, error ->
                     if (error != null || snapshot == null || snapshot.isEmpty) return@addSnapshotListener
-                    val doc = snapshot.documents.firstOrNull() ?: return@addSnapshotListener
-                    if (myCurrentUid.isNotBlank() && doc.id == myCurrentUid) return@addSnapshotListener
+                    val myUidDoc = if (myCurrentUid.isNotBlank()) snapshot.documents.find { it.id == myCurrentUid } else null
+                    if (myCurrentUid.isNotBlank() && myUidDoc != null) {
+                        return@addSnapshotListener
+                    }
+                    val doc = snapshot.documents.firstOrNull { !it.id.startsWith("user_") } ?: snapshot.documents.firstOrNull() ?: return@addSnapshotListener
                     handleMyUserDocSnapshot(
                         roleFromDoc = doc.getString("role").orEmpty(),
                         ministryRoleFromDoc = doc.getString("ministryRole").orEmpty(),

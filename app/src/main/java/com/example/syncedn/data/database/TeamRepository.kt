@@ -667,38 +667,95 @@ object TeamRepository {
                 val isPrimaryLeader = preferredEmail.trim().equals("ryanlloydgenturo@gmail.com", ignoreCase = true) ||
                                       preferredFullName.trim().equals("Ryan Lloyd Genturo", ignoreCase = true)
                 val emailLower = preferredEmail.trim().lowercase()
-                val isExplicitlyMember = !isPrimaryLeader && (
-                    existing.role.equals("Member", true) ||
-                    m.role.equals("Member", true) ||
-                    (preferences != null && (
-                        preferences.getString("email_role_$emailLower", "").equals("Member", true) ||
-                        (preferredUid.isNotBlank() && preferences.getString("user_role_$preferredUid", "").equals("Member", true))
-                    ))
-                )
 
-                // 4. Role
-                val preferredRole = when {
-                    isPrimaryLeader -> "Leader"
-                    isExplicitlyMember -> "Member"
-                    existing.role.equals("Leader", true) || m.role.equals("Leader", true) -> "Leader"
-                    else -> existing.role.ifBlank { m.role }.ifBlank { "Member" }
-                }
+                val existingIsRealUid = !existing.uid.startsWith("user_") && existing.uid.isNotBlank()
+                val mIsRealUid = !m.uid.startsWith("user_") && m.uid.isNotBlank()
+                val hasRealUidDisparity = existingIsRealUid != mIsRealUid
+                val realUidDoc = if (existingIsRealUid) existing else if (mIsRealUid) m else null
+                val syntheticDoc = if (!existingIsRealUid) existing else m
 
-                // 5. Ministry Role: prefer specific role over generic "Member" or blank, but never resurrect Substitute Leader if demoted
-                val preferredMinistryRole = when {
-                    isPrimaryLeader -> "Worship Leader"
-                    isExplicitlyMember && (existing.ministryRole.equals("Substitute Leader", true) || m.ministryRole.equals("Substitute Leader", true)) -> {
-                        val nonSub = when {
-                            existing.ministryRole.isNotBlank() && !existing.ministryRole.equals("Substitute Leader", true) && !existing.ministryRole.equals("Member", true) -> existing.ministryRole
-                            m.ministryRole.isNotBlank() && !m.ministryRole.equals("Substitute Leader", true) && !m.ministryRole.equals("Member", true) -> m.ministryRole
-                            else -> "Member"
+                // 4. Role & Ministry Role
+                val preferredRole: String
+                val preferredMinistryRole: String
+
+                if (isPrimaryLeader) {
+                    preferredRole = "Leader"
+                    preferredMinistryRole = "Worship Leader"
+                } else if (hasRealUidDisparity && realUidDoc != null) {
+                    // Real Auth UID doc has higher authority than synthetic user_* doc
+                    when {
+                        isSubstituteLeader(realUidDoc.ministryRole) && !realUidDoc.role.equals("Member", ignoreCase = true) -> {
+                            preferredRole = "Leader"
+                            preferredMinistryRole = "Substitute Leader"
                         }
-                        nonSub
+                        isWorshipLeader(realUidDoc.ministryRole, realUidDoc.role) && !realUidDoc.role.equals("Member", ignoreCase = true) -> {
+                            preferredRole = "Leader"
+                            preferredMinistryRole = "Worship Leader"
+                        }
+                        realUidDoc.role.equals("Member", ignoreCase = true) || isOrdinaryMemberRole(realUidDoc.ministryRole, realUidDoc.role) -> {
+                            preferredRole = "Member"
+                            val specificRole = when {
+                                realUidDoc.ministryRole.isNotBlank() && !isSubstituteLeader(realUidDoc.ministryRole) && !isWorshipLeader(realUidDoc.ministryRole, realUidDoc.role) && !realUidDoc.ministryRole.equals("Member", true) -> realUidDoc.ministryRole
+                                syntheticDoc.ministryRole.isNotBlank() && !isSubstituteLeader(syntheticDoc.ministryRole) && !isWorshipLeader(syntheticDoc.ministryRole, syntheticDoc.role) && !syntheticDoc.ministryRole.equals("Member", true) -> syntheticDoc.ministryRole
+                                else -> "Member"
+                            }
+                            preferredMinistryRole = specificRole
+                        }
+                        else -> {
+                            preferredRole = realUidDoc.role.ifBlank { "Member" }
+                            preferredMinistryRole = realUidDoc.ministryRole.ifBlank { "Member" }
+                        }
                     }
-                    existing.ministryRole.isNotBlank() && !existing.ministryRole.equals("Member", true) -> existing.ministryRole
-                    m.ministryRole.isNotBlank() && !m.ministryRole.equals("Member", true) -> m.ministryRole
-                    existing.ministryRole.isNotBlank() -> existing.ministryRole
-                    else -> m.ministryRole
+                } else {
+                    // Both docs have same UID status (both synthetic or both real)
+                    val eitherIsExplicitMember = existing.role.equals("Member", true) || m.role.equals("Member", true)
+                    val subLeaderCandidate = when {
+                        !eitherIsExplicitMember && isSubstituteLeader(m.ministryRole) && !m.role.equals("Member", ignoreCase = true) -> m
+                        !eitherIsExplicitMember && isSubstituteLeader(existing.ministryRole) && !existing.role.equals("Member", ignoreCase = true) -> existing
+                        else -> null
+                    }
+                    val worshipLeaderCandidate = when {
+                        !eitherIsExplicitMember && isWorshipLeader(m.ministryRole, m.role) && !m.role.equals("Member", ignoreCase = true) -> m
+                        !eitherIsExplicitMember && isWorshipLeader(existing.ministryRole, existing.role) && !existing.role.equals("Member", ignoreCase = true) -> existing
+                        else -> null
+                    }
+                    when {
+                        subLeaderCandidate != null -> {
+                            preferredRole = "Leader"
+                            preferredMinistryRole = "Substitute Leader"
+                        }
+                        worshipLeaderCandidate != null -> {
+                            preferredRole = "Leader"
+                            preferredMinistryRole = "Worship Leader"
+                        }
+                        eitherIsExplicitMember -> {
+                            preferredRole = "Member"
+                            val nonSub = when {
+                                existing.ministryRole.isNotBlank() && !isSubstituteLeader(existing.ministryRole) && !isWorshipLeader(existing.ministryRole, existing.role) && !existing.ministryRole.equals("Member", true) -> existing.ministryRole
+                                m.ministryRole.isNotBlank() && !isSubstituteLeader(m.ministryRole) && !isWorshipLeader(m.ministryRole, m.role) && !m.ministryRole.equals("Member", true) -> m.ministryRole
+                                else -> "Member"
+                            }
+                            preferredMinistryRole = nonSub
+                        }
+                        existing.role.equals("Leader", true) || m.role.equals("Leader", true) -> {
+                            preferredRole = "Leader"
+                            val specificRole = when {
+                                existing.ministryRole.isNotBlank() && !existing.ministryRole.equals("Member", true) -> existing.ministryRole
+                                m.ministryRole.isNotBlank() && !m.ministryRole.equals("Member", true) -> m.ministryRole
+                                else -> "Member"
+                            }
+                            preferredMinistryRole = specificRole
+                        }
+                        else -> {
+                            preferredRole = "Member"
+                            val specificRole = when {
+                                existing.ministryRole.isNotBlank() && !existing.ministryRole.equals("Member", true) -> existing.ministryRole
+                                m.ministryRole.isNotBlank() && !m.ministryRole.equals("Member", true) -> m.ministryRole
+                                else -> "Member"
+                            }
+                            preferredMinistryRole = specificRole
+                        }
+                    }
                 }
 
                 // 6. Photo
@@ -740,8 +797,7 @@ object TeamRepository {
             val isExplicitWorshipLeader = isWorshipLeader(mWithPhoto.ministryRole, mWithPhoto.role) && !mWithPhoto.role.equals("Member", ignoreCase = true)
             val isDemotedMember = !isPrimary && !isExplicitSubLeader && !isExplicitWorshipLeader && (
                 mWithPhoto.role.equals("Member", true) ||
-                isOrdinaryMemberRole(mWithPhoto.ministryRole, mWithPhoto.role) ||
-                prefRole.equals("Member", true)
+                isOrdinaryMemberRole(mWithPhoto.ministryRole, mWithPhoto.role)
             )
 
             if (isPrimary) {

@@ -3866,4 +3866,98 @@ class ExampleUnitTest {
         assertEquals("Worship Leader", dedupedAfterTransfer.single().ministryRole)
         assertEquals("Leader", dedupedAfterTransfer.single().role)
     }
+
+    @Test
+    fun testSubstituteLeaderMultiDocDeduplicationNoLoop() {
+        val repo = com.example.syncedn.data.database.TeamRepository
+        repo.clearCache()
+
+        // Scenario: User A was an ordinary member ("Bassist").
+        // On their device, preferences has their prior role="Member" and email_role_="Member".
+        val memberPrefs = FakePreferences().apply {
+            edit()
+                .putString("userId", "auth_uid_usera")
+                .putString("email", "usera@test.com")
+                .putString("fullName", "User A")
+                .putString("role", "Member")
+                .putString("ministryRole", "Bassist")
+                .putString("email_role_usera@test.com", "Member")
+                .putString("user_role_auth_uid_usera", "Member")
+                .putString("email_ministry_usera@test.com", "Bassist")
+                .putString("user_ministry_auth_uid_usera", "Bassist")
+                .apply()
+        }
+
+        // Leader promotes User A to "Substitute Leader".
+        // In Firestore, there are two documents for User A:
+        // Doc 1 (authentic auth UID): updated by leader to "Substitute Leader" / "Leader"
+        // Doc 2 (legacy synthetic user_* doc): still has stale "Member" / "Bassist"
+        val doc1Authentic = com.example.syncedn.data.model.TeamMember(
+            uid = "auth_uid_usera",
+            fullName = "User A",
+            username = "usera",
+            email = "usera@test.com",
+            role = "Leader",
+            ministryRole = "Substitute Leader",
+            teamCode = "TEST01"
+        )
+        val doc2SyntheticStale = com.example.syncedn.data.model.TeamMember(
+            uid = "user_1729000000",
+            fullName = "User A",
+            username = "usera",
+            email = "usera@test.com",
+            role = "Member",
+            ministryRole = "Bassist",
+            teamCode = "TEST01"
+        )
+
+        // Test with doc1 first, then doc2
+        val deduped1 = repo.deduplicateRoster(listOf(doc1Authentic, doc2SyntheticStale), memberPrefs)
+        assertEquals(1, deduped1.size)
+        assertEquals("auth_uid_usera", deduped1.first().uid)
+        assertEquals("Leader", deduped1.first().role)
+        assertEquals("Substitute Leader", deduped1.first().ministryRole)
+
+        // Test with doc2 first, then doc1 (order from Firestore must not matter!)
+        val deduped2 = repo.deduplicateRoster(listOf(doc2SyntheticStale, doc1Authentic), memberPrefs)
+        assertEquals(1, deduped2.size)
+        assertEquals("auth_uid_usera", deduped2.first().uid)
+        assertEquals("Leader", deduped2.first().role)
+        assertEquals("Substitute Leader", deduped2.first().ministryRole)
+
+        // Scenario 2: Leader now demotes User A back to ordinary member ("Keyboardist", role="Member").
+        // Authentic Auth doc is updated to "Keyboardist" / "Member".
+        // A stale synthetic doc in Firestore still says "Substitute Leader" / "Leader".
+        val doc1AuthenticDemoted = com.example.syncedn.data.model.TeamMember(
+            uid = "auth_uid_usera",
+            fullName = "User A",
+            username = "usera",
+            email = "usera@test.com",
+            role = "Member",
+            ministryRole = "Keyboardist",
+            teamCode = "TEST01"
+        )
+        val doc2SyntheticStaleLeader = com.example.syncedn.data.model.TeamMember(
+            uid = "user_1729000000",
+            fullName = "User A",
+            username = "usera",
+            email = "usera@test.com",
+            role = "Leader",
+            ministryRole = "Substitute Leader",
+            teamCode = "TEST01"
+        )
+
+        // Stale synthetic doc must NOT resurrect Substitute Leader over the authentic demoted doc!
+        val dedupedDemoted1 = repo.deduplicateRoster(listOf(doc1AuthenticDemoted, doc2SyntheticStaleLeader), memberPrefs)
+        assertEquals(1, dedupedDemoted1.size)
+        assertEquals("auth_uid_usera", dedupedDemoted1.first().uid)
+        assertEquals("Member", dedupedDemoted1.first().role)
+        assertEquals("Keyboardist", dedupedDemoted1.first().ministryRole)
+
+        val dedupedDemoted2 = repo.deduplicateRoster(listOf(doc2SyntheticStaleLeader, doc1AuthenticDemoted), memberPrefs)
+        assertEquals(1, dedupedDemoted2.size)
+        assertEquals("auth_uid_usera", dedupedDemoted2.first().uid)
+        assertEquals("Member", dedupedDemoted2.first().role)
+        assertEquals("Keyboardist", dedupedDemoted2.first().ministryRole)
+    }
 }
