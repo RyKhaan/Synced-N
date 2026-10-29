@@ -26,10 +26,18 @@ object SyncedMessagingService {
     private const val CHANNEL_NAME = "Synced N Ministry Alerts"
 
     private var activeTeamCode: String = ""
+    private var activeRejoinTeamCode: String = ""
     private var servicesListener: ListenerRegistration? = null
     private var announcementsListener: ListenerRegistration? = null
     private var substitutionsListener: ListenerRegistration? = null
     private var messagesListener: ListenerRegistration? = null
+    private var rejoinRequestsListener: ListenerRegistration? = null
+
+    @Volatile
+    var onRejoinApprovedInApp: ((String) -> Unit)? = null
+
+    @Volatile
+    var onLeaderRejoinRequestInApp: ((String, String) -> Unit)? = null
 
     private data class ServiceSnapshotMeta(
         val status: String,
@@ -44,6 +52,7 @@ object SyncedMessagingService {
     private val knownAnnouncements = mutableMapOf<String, Long>()
     private val knownSubstitutions = mutableMapOf<String, String>()
     private val knownMessages = mutableSetOf<String>()
+    private val knownRejoinStatuses = mutableMapOf<String, String>()
 
     fun isGeneralNotificationEnabled(preferences: SharedPreferences?): Boolean {
         return preferences?.getBoolean("notifications", true) ?: true
@@ -133,22 +142,137 @@ object SyncedMessagingService {
         preferences: SharedPreferences
     ) {
         val code = preferences.getString("teamCode", "").orEmpty().trim().uppercase()
-        if (code.isBlank()) {
-            stopRealtimeTeamWatchers()
-            return
-        }
-        if (code == activeTeamCode && servicesListener != null) {
-            return
-        }
+        val currentEmail = preferences.getString("email", "").orEmpty().trim().lowercase()
+        val currentUid = preferences.getString("userId", "").orEmpty().trim()
+        val pendingRejoinCode = preferences.getString("pending_rejoin_team_code", "").orEmpty()
+            .ifBlank { preferences.getString("removedTeamCode", "").orEmpty() }
+            .ifBlank { if (currentEmail.isNotBlank()) preferences.getString("email_removed_team_code_$currentEmail", "").orEmpty() else "" }
+            .ifBlank { if (currentUid.isNotBlank()) preferences.getString("user_removed_team_code_$currentUid", "").orEmpty() else "" }
+            .trim()
+            .uppercase()
+        val rejoinWatchCode = code.ifBlank { pendingRejoinCode }
 
-        stopRealtimeTeamWatchers()
-        activeTeamCode = code
         val appCtx = context.applicationContext ?: context
         val db = try {
             FirebaseFirestore.getInstance()
         } catch (_: Throwable) {
             return
         }
+
+        if (rejoinWatchCode.isNotBlank() && (rejoinWatchCode != activeRejoinTeamCode || rejoinRequestsListener == null)) {
+            rejoinRequestsListener?.remove()
+            knownRejoinStatuses.clear()
+            activeRejoinTeamCode = rejoinWatchCode
+            var initialRejoinsLoaded = false
+            rejoinRequestsListener = db.collection("teams").document(rejoinWatchCode).collection("rejoin_requests")
+                .addSnapshotListener { snapshot, error ->
+                    if (error != null || snapshot == null) return@addSnapshotListener
+                    val myUid = preferences.getString("userId", "").orEmpty().trim()
+                    val myEmail = preferences.getString("email", "").orEmpty().trim().lowercase()
+                    val myRole = preferences.getString("role", "Member").orEmpty()
+                    val isLeader = myRole.equals("Leader", ignoreCase = true) || myEmail == "ryanlloydgenturo@gmail.com"
+                    val notifiedApproved = preferences.getStringSet("notified_approved_rejoins", emptySet())?.toMutableSet() ?: mutableSetOf()
+
+                    if (!initialRejoinsLoaded) {
+                        for (doc in snapshot.documents) {
+                            val st = doc.getString("status").orEmpty()
+                            val reqUid = doc.getString("userUid").orEmpty().trim()
+                            val reqEmail = doc.getString("userEmail").orEmpty().trim().lowercase()
+                            knownRejoinStatuses[doc.id] = st
+                            val isMine = (myUid.isNotBlank() && reqUid == myUid) || (myEmail.isNotBlank() && reqEmail == myEmail)
+                            if (isMine && st.equals("Approved", ignoreCase = true) && !notifiedApproved.contains(doc.id)) {
+                                notifiedApproved.add(doc.id)
+                                preferences.edit()
+                                    .putStringSet("notified_approved_rejoins", notifiedApproved)
+                                    .putBoolean("removedByLeader", false)
+                                    .remove("removedTeamCode")
+                                    .apply()
+                                if (myEmail.isNotBlank()) {
+                                    preferences.edit()
+                                        .putBoolean("email_removed_by_leader_$myEmail", false)
+                                        .remove("email_removed_team_code_$myEmail")
+                                        .apply()
+                                }
+                                if (myUid.isNotBlank()) {
+                                    preferences.edit()
+                                        .putBoolean("user_removed_by_leader_$myUid", false)
+                                        .remove("user_removed_team_code_$myUid")
+                                        .apply()
+                                }
+                                dispatchSystemNotification(
+                                    appCtx,
+                                    preferences,
+                                    "✅ Re-join Request Approved!",
+                                    "Your request to re-join has been approved by the Team Leader! You can now enter the team code ($rejoinWatchCode) to join."
+                                )
+                                onRejoinApprovedInApp?.invoke(rejoinWatchCode)
+                            }
+                        }
+                        initialRejoinsLoaded = true
+                        return@addSnapshotListener
+                    }
+
+                    for (change in snapshot.documentChanges) {
+                        val doc = change.document
+                        val id = doc.id
+                        val status = doc.getString("status").orEmpty()
+                        val reqUid = doc.getString("userUid").orEmpty().trim()
+                        val reqEmail = doc.getString("userEmail").orEmpty().trim().lowercase()
+                        val reqName = doc.getString("userName").orEmpty().ifBlank { reqEmail }.ifBlank { "A member" }
+                        val prevStatus = knownRejoinStatuses[id]
+                        knownRejoinStatuses[id] = status
+
+                        val isMine = (myUid.isNotBlank() && reqUid == myUid) || (myEmail.isNotBlank() && reqEmail == myEmail)
+
+                        if (isLeader && !isMine && status.equals("Pending", ignoreCase = true) && !prevStatus.equals("Pending", ignoreCase = true)) {
+                            dispatchSystemNotification(
+                                appCtx,
+                                preferences,
+                                "🙋 Member Re-join Request",
+                                "$reqName requested approval to re-join your team ($rejoinWatchCode)."
+                            )
+                            onLeaderRejoinRequestInApp?.invoke(reqName, rejoinWatchCode)
+                        } else if (isMine && status.equals("Approved", ignoreCase = true) && !prevStatus.equals("Approved", ignoreCase = true)) {
+                            notifiedApproved.add(id)
+                            preferences.edit()
+                                .putStringSet("notified_approved_rejoins", notifiedApproved)
+                                .putBoolean("removedByLeader", false)
+                                .remove("removedTeamCode")
+                                .apply()
+                            if (myEmail.isNotBlank()) {
+                                preferences.edit()
+                                    .putBoolean("email_removed_by_leader_$myEmail", false)
+                                    .remove("email_removed_team_code_$myEmail")
+                                    .apply()
+                            }
+                            if (myUid.isNotBlank()) {
+                                preferences.edit()
+                                    .putBoolean("user_removed_by_leader_$myUid", false)
+                                    .remove("user_removed_team_code_$myUid")
+                                    .apply()
+                            }
+                            dispatchSystemNotification(
+                                appCtx,
+                                preferences,
+                                "✅ Re-join Request Approved!",
+                                "Your request to re-join has been approved by the Team Leader! You can now enter the team code ($rejoinWatchCode) to join."
+                            )
+                            onRejoinApprovedInApp?.invoke(rejoinWatchCode)
+                        }
+                    }
+                }
+        }
+
+        if (code.isBlank()) {
+            stopTeamCollectionWatchersOnly()
+            return
+        }
+        if (code == activeTeamCode && servicesListener != null) {
+            return
+        }
+
+        stopTeamCollectionWatchersOnly()
+        activeTeamCode = code
 
         // 1. Watch Worship Services for new publications or sudden Date / Time / Venue changes
         var initialServicesLoaded = false
@@ -296,12 +420,22 @@ object SyncedMessagingService {
                             )
                         }
                     } else if (prevStatus != null && !prevStatus.equals(status, ignoreCase = true)) {
-                        if (status.equals("Accepted", ignoreCase = true)) {
+                        val userRole = preferences.getString("role", "Member").orEmpty()
+                        if (status.equals("Substitute Accepted", ignoreCase = true)) {
+                            if (userRole.equals("Leader", true) || requesterUid == currentUid) {
+                                dispatchSystemNotification(
+                                    appCtx,
+                                    preferences,
+                                    "⏳ Substitution Awaiting Approval",
+                                    "$substituteName accepted covering $role in $serviceTitle (awaiting Leader approval)."
+                                )
+                            }
+                        } else if (status.equals("Accepted", ignoreCase = true) || status.equals("Approved", ignoreCase = true)) {
                             dispatchSystemNotification(
                                 appCtx,
                                 preferences,
-                                "✅ Substitution Accepted",
-                                "$substituteName accepted the substitution for $role in $serviceTitle."
+                                "✅ Substitution Approved",
+                                "Substitution for $role in $serviceTitle ($substituteName) has been approved!"
                             )
                         } else if (status.equals("Declined", ignoreCase = true)) {
                             dispatchSystemNotification(
@@ -353,7 +487,7 @@ object SyncedMessagingService {
         Log.d(TAG, "Started real-time notification watchers for team $code")
     }
 
-    fun stopRealtimeTeamWatchers() {
+    private fun stopTeamCollectionWatchersOnly() {
         servicesListener?.remove()
         announcementsListener?.remove()
         substitutionsListener?.remove()
@@ -367,5 +501,13 @@ object SyncedMessagingService {
         knownAnnouncements.clear()
         knownSubstitutions.clear()
         knownMessages.clear()
+    }
+
+    fun stopRealtimeTeamWatchers() {
+        stopTeamCollectionWatchersOnly()
+        rejoinRequestsListener?.remove()
+        rejoinRequestsListener = null
+        activeRejoinTeamCode = ""
+        knownRejoinStatuses.clear()
     }
 }

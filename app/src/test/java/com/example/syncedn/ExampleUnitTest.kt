@@ -3617,4 +3617,128 @@ class ExampleUnitTest {
         assertEquals("", prefs.getString("resetEmail", ""))
         assertNull(com.example.syncedn.data.auth.EmailOtpService.activeRecord)
     }
+
+    @Test
+    fun testChatMessageDeletionDetectionAndRetractionRaceProtection() {
+        val repo = com.example.syncedn.data.database.TeamRepository
+        repo.clearCache()
+        val prefs = FakePreferences()
+
+        // 1. Image-only message deleted remotely (text was "", mediaUrl was non-empty, now mediaUrl="" and isDeleted=true)
+        val originalImageMsg = com.example.syncedn.data.model.ChatMessage(
+            id = "msg_img_1",
+            teamCode = "CHAT01",
+            senderUid = "u1",
+            senderName = "Ryan",
+            text = "",
+            mediaUrl = "https://res.cloudinary.com/demo/image/upload/sample.jpg",
+            timestamp = 1000L,
+            isDeleted = false
+        )
+        val deletedImageMsg = originalImageMsg.copy(
+            mediaUrl = "",
+            isDeleted = true,
+            deletedAt = 2000L
+        )
+        assertTrue(
+            "Deleting a picture-only message must be detected as a message state change",
+            repo.hasChatMessageChanged(originalImageMsg, deletedImageMsg)
+        )
+        assertFalse(
+            "Unchanged message must not trigger redundant rebuild",
+            repo.hasChatMessageChanged(originalImageMsg, originalImageMsg.copy())
+        )
+
+        // 2. Race protection: User deletes optimistic photo message BEFORE Cloudinary upload callback calls sendChatMessage
+        val optimisticPhotoMsg = com.example.syncedn.data.model.ChatMessage(
+            id = "msg_race_1",
+            teamCode = "CHAT01",
+            senderUid = "u1",
+            senderName = "Ryan",
+            text = "",
+            mediaUrl = "content://local/photo/1",
+            timestamp = 3000L,
+            isDeleted = false
+        )
+        repo.saveChatMessageLocally("CHAT01", optimisticPhotoMsg, prefs)
+        repo.deleteChatMessage("CHAT01", "msg_race_1", prefs)
+        assertTrue("Message ID must be tracked as retracted", repo.isMessageRetracted("msg_race_1"))
+
+        // Simulate late Cloudinary upload callback attempting to sendChatMessage with uploaded URL
+        repo.sendChatMessage(
+            "CHAT01",
+            optimisticPhotoMsg.copy(mediaUrl = "https://res.cloudinary.com/demo/image/upload/late.jpg"),
+            prefs
+        )
+        val cachedAfterRace = repo.getCachedChatMessages("CHAT01", prefs).first { it.id == "msg_race_1" }
+        assertTrue("Late upload callback must not resurrect a deleted photo message", cachedAfterRace.isDeleted)
+        assertEquals("", cachedAfterRace.mediaUrl)
+    }
+
+    @Test
+    fun testSaveRosterLocallySyncsRemoteMinistryRoleToSharedPreferences() {
+        val repo = com.example.syncedn.data.database.TeamRepository
+        repo.clearCache()
+        val prefs = FakePreferences().apply {
+            edit()
+                .putString("userId", "uid_m1")
+                .putString("email", "member1@test.com")
+                .putString("fullName", "Member One")
+                .putString("role", "Member")
+                .putString("ministryRole", "Vocalist")
+                .putString("email_ministry_member1@test.com", "Vocalist")
+                .putString("user_ministry_uid_m1", "Vocalist")
+                .putString(
+                    com.example.syncedn.data.auth.SessionManager.KEY_MEMBER_ROLES,
+                    org.json.JSONObject(mapOf("member1@test.com" to "Vocalist", "uid_m1" to "Vocalist")).toString()
+                )
+                .apply()
+        }
+
+        // Simulate real-time roster update from Firestore where Leader changed Member One's role to "Keyboardist"
+        val updatedRoster = listOf(
+            com.example.syncedn.data.model.TeamMember(
+                uid = "uid_m1",
+                fullName = "Member One",
+                username = "member1",
+                email = "member1@test.com",
+                role = "Member",
+                ministryRole = "Keyboardist",
+                teamCode = "SYNC01"
+            )
+        )
+        repo.saveRosterLocally("SYNC01", updatedRoster, prefs)
+
+        assertEquals("Keyboardist", prefs.getString("email_ministry_member1@test.com", ""))
+        assertEquals("Keyboardist", prefs.getString("user_ministry_uid_m1", ""))
+        assertEquals("Keyboardist", prefs.getString("ministryRole", ""))
+        val rolesJson = org.json.JSONObject(prefs.getString(com.example.syncedn.data.auth.SessionManager.KEY_MEMBER_ROLES, "{}").orEmpty())
+        assertEquals("Keyboardist", rolesJson.optString("member1@test.com"))
+        assertEquals("Keyboardist", rolesJson.optString("uid_m1"))
+    }
+
+    @Test
+    fun testRejoinRequestNotificationsIncludedInTeamNotificationFeed() {
+        val repo = com.example.syncedn.data.database.TeamRepository
+        repo.clearCache()
+        val prefs = FakePreferences()
+
+        val req = com.example.syncedn.data.model.RejoinRequestData(
+            id = "rejoin_req_101",
+            teamCode = "REJ101",
+            userUid = "uid_removed_1",
+            userName = "Angelo Daniel",
+            userEmail = "angelo@test.com",
+            reason = "Ready to rejoin worship team",
+            status = "Pending",
+            createdAt = System.currentTimeMillis()
+        )
+        repo.sendRejoinRequest("REJ101", req)
+
+        val notifications = repo.getRecentTeamNotifications("REJ101", prefs)
+        val rejoinNotif = notifications.find { it.id == "notif_rejoin_rejoin_req_101" }
+        assertNotNull("Rejoin request must appear in team notifications feed", rejoinNotif)
+        assertTrue(rejoinNotif!!.title.contains("Re-join Request"))
+        assertTrue(rejoinNotif.message.contains("Angelo Daniel"))
+    }
 }

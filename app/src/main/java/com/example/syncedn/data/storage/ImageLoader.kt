@@ -49,6 +49,89 @@ object ImageLoader {
     /**
      * Upgrades insecure http:// remote image URLs to https:// to protect against MITM tampering.
      */
+    private val appAssetCache = java.util.concurrent.ConcurrentHashMap<String, Bitmap>()
+
+    /**
+     * Loads and caches an app UI drawable/asset bitmap across the entire process with smart downsampling
+     * so huge PNGs (like 2048x2048 team_brand_logo or 1024x1024 team_header_badge) are decoded once at optimal
+     * display size instead of stalling page navigation.
+     */
+    fun getAppAssetBitmap(
+        context: Context,
+        name: String,
+        fallbackSupplier: () -> Bitmap
+    ): Bitmap {
+        appAssetCache[name]?.takeIf { !it.isRecycled }?.let { return it }
+
+        val targetMaxDim = when (name) {
+            "team_brand_logo", "team_header_badge", "team_badge", "google_mark", "profile_photo" -> 256
+            "worship_hero_bg", "team_sunset", "hero_container", "welcome_artwork" -> 720
+            "landing_background" -> 1080
+            else -> 720
+        }
+
+        val resId = context.resources.getIdentifier(name, "drawable", context.packageName)
+        val decoded: Bitmap? = if (resId != 0) {
+            try {
+                val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                BitmapFactory.decodeResource(context.resources, resId, bounds)
+                val sample = calculateInSampleSize(bounds.outWidth, bounds.outHeight, targetMaxDim)
+                val opts = BitmapFactory.Options().apply {
+                    inScaled = false
+                    inSampleSize = sample
+                    inPreferredConfig = Bitmap.Config.ARGB_8888
+                }
+                BitmapFactory.decodeResource(context.resources, resId, opts)
+            } catch (_: Throwable) {
+                null
+            }
+        } else {
+            null
+        }
+
+        val raw = decoded ?: fallbackSupplier()
+        val maxSide = Math.max(raw.width, raw.height)
+        val finalBitmap = if (maxSide > targetMaxDim && targetMaxDim > 0) {
+            val scale = targetMaxDim.toFloat() / maxSide.toFloat()
+            val w = (raw.width * scale).toInt().coerceAtLeast(1)
+            val h = (raw.height * scale).toInt().coerceAtLeast(1)
+            Bitmap.createScaledBitmap(raw, w, h, true)
+        } else {
+            raw
+        }
+
+        appAssetCache[name] = finalBitmap
+        return finalBitmap
+    }
+
+    /**
+     * Pre-warms frequently used navigation header and hero assets on a background thread.
+     */
+    fun prewarmAppAssets(context: Context) {
+        val appCtx = context.applicationContext ?: context
+        executor.execute {
+            val commonAssets = listOf(
+                "team_brand_logo",
+                "team_header_badge",
+                "worship_hero_bg",
+                "team_sunset",
+                "profile_photo"
+            )
+            for (asset in commonAssets) {
+                if (!appAssetCache.containsKey(asset)) {
+                    try {
+                        val resId = appCtx.resources.getIdentifier(asset, "drawable", appCtx.packageName)
+                        if (resId != 0) {
+                            getAppAssetBitmap(appCtx, asset) {
+                                Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888)
+                            }
+                        }
+                    } catch (_: Throwable) {}
+                }
+            }
+        }
+    }
+
     fun normalizeSecureImageUrl(url: String): String {
         val clean = url.trim()
         return if (clean.startsWith("http://", ignoreCase = true)) {

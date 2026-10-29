@@ -148,7 +148,10 @@ open class MemberActivity : AppCompatActivity() {
     private var servicesListener: com.google.firebase.firestore.ListenerRegistration? = null
     private var substitutionsListener: com.google.firebase.firestore.ListenerRegistration? = null
     private var rosterListener: com.google.firebase.firestore.ListenerRegistration? = null
+    private var customRolesListener: com.google.firebase.firestore.ListenerRegistration? = null
     private var userMembershipListener: com.google.firebase.firestore.ListenerRegistration? = null
+    private var userEmailMembershipListener: com.google.firebase.firestore.ListenerRegistration? = null
+    private var isShowingRemovedDialog = false
     private val chatScrollRunnable = Runnable { chatScrollView?.fullScroll(View.FOCUS_DOWN) }
     protected open val initialPage: String = "home"
     private var page = "start"
@@ -277,17 +280,14 @@ open class MemberActivity : AppCompatActivity() {
         }
     }
 
-    private fun resolveUserTeamSession(
-        profile: com.example.syncedn.data.model.UserProfile?,
-        email: String
-    ): Triple<String, String, String> {
-        syncLocalTeamsToMemory()
-        val currentTeamCode = preferences.getString(SessionManager.KEY_TEAM_CODE, "").orEmpty()
-            .ifBlank { preferences.getString("teamCode", "").orEmpty() }
-        if (currentTeamCode.isNotBlank()) {
-            servicesListener = TeamRepository.subscribeToServices(currentTeamCode, isLeader = false, preferences) { updatedList ->
-                runOnUiThread {
-                    if (page in listOf("home", "schedule")) {
+    private fun startRealtimeTeamListeners(teamCode: String) {
+        val code = teamCode.trim().uppercase()
+        if (code.isBlank()) return
+        servicesListener?.remove()
+        servicesListener = TeamRepository.subscribeToServices(code, isLeader = false, preferences) { updatedList ->
+            runOnUiThread {
+                if (!isFinishing && !isDestroyed) {
+                    if (page in listOf("home", "schedule", "notifications")) {
                         navigate(page, triggerRefresh = false)
                     } else if (page == "service") {
                         selectedSheetService?.let { sel ->
@@ -301,15 +301,21 @@ open class MemberActivity : AppCompatActivity() {
                     }
                 }
             }
-            substitutionsListener = TeamRepository.subscribeToSubstitutions(currentTeamCode, preferences) { updatedSubs ->
-                runOnUiThread {
-                    if (page in listOf("notifications", "announcements")) {
+        }
+        substitutionsListener?.remove()
+        substitutionsListener = TeamRepository.subscribeToSubstitutions(code, preferences) { _ ->
+            runOnUiThread {
+                if (!isFinishing && !isDestroyed) {
+                    if (page in listOf("notifications", "announcements", "schedule", "service", "substitution")) {
                         navigate(page, triggerRefresh = false)
                     }
                 }
             }
-            rosterListener = TeamRepository.subscribeToRoster(currentTeamCode, preferences) { updatedRoster ->
-                runOnUiThread {
+        }
+        rosterListener?.remove()
+        rosterListener = TeamRepository.subscribeToRoster(code, preferences) { updatedRoster ->
+            runOnUiThread {
+                if (!isFinishing && !isDestroyed) {
                     teamRoster = updatedRoster
                     updateRosterViews()
 
@@ -356,7 +362,8 @@ open class MemberActivity : AppCompatActivity() {
                             }
                         } else {
                             if (currentPref.equals("Substitute Leader", ignoreCase = true) ||
-                                preferences.getString("role", "").equals("Leader", true)) {
+                                preferences.getString("role", "").equals("Leader", true) ||
+                                (myEntry.ministryRole.isNotBlank() && myEntry.ministryRole != currentPref)) {
                                 val resolvedMinistry = myEntry.ministryRole.ifBlank { "Member" }
                                 preferences.edit {
                                     putString("role", "Member")
@@ -378,11 +385,6 @@ open class MemberActivity : AppCompatActivity() {
                                         putString(SessionManager.KEY_MEMBER_ROLES, map.toString())
                                     } catch (_: Throwable) {}
                                 }
-                                TeamRepository.updateMemberMinistryRole(currentUid, resolvedMinistry, memberEmail = currentEmail, preferences = preferences)
-                                val teamCode = preferences.getString("teamCode", "").orEmpty()
-                                if (teamCode.isNotBlank()) {
-                                    TeamRepository.syncFromPreferences(preferences, teamCode)
-                                }
                                 updateRosterViews()
                                 if (page == "home") setupHome()
                             }
@@ -390,6 +392,28 @@ open class MemberActivity : AppCompatActivity() {
                     }
                 }
             }
+        }
+        customRolesListener?.remove()
+        customRolesListener = TeamRepository.subscribeToCustomRoles(code) { _ ->
+            runOnUiThread {
+                if (!isFinishing && !isDestroyed) {
+                    if (page == "teams" && teamTab in listOf("Role", "Overview")) {
+                        navigate("teams", triggerRefresh = false)
+                    }
+                }
+            }
+        }
+    }
+
+    private fun resolveUserTeamSession(
+        profile: com.example.syncedn.data.model.UserProfile?,
+        email: String
+    ): Triple<String, String, String> {
+        syncLocalTeamsToMemory()
+        val currentTeamCode = preferences.getString(SessionManager.KEY_TEAM_CODE, "").orEmpty()
+            .ifBlank { preferences.getString("teamCode", "").orEmpty() }
+        if (currentTeamCode.isNotBlank()) {
+            startRealtimeTeamListeners(currentTeamCode)
         }
 
         return SessionManager.resolveUserTeamSession(preferences, profile, email)
@@ -430,8 +454,9 @@ open class MemberActivity : AppCompatActivity() {
         FirestoreManager.cacheUserRoleAndTeam(uid, emailLower, role, team, code)
         if (code.isNotBlank()) {
             com.example.syncedn.data.auth.SyncedFirebaseMessagingService.subscribeToTeam(code)
-                com.example.syncedn.data.auth.SyncedMessagingService.startRealtimeTeamWatchers(this, preferences)
+            com.example.syncedn.data.auth.SyncedMessagingService.startRealtimeTeamWatchers(this, preferences)
             com.example.syncedn.data.auth.SyncedFirebaseMessagingService.syncToken(this, preferences)
+            startRealtimeTeamListeners(code)
         }
         preferences.edit {
             putBoolean("leftTeam", false)
@@ -462,6 +487,7 @@ open class MemberActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        ImageLoader.prewarmAppAssets(this)
         val myCurrentUid = com.example.syncedn.data.auth.AuthManager.currentUser?.uid?.takeIf { it.isNotBlank() }
             ?: preferences.getString(SessionManager.KEY_USER_ID, "").orEmpty().ifBlank {
                 preferences.getString("userId", "").orEmpty()
@@ -469,276 +495,204 @@ open class MemberActivity : AppCompatActivity() {
         val myCurrentEmail = preferences.getString("email", "").orEmpty().ifBlank {
             com.example.syncedn.data.auth.AuthManager.currentUser?.email.orEmpty()
         }
+        fun handleMyUserDocSnapshot(
+            roleFromDoc: String,
+            ministryRoleFromDoc: String,
+            removedByLeader: Boolean,
+            removedTeamCode: String
+        ) {
+            val myActiveTeamCode = preferences.getString(SessionManager.KEY_TEAM_CODE, "").orEmpty()
+                .ifBlank { preferences.getString("teamCode", "").orEmpty() }
+            val isLeadUser = myCurrentEmail.equals("ryanlloydgenturo@gmail.com", ignoreCase = true)
+
+            if (!isLeadUser && removedByLeader && myActiveTeamCode.isNotBlank() &&
+                (removedTeamCode.isBlank() || removedTeamCode.equals(myActiveTeamCode, ignoreCase = true)) &&
+                !isShowingRemovedDialog
+            ) {
+                isShowingRemovedDialog = true
+                val emailLower = myCurrentEmail.trim().lowercase()
+                val targetRemovedCode = removedTeamCode.ifBlank { myActiveTeamCode }
+                com.example.syncedn.data.auth.SyncedFirebaseMessagingService.unsubscribeFromTeam(myActiveTeamCode)
+                servicesListener?.remove(); servicesListener = null
+                substitutionsListener?.remove(); substitutionsListener = null
+                rosterListener?.remove(); rosterListener = null
+                customRolesListener?.remove(); customRolesListener = null
+                preferences.edit()
+                    .putString("role", "")
+                    .remove("teamName")
+                    .remove("teamCode")
+                    .remove(SessionManager.KEY_TEAM_NAME)
+                    .remove(SessionManager.KEY_TEAM_CODE)
+                    .remove("ministryRole")
+                    .remove("email_team_$emailLower")
+                    .remove("email_code_$emailLower")
+                    .remove("user_team_$myCurrentUid")
+                    .remove("user_code_$myCurrentUid")
+                    .putBoolean("leftTeam", true)
+                    .putBoolean("removedByLeader", false)
+                    .remove("removedTeamCode")
+                    .putString("pending_rejoin_team_code", targetRemovedCode)
+                    .apply()
+                teamName = ""
+                com.example.syncedn.data.auth.SyncedMessagingService.startRealtimeTeamWatchers(this@MemberActivity, preferences)
+                runOnUiThread {
+                    if (!isFinishing && !isDestroyed) {
+                        if (page != "teamChoice") {
+                            navigate("teamChoice", triggerRefresh = false)
+                        }
+                        AlertDialog.Builder(this@MemberActivity)
+                            .setTitle("Removed from Team")
+                            .setMessage("You have been removed from the team by the Team Leader.")
+                            .setPositiveButton("OK") { _, _ ->
+                                isShowingRemovedDialog = false
+                                if (page != "teamChoice") navigate("teamChoice", triggerRefresh = false)
+                            }
+                            .setCancelable(false)
+                            .show()
+                    } else {
+                        isShowingRemovedDialog = false
+                    }
+                }
+                return
+            }
+
+            if (removedByLeader || myActiveTeamCode.isBlank()) return
+
+            val currentPref = preferences.getString("ministryRole", "").orEmpty()
+            val currentRolePref = preferences.getString("role", "").orEmpty()
+            val isPromotedLeader = roleFromDoc.equals("Leader", ignoreCase = true) ||
+                ministryRoleFromDoc.equals("Worship Leader", ignoreCase = true)
+            if (isPromotedLeader) {
+                preferences.edit {
+                    putString("role", "Leader")
+                    putString(SessionManager.KEY_ROLE, "Leader")
+                    putString("ministryRole", "Worship Leader")
+                    putString(SessionManager.KEY_MINISTRY_ROLE, "Worship Leader")
+                    val cleanTeam = teamName.trim().lowercase()
+                    if (cleanTeam.isNotBlank() && myCurrentEmail.isNotBlank()) {
+                        putString("team_leader_email_$cleanTeam", myCurrentEmail.trim().lowercase())
+                    }
+                }
+                runOnUiThread {
+                    if (!isFinishing && !isDestroyed) {
+                        toast("You are now the Worship Leader of $teamName!")
+                        val intent = Intent(this@MemberActivity, AdminActivity::class.java)
+                            .putExtra("startPage", "home")
+                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                        startActivity(intent)
+                        finish()
+                    }
+                }
+                return
+            }
+            val isSubLeader = ministryRoleFromDoc.equals("Substitute Leader", ignoreCase = true) && !roleFromDoc.equals("Member", true)
+            if (isSubLeader) {
+                if (!currentPref.equals("Substitute Leader", ignoreCase = true)) {
+                    preferences.edit {
+                        putString("role", "Leader")
+                        putString(SessionManager.KEY_ROLE, "Leader")
+                        putString("ministryRole", "Substitute Leader")
+                        putString(SessionManager.KEY_MINISTRY_ROLE, "Substitute Leader")
+                    }
+                    runOnUiThread {
+                        if (!isFinishing && !isDestroyed) {
+                            toast("You have been assigned as Substitute Leader!")
+                            val intent = Intent(this@MemberActivity, AdminActivity::class.java)
+                                .putExtra("startPage", "home")
+                                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                            startActivity(intent)
+                            finish()
+                        }
+                    }
+                }
+            } else {
+                val resolvedMinistry = if (ministryRoleFromDoc.isNotBlank() && !ministryRoleFromDoc.equals("Substitute Leader", ignoreCase = true)) {
+                    ministryRoleFromDoc
+                } else "Member"
+                val needsRoleUpdate = currentPref.equals("Substitute Leader", ignoreCase = true) ||
+                    currentRolePref.equals("Leader", ignoreCase = true) ||
+                    (roleFromDoc.equals("Member", true) && (currentPref != resolvedMinistry || currentRolePref != "Member"))
+                if (needsRoleUpdate) {
+                    preferences.edit {
+                        putString("role", "Member")
+                        putString(SessionManager.KEY_ROLE, "Member")
+                        putString("ministryRole", resolvedMinistry)
+                        putString(SessionManager.KEY_MINISTRY_ROLE, resolvedMinistry)
+                        if (myCurrentUid.isNotBlank()) {
+                            putString("user_role_$myCurrentUid", "Member")
+                            putString("user_ministry_$myCurrentUid", resolvedMinistry)
+                        }
+                        if (myCurrentEmail.isNotBlank()) {
+                            val emailLower = myCurrentEmail.trim().lowercase()
+                            putString("email_role_$emailLower", "Member")
+                            putString("email_ministry_$emailLower", resolvedMinistry)
+                        }
+                        try {
+                            val map = org.json.JSONObject(preferences.getString(SessionManager.KEY_MEMBER_ROLES, "{}").orEmpty())
+                            if (myCurrentUid.isNotBlank()) map.put(myCurrentUid, resolvedMinistry)
+                            if (myCurrentEmail.isNotBlank()) map.put(myCurrentEmail.trim().lowercase(), resolvedMinistry)
+                            putString(SessionManager.KEY_MEMBER_ROLES, map.toString())
+                        } catch (_: Throwable) {}
+                    }
+                    runOnUiThread {
+                        if (!isFinishing && !isDestroyed) {
+                            updateRosterViews()
+                            if (page == "home") setupHome()
+                        }
+                    }
+                }
+            }
+        }
         if (myCurrentUid.isNotBlank()) {
+            userMembershipListener?.remove()
             userMembershipListener = com.google.firebase.firestore.FirebaseFirestore.getInstance()
                 .collection("users").document(myCurrentUid)
                 .addSnapshotListener { snapshot, error ->
                     if (error != null || snapshot == null || !snapshot.exists()) return@addSnapshotListener
-                    val roleFromSnap = snapshot.getString("role").orEmpty()
-                    val ministryRoleFromSnap = snapshot.getString("ministryRole").orEmpty()
-                    val currentPref = preferences.getString("ministryRole", "").orEmpty()
-                    val currentRolePref = preferences.getString("role", "").orEmpty()
-                    val isPromotedLeaderSnap = roleFromSnap.equals("Leader", ignoreCase = true) || ministryRoleFromSnap.equals("Worship Leader", ignoreCase = true)
-                    if (isPromotedLeaderSnap) {
-                        preferences.edit {
-                            putString("role", "Leader")
-                            putString(SessionManager.KEY_ROLE, "Leader")
-                            putString("ministryRole", "Worship Leader")
-                            putString(SessionManager.KEY_MINISTRY_ROLE, "Worship Leader")
-                            val cleanTeam = teamName.trim().lowercase()
-                            if (cleanTeam.isNotBlank() && myCurrentEmail.isNotBlank()) {
-                                putString("team_leader_email_$cleanTeam", myCurrentEmail.trim().lowercase())
-                            }
-                        }
-                        runOnUiThread {
-                            if (!isFinishing && !isDestroyed) {
-                                toast("You are now the Worship Leader of $teamName!")
-                                val intent = Intent(this@MemberActivity, AdminActivity::class.java)
-                                    .putExtra("startPage", "home")
-                                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
-                                startActivity(intent)
-                                finish()
-                            }
-                        }
-                        return@addSnapshotListener
-                    }
-                    val isSubLeaderSnap = ministryRoleFromSnap.equals("Substitute Leader", ignoreCase = true) && !roleFromSnap.equals("Member", true)
-                    if (isSubLeaderSnap) {
-                        if (!currentPref.equals("Substitute Leader", ignoreCase = true)) {
-                            preferences.edit {
-                                putString("role", "Leader")
-                                putString(SessionManager.KEY_ROLE, "Leader")
-                                putString("ministryRole", "Substitute Leader")
-                                putString(SessionManager.KEY_MINISTRY_ROLE, "Substitute Leader")
-                            }
-                            runOnUiThread {
-                                if (!isFinishing && !isDestroyed) {
-                                    toast("You have been assigned as Substitute Leader!")
-                                    val intent = Intent(this@MemberActivity, AdminActivity::class.java)
-                                        .putExtra("startPage", "home")
-                                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
-                                    startActivity(intent)
-                                    finish()
-                                }
-                            }
-                            return@addSnapshotListener
-                        }
-                    } else {
-                        val resolvedMinistry = if (ministryRoleFromSnap.isNotBlank() && !ministryRoleFromSnap.equals("Substitute Leader", ignoreCase = true)) {
-                            ministryRoleFromSnap
-                        } else "Member"
-                        val needsDemotion = currentPref.equals("Substitute Leader", ignoreCase = true) ||
-                                            currentRolePref.equals("Leader", ignoreCase = true) ||
-                                            (roleFromSnap.equals("Member", true) && (currentPref != resolvedMinistry || currentRolePref != "Member"))
-                        if (needsDemotion) {
-                            preferences.edit {
-                                putString("role", "Member")
-                                putString(SessionManager.KEY_ROLE, "Member")
-                                putString("ministryRole", resolvedMinistry)
-                                putString(SessionManager.KEY_MINISTRY_ROLE, resolvedMinistry)
-                                if (myCurrentUid.isNotBlank()) {
-                                    putString("user_role_$myCurrentUid", "Member")
-                                    putString("user_ministry_$myCurrentUid", resolvedMinistry)
-                                }
-                                if (myCurrentEmail.isNotBlank()) {
-                                    val emailLower = myCurrentEmail.trim().lowercase()
-                                    putString("email_role_$emailLower", "Member")
-                                    putString("email_ministry_$emailLower", resolvedMinistry)
-                                }
-                                try {
-                                    val map = org.json.JSONObject(preferences.getString(SessionManager.KEY_MEMBER_ROLES, "{}").orEmpty())
-                                    if (myCurrentUid.isNotBlank()) map.put(myCurrentUid, resolvedMinistry)
-                                    if (myCurrentEmail.isNotBlank()) map.put(myCurrentEmail.trim().lowercase(), resolvedMinistry)
-                                    putString(SessionManager.KEY_MEMBER_ROLES, map.toString())
-                                } catch (_: Throwable) {}
-                            }
-                            TeamRepository.updateMemberMinistryRole(myCurrentUid, resolvedMinistry, memberEmail = myCurrentEmail, preferences = preferences)
-                            val teamCode = preferences.getString("teamCode", "").orEmpty()
-                            if (teamCode.isNotBlank()) {
-                                TeamRepository.syncFromPreferences(preferences, teamCode)
-                            }
-                            runOnUiThread {
-                                if (!isFinishing && !isDestroyed) {
-                                    updateRosterViews()
-                                    if (page == "home") setupHome()
-                                    if (page == "teams") navigate("teams")
-                                }
-                            }
-                        }
-                    }
-                    val removedByLeader = snapshot.getBoolean("removedByLeader") ?: false
-                    val removedTeamCode = snapshot.getString("removedTeamCode").orEmpty()
-                    val myActiveTeamCode = preferences.getString(SessionManager.KEY_TEAM_CODE, "").orEmpty()
-                        .ifBlank { preferences.getString("teamCode", "").orEmpty() }
-                    val isLeadUser = myCurrentEmail.equals("ryanlloydgenturo@gmail.com", ignoreCase = true)
-                    if (!isLeadUser && removedByLeader && (removedTeamCode.isBlank() || myActiveTeamCode.isBlank() || removedTeamCode.equals(myActiveTeamCode, ignoreCase = true))) {
-                        val emailLower = myCurrentEmail.trim().lowercase()
-                        if (myActiveTeamCode.isNotBlank()) {
-                            com.example.syncedn.data.auth.SyncedFirebaseMessagingService.unsubscribeFromTeam(myActiveTeamCode)
-                            com.example.syncedn.data.auth.SyncedMessagingService.stopRealtimeTeamWatchers()
-                        }
-                        preferences.edit()
-                            .putString("role", "")
-                            .remove("teamName")
-                            .remove("teamCode")
-                            .remove("ministryRole")
-                            .remove("email_team_$emailLower")
-                            .remove("email_code_$emailLower")
-                            .remove("user_team_$myCurrentUid")
-                            .remove("user_code_$myCurrentUid")
-                            .putBoolean("leftTeam", true)
-                            .putBoolean("removedByLeader", false)
-                            .remove("removedTeamCode")
-                            .apply()
-                        teamName = ""
-                        runOnUiThread {
-                            if (!isFinishing && !isDestroyed && page != "teamChoice") {
-                                AlertDialog.Builder(this@MemberActivity)
-                                    .setTitle("Removed from Team")
-                                    .setMessage("You have been removed from the team by the Team Leader.")
-                                    .setPositiveButton("OK") { _, _ -> navigate("teamChoice") }
-                                    .setCancelable(false)
-                                    .show()
-                            }
-                        }
-                    }
+                    handleMyUserDocSnapshot(
+                        roleFromDoc = snapshot.getString("role").orEmpty(),
+                        ministryRoleFromDoc = snapshot.getString("ministryRole").orEmpty(),
+                        removedByLeader = snapshot.getBoolean("removedByLeader") ?: false,
+                        removedTeamCode = snapshot.getString("removedTeamCode").orEmpty()
+                    )
                 }
         }
         if (myCurrentEmail.isNotBlank()) {
-            com.google.firebase.firestore.FirebaseFirestore.getInstance()
+            userEmailMembershipListener?.remove()
+            userEmailMembershipListener = com.google.firebase.firestore.FirebaseFirestore.getInstance()
                 .collection("users").whereEqualTo("email", myCurrentEmail)
                 .addSnapshotListener { snapshot, error ->
                     if (error != null || snapshot == null || snapshot.isEmpty) return@addSnapshotListener
                     val doc = snapshot.documents.firstOrNull() ?: return@addSnapshotListener
-                    val roleFromDoc = doc.getString("role").orEmpty()
-                    val ministryRoleFromDoc = doc.getString("ministryRole").orEmpty()
-                    val currentPref = preferences.getString("ministryRole", "").orEmpty()
-                    val currentRolePref = preferences.getString("role", "").orEmpty()
-                    val isPromotedLeaderDoc = roleFromDoc.equals("Leader", ignoreCase = true) || ministryRoleFromDoc.equals("Worship Leader", ignoreCase = true)
-                    if (isPromotedLeaderDoc) {
-                        preferences.edit {
-                            putString("role", "Leader")
-                            putString(SessionManager.KEY_ROLE, "Leader")
-                            putString("ministryRole", "Worship Leader")
-                            putString(SessionManager.KEY_MINISTRY_ROLE, "Worship Leader")
-                            val cleanTeam = teamName.trim().lowercase()
-                            if (cleanTeam.isNotBlank() && myCurrentEmail.isNotBlank()) {
-                                putString("team_leader_email_$cleanTeam", myCurrentEmail.trim().lowercase())
-                            }
-                        }
-                        runOnUiThread {
-                            if (!isFinishing && !isDestroyed) {
-                                toast("You are now the Worship Leader of $teamName!")
-                                val intent = Intent(this@MemberActivity, AdminActivity::class.java)
-                                    .putExtra("startPage", "home")
-                                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
-                                startActivity(intent)
-                                finish()
-                            }
-                        }
-                        return@addSnapshotListener
-                    }
-                    val isSubLeaderDoc = ministryRoleFromDoc.equals("Substitute Leader", ignoreCase = true) && !roleFromDoc.equals("Member", true)
-                    if (isSubLeaderDoc) {
-                        if (!currentPref.equals("Substitute Leader", ignoreCase = true)) {
-                            preferences.edit {
-                                putString("role", "Leader")
-                                putString(SessionManager.KEY_ROLE, "Leader")
-                                putString("ministryRole", "Substitute Leader")
-                                putString(SessionManager.KEY_MINISTRY_ROLE, "Substitute Leader")
-                            }
-                            runOnUiThread {
-                                if (!isFinishing && !isDestroyed) {
-                                    toast("You have been assigned as Substitute Leader!")
-                                    val intent = Intent(this@MemberActivity, AdminActivity::class.java)
-                                        .putExtra("startPage", "home")
-                                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
-                                    startActivity(intent)
-                                    finish()
-                                }
-                            }
-                            return@addSnapshotListener
-                        }
-                    } else {
-                        val resolvedMinistry = if (ministryRoleFromDoc.isNotBlank() && !ministryRoleFromDoc.equals("Substitute Leader", ignoreCase = true)) {
-                            ministryRoleFromDoc
-                        } else "Member"
-                        val needsDemotion = currentPref.equals("Substitute Leader", ignoreCase = true) ||
-                                            currentRolePref.equals("Leader", ignoreCase = true) ||
-                                            (roleFromDoc.equals("Member", true) && (currentPref != resolvedMinistry || currentRolePref != "Member"))
-                        if (needsDemotion) {
-                            preferences.edit {
-                                putString("role", "Member")
-                                putString(SessionManager.KEY_ROLE, "Member")
-                                putString("ministryRole", resolvedMinistry)
-                                putString(SessionManager.KEY_MINISTRY_ROLE, resolvedMinistry)
-                                if (myCurrentUid.isNotBlank()) {
-                                    putString("user_role_$myCurrentUid", "Member")
-                                    putString("user_ministry_$myCurrentUid", resolvedMinistry)
-                                }
-                                if (myCurrentEmail.isNotBlank()) {
-                                    val emailLower = myCurrentEmail.trim().lowercase()
-                                    putString("email_role_$emailLower", "Member")
-                                    putString("email_ministry_$emailLower", resolvedMinistry)
-                                }
-                                try {
-                                    val map = org.json.JSONObject(preferences.getString(SessionManager.KEY_MEMBER_ROLES, "{}").orEmpty())
-                                    if (myCurrentUid.isNotBlank()) map.put(myCurrentUid, resolvedMinistry)
-                                    if (myCurrentEmail.isNotBlank()) map.put(myCurrentEmail.trim().lowercase(), resolvedMinistry)
-                                    putString(SessionManager.KEY_MEMBER_ROLES, map.toString())
-                                } catch (_: Throwable) {}
-                            }
-                            TeamRepository.updateMemberMinistryRole(myCurrentUid, resolvedMinistry, memberEmail = myCurrentEmail, preferences = preferences)
-                            val teamCode = preferences.getString("teamCode", "").orEmpty()
-                            if (teamCode.isNotBlank()) {
-                                TeamRepository.syncFromPreferences(preferences, teamCode)
-                            }
-                            runOnUiThread {
-                                if (!isFinishing && !isDestroyed) {
-                                    updateRosterViews()
-                                    if (page == "home") setupHome()
-                                    if (page == "teams") navigate("teams")
-                                }
-                            }
-                        }
-                    }
-                    val removedByLeader = doc.getBoolean("removedByLeader") ?: false
-                    val removedTeamCode = doc.getString("removedTeamCode").orEmpty()
-                    val myActiveTeamCode = preferences.getString(SessionManager.KEY_TEAM_CODE, "").orEmpty()
-                        .ifBlank { preferences.getString("teamCode", "").orEmpty() }
-                    val isLeadUser = myCurrentEmail.equals("ryanlloydgenturo@gmail.com", ignoreCase = true)
-                    if (!isLeadUser && removedByLeader && (removedTeamCode.isBlank() || myActiveTeamCode.isBlank() || removedTeamCode.equals(myActiveTeamCode, ignoreCase = true))) {
-                        val emailLower = myCurrentEmail.trim().lowercase()
-                        if (myActiveTeamCode.isNotBlank()) {
-                            com.example.syncedn.data.auth.SyncedFirebaseMessagingService.unsubscribeFromTeam(myActiveTeamCode)
-                            com.example.syncedn.data.auth.SyncedMessagingService.stopRealtimeTeamWatchers()
-                        }
-                        preferences.edit()
-                            .putString("role", "")
-                            .remove("teamName")
-                            .remove("teamCode")
-                            .remove("ministryRole")
-                            .remove("email_team_$emailLower")
-                            .remove("email_code_$emailLower")
-                            .remove("user_team_$myCurrentUid")
-                            .remove("user_code_$myCurrentUid")
-                            .putBoolean("leftTeam", true)
-                            .putBoolean("removedByLeader", false)
-                            .remove("removedTeamCode")
-                            .apply()
-                        teamName = ""
-                        runOnUiThread {
-                            if (!isFinishing && !isDestroyed && page != "teamChoice") {
-                                AlertDialog.Builder(this@MemberActivity)
-                                    .setTitle("Removed from Team")
-                                    .setMessage("You have been removed from the team by the Team Leader.")
-                                    .setPositiveButton("OK") { _, _ -> navigate("teamChoice") }
-                                    .setCancelable(false)
-                                    .show()
-                            }
-                        }
-                    }
+                    if (myCurrentUid.isNotBlank() && doc.id == myCurrentUid) return@addSnapshotListener
+                    handleMyUserDocSnapshot(
+                        roleFromDoc = doc.getString("role").orEmpty(),
+                        ministryRoleFromDoc = doc.getString("ministryRole").orEmpty(),
+                        removedByLeader = doc.getBoolean("removedByLeader") ?: false,
+                        removedTeamCode = doc.getString("removedTeamCode").orEmpty()
+                    )
                 }
+        }
+        com.example.syncedn.data.auth.SyncedMessagingService.onRejoinApprovedInApp = { approvedCode ->
+            runOnUiThread {
+                if (!isFinishing && !isDestroyed) {
+                    AlertDialog.Builder(this@MemberActivity)
+                        .setTitle("Re-join Request Approved!")
+                        .setMessage("Your request to re-join has been approved by the Team Leader! You can now enter the team code ($approvedCode) to join.")
+                        .setPositiveButton("Enter Team Code") { _, _ ->
+                            if (page != "joinTeam") navigate("joinTeam", triggerRefresh = false)
+                        }
+                        .setNegativeButton("Later", null)
+                        .show()
+                }
+            }
+        }
+        val activeStartupCode = preferences.getString(SessionManager.KEY_TEAM_CODE, "").orEmpty()
+            .ifBlank { preferences.getString("teamCode", "").orEmpty() }
+        if (activeStartupCode.isNotBlank()) {
+            startRealtimeTeamListeners(activeStartupCode)
+        } else {
+            com.example.syncedn.data.auth.SyncedMessagingService.startRealtimeTeamWatchers(this, preferences)
         }
         WindowCompat.setDecorFitsSystemWindows(window, false)
         syncLocalTeamsToMemory()
@@ -823,11 +777,16 @@ open class MemberActivity : AppCompatActivity() {
         substitutionsListener = null
         rosterListener?.remove()
         rosterListener = null
+        customRolesListener?.remove()
+        customRolesListener = null
+        com.example.syncedn.data.auth.SyncedMessagingService.onRejoinApprovedInApp = null
         super.onDestroy()
         chatListener?.remove()
         chatListener = null
         userMembershipListener?.remove()
         userMembershipListener = null
+        userEmailMembershipListener?.remove()
+        userEmailMembershipListener = null
     }
 
     override fun onSaveInstanceState(outState: Bundle) {
@@ -1035,13 +994,15 @@ open class MemberActivity : AppCompatActivity() {
                                             reason = "Member requested to re-join the team",
                                             status = "Pending"
                                         )
+                                        preferences.edit().putString("pending_rejoin_team_code", enteredCode).apply()
+                                        com.example.syncedn.data.auth.SyncedMessagingService.startRealtimeTeamWatchers(this@MemberActivity, preferences)
                                         TeamRepository.sendRejoinRequest(enteredCode, req) { sRes ->
                                             runOnUiThread {
                                                 if (sRes.isSuccess) {
                                                     toast("Re-join request sent to Team Leader!")
                                                     AlertDialog.Builder(this@MemberActivity)
                                                         .setTitle("Request Submitted")
-                                                        .setMessage("Your request to re-join has been sent to the Team Leader. You will be able to enter once the Leader approves your request.")
+                                                        .setMessage("Your request to re-join has been sent to the Team Leader. You will receive a notification as soon as the Leader approves your request.")
                                                         .setPositiveButton("OK", null)
                                                         .show()
                                                 } else {
@@ -1129,25 +1090,41 @@ open class MemberActivity : AppCompatActivity() {
                 }
             }
             "home" -> {
+                setupHome()
                 if (triggerRefresh) {
-                    refreshTeamRoster()
-                    refreshTeamServices()
-                    val activeCode = preferences.getString("teamCode", "").orEmpty()
-                        .ifBlank { FirestoreManager.findCodeByTeamName(teamName).orEmpty() }
-                    if (activeCode.isNotBlank()) {
-                        TeamRepository.getAnnouncements(activeCode, false, preferences)
+                    root.post {
+                        if (!isFinishing && !isDestroyed) {
+                            refreshTeamRoster()
+                            refreshTeamServices()
+                            val activeCode = preferences.getString("teamCode", "").orEmpty()
+                                .ifBlank { FirestoreManager.findCodeByTeamName(teamName).orEmpty() }
+                            if (activeCode.isNotBlank()) {
+                                TeamRepository.getAnnouncements(activeCode, false, preferences)
+                            }
+                        }
                     }
                 }
-                setupHome()
             }
             "schedule" -> {
-                if (triggerRefresh) refreshTeamServices()
+                if (triggerRefresh) {
+                    root.post {
+                        if (!isFinishing && !isDestroyed) refreshTeamServices()
+                    }
+                }
             }
-            "teams" -> if (triggerRefresh) refreshTeamRoster()
+            "teams" -> if (triggerRefresh) {
+                root.post {
+                    if (!isFinishing && !isDestroyed) refreshTeamRoster()
+                }
+            }
             "calendar" -> {
                 if (triggerRefresh) {
-                    refreshTeamRoster(force = true)
-                    refreshTeamServices()
+                    root.post {
+                        if (!isFinishing && !isDestroyed) {
+                            refreshTeamRoster(force = true)
+                            refreshTeamServices()
+                        }
+                    }
                 }
             }
             "settings" -> setupSettings()
@@ -1542,22 +1519,14 @@ open class MemberActivity : AppCompatActivity() {
             val uri = preferences.getString("photoUri", null)?.takeIf { it.isNotBlank() }
             val cached = if (uri != null) ImageLoader.getCachedProfileBitmap(this@MemberActivity, uri) else null
             cached ?: bitmaps.getOrPut(name) {
-                val resId = resources.getIdentifier(name, "drawable", packageName)
-                if (resId != 0) {
-                    val opts = BitmapFactory.Options().apply { inScaled = false }
-                    BitmapFactory.decodeResource(resources, resId, opts)
-                } else {
+                ImageLoader.getAppAssetBitmap(this@MemberActivity, name) {
                     val bytes = Base64.decode(Art.data(name), Base64.DEFAULT)
                     requireNotNull(BitmapFactory.decodeByteArray(bytes, 0, bytes.size))
                 }
             }
         } else {
             bitmaps.getOrPut(name) {
-                val resId = resources.getIdentifier(name, "drawable", packageName)
-                if (resId != 0) {
-                    val opts = BitmapFactory.Options().apply { inScaled = false }
-                    BitmapFactory.decodeResource(resources, resId, opts)
-                } else {
+                ImageLoader.getAppAssetBitmap(this@MemberActivity, name) {
                     val bytes = Base64.decode(Art.data(name), Base64.DEFAULT)
                     requireNotNull(BitmapFactory.decodeByteArray(bytes, 0, bytes.size))
                 }
@@ -2908,9 +2877,7 @@ open class MemberActivity : AppCompatActivity() {
             add(profileField(UI.profileName,"Full Name",fullName,hint="Add your full name",maxLength=ValidationUtils.MAX_NAME_LENGTH));space(8)
             add(profileField(UI.profileUsername,"Username",displayName,hint="Add your username",maxLength=ValidationUtils.MAX_USERNAME_LENGTH));space(8)
             add(profileField(UI.profilePhone,"Phone Number",preferences.getString(SessionManager.KEY_PHONE,"").orEmpty(),"Add your phone number",InputType.TYPE_CLASS_PHONE,maxLength=ValidationUtils.MAX_PHONE_LENGTH));space(8)
-            add(profileField(UI.profileEmail,"Email",preferences.getString(SessionManager.KEY_EMAIL,"").orEmpty(),kind=InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS,maxLength=ValidationUtils.MAX_EMAIL_LENGTH));space(16)
-            add(text("Preference",15,Color.BLACK,true));space(12)
-space(48)
+            add(profileField(UI.profileEmail,"Email",preferences.getString(SessionManager.KEY_EMAIL,"").orEmpty(),kind=InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS,maxLength=ValidationUtils.MAX_EMAIL_LENGTH));space(32)
             action(UI.saveProfileButton,"Save Profile Changes");space(32)
         }
         root.add(bottomNavigation("Settings"),-1,64)
@@ -3026,6 +2993,11 @@ space(48)
             toast("Uploading photo to chat...")
             CloudinaryUploader.uploadProfileImage(this, uri, maxDimension = 800) { result ->
                 result.onSuccess { remoteUrl ->
+                    if (TeamRepository.isMessageRetracted(localMsgId) ||
+                        chatMessages.any { it.id == localMsgId && it.isDeleted }
+                    ) {
+                        return@onSuccess
+                    }
                     if (localBitmap != null) {
                         ImageLoader.preseedCache(this, remoteUrl, localBitmap, circular = false)
                     }
@@ -3262,7 +3234,7 @@ space(48)
             val count = getActiveRoster().size
             val label = "$count Member${if (count == 1) "" else "s"}"
             homeMemberCount?.let { if (it.text.toString() != label) it.text = label }
-        } else if ((page == "teams" && teamTab != "Team Chat") || page == "calendar") {
+        } else if ((page == "teams" && teamTab != "Team Chat") || page == "calendar" || page == "teamDetails") {
             val targetPage = page
             val oldRoot = screenRoot
             val oldScroll = primaryScroll(oldRoot)
@@ -5527,7 +5499,11 @@ space(48)
         }
     }
 
-    private fun buildChatMessageBubble(msg: ChatMessage, currentUid: String): View {
+    private fun buildChatMessageBubble(
+        msg: ChatMessage,
+        currentUid: String,
+        rosterSnapshot: List<TeamMember>? = null
+    ): View {
         val maxBubbleWidth = (resources.displayMetrics.widthPixels * 0.72f).toInt()
         val isSelf = (msg.senderUid.isNotBlank() && msg.senderUid == currentUid) ||
                 (msg.senderName.equals(displayName, ignoreCase = true) || msg.senderName.equals(fullName, ignoreCase = true))
@@ -5692,7 +5668,7 @@ space(48)
                 setPadding(0, dp(4), 0, dp(4))
             }
             val pUri = msg.senderPhotoUri.ifBlank {
-                getActiveRoster().find { it.uid == msg.senderUid || it.fullName.equals(msg.senderName, true) || it.username.equals(msg.senderName, true) }?.photoUri ?: ""
+                (rosterSnapshot ?: getActiveRoster()).find { it.uid == msg.senderUid || it.fullName.equals(msg.senderName, true) || it.username.equals(msg.senderName, true) }?.photoUri ?: ""
             }
             row.add(memberAvatarView(pUri, 32), 32, 32)
 
@@ -5785,7 +5761,7 @@ space(48)
             col.add(memberButton("Create or Join Team") { navigate("teamChoice") }, -1, 48)
         }
         val currentCode = preferences.getString("teamCode", "").orEmpty()
-        if (teamTab == "Team Chat" && currentCode.isNotBlank()) {
+        if (currentCode.isNotBlank()) {
             if (chatMessages.isEmpty()) {
                 val cached = TeamRepository.getCachedChatMessages(currentCode, preferences)
                 if (cached.isNotEmpty()) chatMessages.addAll(cached)
@@ -5800,7 +5776,7 @@ space(48)
                             val incoming = msgs.filter { it.id !in existingIds }
                             val hasEditedOrUpdated = msgs.any { m ->
                                 val cur = chatMessages.find { it.id == m.id }
-                                cur != null && (cur.text != m.text || cur.isEdited != m.isEdited || (cur.mediaUrl != m.mediaUrl && m.mediaUrl.isNotBlank()))
+                                cur != null && TeamRepository.hasChatMessageChanged(cur, m)
                             }
                             if (hasDeleted || hasEditedOrUpdated) {
                                 chatMessages.clear()
@@ -5818,12 +5794,13 @@ space(48)
                                         chatEmptyView = empty
                                         col.add(empty, -1, -2)
                                     } else {
+                                        val rosterSnap = getActiveRoster()
                                         chatMessages.forEach { msg ->
-                                            col.addView(buildChatMessageBubble(msg, myUid))
+                                            col.addView(buildChatMessageBubble(msg, myUid, rosterSnap))
                                         }
                                     }
                                 } else {
-                                    navigate("teams")
+                                    navigate("teams", triggerRefresh = false)
                                 }
                             } else if (incoming.isNotEmpty()) {
                                 val map = LinkedHashMap<String, ChatMessage>()
@@ -5839,22 +5816,16 @@ space(48)
                                         appendChatMessageBubble(msg, myUid)
                                     }
                                 } else {
-                                    navigate("teams")
+                                    navigate("teams", triggerRefresh = false)
                                 }
                             }
                         } else {
-                            val map = LinkedHashMap<String, ChatMessage>()
-                            chatMessages.forEach { map[it.id] = it }
-                            msgs.forEach { map[it.id] = it }
                             chatMessages.clear()
-                            chatMessages.addAll(map.values.sortedBy { it.timestamp })
+                            chatMessages.addAll(msgs.sortedBy { it.timestamp })
                         }
                     }
                 }
             }
-        } else {
-            chatListener?.remove()
-            chatListener = null
         }
         val root = vertical().apply { setBackgroundColor(Color.WHITE) }
         root.add(teamHeader(showDetails = true), -1, 156)
@@ -5938,7 +5909,7 @@ space(48)
                 col.setPadding(0, dp(24), 0, 0)
                 val roster = getActiveRoster()
                 val currentUid = preferences.getString(SessionManager.KEY_USER_ID, "").orEmpty()
-                val baseRoles = listOf("Worship Leader", "Keyboardist", "Bassist", "Vocalist", "Guitarist")
+                val baseRoles = TeamRepository.getCachedCustomRoles(currentCode)
                 val activeRoles = (baseRoles + roster.map { m ->
                     if (m.role.equals("Member", true) && m.ministryRole.equals("Substitute Leader", true)) "Member" else m.ministryRole
                 }).filter {
@@ -6022,8 +5993,9 @@ space(48)
                     chatEmptyView = empty
                     col.add(empty, -1, -2)
                 } else {
+                    val rosterSnap = getActiveRoster()
                     displayList.forEach { msg ->
-                        col.addView(buildChatMessageBubble(msg, currentUid))
+                        col.addView(buildChatMessageBubble(msg, currentUid, rosterSnap))
                     }
                 }
             }

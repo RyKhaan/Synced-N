@@ -59,6 +59,8 @@ object TeamRepository {
     private val substitutionsInFlight = java.util.concurrent.ConcurrentHashMap<String, Boolean>()
 
     private val cachedChatMessages = java.util.concurrent.ConcurrentHashMap<String, MutableList<ChatMessage>>()
+    private val retractedMessageIds = java.util.Collections.synchronizedSet(mutableSetOf<String>())
+    private val lastPrefsSyncTimes = java.util.concurrent.ConcurrentHashMap<String, Long>()
     private val cachedReports = java.util.concurrent.ConcurrentHashMap<String, MutableList<Map<String, Any>>>()
     private val cachedRejoinRequests = java.util.concurrent.ConcurrentHashMap<String, MutableList<RejoinRequestData>>()
 
@@ -94,6 +96,8 @@ object TeamRepository {
         lastSubstitutionsFetchTimes.clear()
         substitutionsInFlight.clear()
         cachedChatMessages.clear()
+        retractedMessageIds.clear()
+        lastPrefsSyncTimes.clear()
         cachedReports.clear()
         cachedRejoinRequests.clear()
     }
@@ -441,6 +445,14 @@ object TeamRepository {
                         if (genRemoved != null) putStringSet("removedMembers", genRemoved)
                     }
                     putString("$PREFS_KEY_ROSTER_PREFIX$code", arr.toString())
+                    val selfEmail = preferences.getString("email", "").orEmpty().trim().lowercase()
+                    val selfUid = preferences.getString(com.example.syncedn.data.auth.SessionManager.KEY_USER_ID, "").orEmpty()
+                    val memberRolesJson = try {
+                        org.json.JSONObject(preferences.getString(com.example.syncedn.data.auth.SessionManager.KEY_MEMBER_ROLES, "{}").orEmpty())
+                    } catch (_: Throwable) {
+                        org.json.JSONObject()
+                    }
+                    var memberRolesChanged = false
                     for (m in sorted) {
                         if (m.removedByLeader) continue
                         val mUid = m.uid.trim()
@@ -455,6 +467,28 @@ object TeamRepository {
                         }
                         if (emailLower.isNotBlank() && m.uid.isNotBlank()) {
                             putString("email_uid_$emailLower", m.uid)
+                        }
+                        if (m.ministryRole.isNotBlank()) {
+                            if (emailLower.isNotBlank()) {
+                                putString("email_ministry_$emailLower", m.ministryRole)
+                                memberRolesJson.put(emailLower, m.ministryRole)
+                                memberRolesChanged = true
+                            }
+                            if (mUid.isNotBlank()) {
+                                putString("user_ministry_$mUid", m.ministryRole)
+                                memberRolesJson.put(mUid, m.ministryRole)
+                                memberRolesChanged = true
+                            }
+                            if (m.fullName.isNotBlank()) {
+                                memberRolesJson.put(m.fullName.trim(), m.ministryRole)
+                                memberRolesChanged = true
+                            }
+                            val isSelf = (selfEmail.isNotBlank() && emailLower == selfEmail) ||
+                                         (selfUid.isNotBlank() && mUid == selfUid)
+                            if (isSelf) {
+                                putString("ministryRole", m.ministryRole)
+                                putString(com.example.syncedn.data.auth.SessionManager.KEY_MINISTRY_ROLE, m.ministryRole)
+                            }
                         }
                         val effectivePhoto = m.photoUri.ifBlank {
                             if (m.uid.isNotBlank()) preferences.getString("user_photo_${m.uid}", "").orEmpty() else ""
@@ -473,6 +507,9 @@ object TeamRepository {
                             if (m.uid.isNotBlank()) remove("user_unavailable_ranges_${m.uid}")
                             if (emailLower.isNotBlank()) remove("email_unavailable_ranges_$emailLower")
                         }
+                    }
+                    if (memberRolesChanged) {
+                        putString(com.example.syncedn.data.auth.SessionManager.KEY_MEMBER_ROLES, memberRolesJson.toString())
                     }
                 }.apply()
             } catch (_: Exception) {}
@@ -1076,6 +1113,41 @@ object TeamRepository {
     /**
      * Saves customized roles to the team document in Cloud Firestore.
      */
+    /**
+     * Synchronously returns the cached custom roles for a team, or DEFAULT_ROLES if not yet cached.
+     */
+    fun getCachedCustomRoles(teamCode: String): List<String> {
+        val code = teamCode.trim().uppercase()
+        if (code.isBlank()) return TeamData.DEFAULT_ROLES
+        return cachedRoles[code]?.takeIf { it.isNotEmpty() }?.toList() ?: TeamData.DEFAULT_ROLES
+    }
+
+    /**
+     * Subscribes to real-time custom ministry role list changes on /teams/{teamCode}.
+     */
+    fun subscribeToCustomRoles(
+        teamCode: String,
+        onUpdate: (List<String>) -> Unit
+    ): ListenerRegistration? {
+        val code = teamCode.trim().uppercase()
+        if (code.isBlank()) return null
+
+        return try {
+            db.collection(TEAMS_COLLECTION)
+                .document(code)
+                .addSnapshotListener { doc, error ->
+                    if (error != null || doc == null || !doc.exists()) return@addSnapshotListener
+                    val team = TeamData.fromMap(doc.data ?: emptyMap())
+                    if (team.roles.isNotEmpty()) {
+                        cachedRoles[code] = team.roles.toMutableList()
+                        onUpdate(team.roles)
+                    }
+                }
+        } catch (_: Throwable) {
+            null
+        }
+    }
+
     fun saveTeamCustomRoles(teamCode: String, roles: List<String>, onComplete: (Result<Unit>) -> Unit = {}) {
         val code = teamCode.trim().uppercase()
         if (code.isBlank() || roles.isEmpty()) {
@@ -1373,6 +1445,27 @@ object TeamRepository {
         val uidLower = uid.trim().lowercase()
         val emailLower = email.trim().lowercase()
 
+        fun clearLocalRemovedFlags() {
+            preferences?.let { prefs ->
+                prefs.edit {
+                    if (emailLower.isNotBlank()) {
+                        putBoolean("email_removed_by_leader_$emailLower", false)
+                        remove("email_removed_team_code_$emailLower")
+                    }
+                    if (uid.isNotBlank()) {
+                        putBoolean("user_removed_by_leader_$uid", false)
+                        remove("user_removed_team_code_$uid")
+                    }
+                    if (uidLower.isNotBlank()) {
+                        putBoolean("user_removed_by_leader_$uidLower", false)
+                        remove("user_removed_team_code_$uidLower")
+                    }
+                    putBoolean("removedByLeader", false)
+                    remove("removedTeamCode")
+                }
+            }
+        }
+
         // Check Firestore first as single source of truth for membership status
         if (uid.isNotBlank()) {
             db.collection(USERS_COLLECTION).document(uid).get()
@@ -1380,8 +1473,8 @@ object TeamRepository {
                     if (snap.exists()) {
                         val removed = snap.getBoolean("removedByLeader") ?: false
                         val rTeamCode = snap.getString("removedTeamCode").orEmpty()
-                        val curTeam = snap.getString("teamCode").orEmpty()
-                        if (curTeam.equals(code, ignoreCase = true) && !removed) {
+                        if (!removed) {
+                            clearLocalRemovedFlags()
                             onResult(false)
                             return@addOnSuccessListener
                         }
@@ -1397,8 +1490,8 @@ object TeamRepository {
                                 if (doc != null) {
                                     val removed = doc.getBoolean("removedByLeader") ?: false
                                     val rTeamCode = doc.getString("removedTeamCode").orEmpty()
-                                    val curTeam = doc.getString("teamCode").orEmpty()
-                                    if (curTeam.equals(code, ignoreCase = true) && !removed) {
+                                    if (!removed) {
+                                        clearLocalRemovedFlags()
                                         onResult(false)
                                         return@addOnSuccessListener
                                     }
@@ -1426,8 +1519,8 @@ object TeamRepository {
                     if (doc != null) {
                         val removed = doc.getBoolean("removedByLeader") ?: false
                         val rTeamCode = doc.getString("removedTeamCode").orEmpty()
-                        val curTeam = doc.getString("teamCode").orEmpty()
-                        if (curTeam.equals(code, ignoreCase = true) && !removed) {
+                        if (!removed) {
+                            clearLocalRemovedFlags()
                             onResult(false)
                             return@addOnSuccessListener
                         }
@@ -1547,9 +1640,38 @@ object TeamRepository {
     }
 
     /**
+     * Subscribes to real-time re-join requests for a team.
+     */
+    fun subscribeToRejoinRequests(
+        teamCode: String,
+        onUpdate: (List<RejoinRequestData>) -> Unit
+    ): ListenerRegistration? {
+        val code = teamCode.trim().uppercase()
+        if (code.isBlank()) return null
+
+        return try {
+            db.collection(TEAMS_COLLECTION).document(code)
+                .collection(REJOIN_REQUESTS_SUBCOLLECTION)
+                .addSnapshotListener { snap, error ->
+                    if (error != null || snap == null) return@addSnapshotListener
+                    val list = mutableListOf<RejoinRequestData>()
+                    for (doc in snap.documents) {
+                        val data = doc.data ?: continue
+                        list.add(RejoinRequestData.fromMap(data).copy(id = doc.id))
+                    }
+                    list.sortByDescending { it.createdAt }
+                    cachedRejoinRequests[code] = java.util.Collections.synchronizedList(list)
+                    onUpdate(list)
+                }
+        } catch (_: Throwable) {
+            null
+        }
+    }
+
+    /**
      * Approves a member's re-join request:
      * - Removes them from /teams/{teamCode}.removedMembers
-     * - Clears removedByLeader and sets teamCode in /users/{userUid}
+     * - Clears removedByLeader in /users/{userUid} so they can re-enter the team code
      * - Updates rejoin request state to 'Approved'
      */
     fun approveRejoinRequest(
@@ -1614,21 +1736,28 @@ object TeamRepository {
             editor.apply()
         }
 
-        // 3. Update user doc to restore membership
-        val userUpdates = mutableMapOf<String, Any>(
-            "removedByLeader" to false,
-            "removedTeamCode" to "",
-            "teamCode" to code,
-            "role" to "Member"
-        )
-        if (teamName.isNotBlank()) userUpdates["teamName"] = teamName
+        // 3. Update user doc to clear removal lock so they can enter the team code to re-join
         try {
-            db.collection(USERS_COLLECTION).document(uid).set(userUpdates, com.google.firebase.firestore.SetOptions.merge())
+            if (uid.isNotBlank()) {
+                val userUpdates = mutableMapOf<String, Any>(
+                    "uid" to uid,
+                    "removedByLeader" to false,
+                    "removedTeamCode" to "",
+                    "role" to "Member"
+                )
+                db.collection(USERS_COLLECTION).document(uid).set(userUpdates, com.google.firebase.firestore.SetOptions.merge())
+            }
             if (email.isNotBlank()) {
                 db.collection(USERS_COLLECTION).whereEqualTo("email", email).get()
                     .addOnSuccessListener { qSnap ->
                         qSnap.documents.forEach { doc ->
-                            doc.reference.set(userUpdates, com.google.firebase.firestore.SetOptions.merge())
+                            val docUpdates = mutableMapOf<String, Any>(
+                                "uid" to doc.id,
+                                "removedByLeader" to false,
+                                "removedTeamCode" to "",
+                                "role" to "Member"
+                            )
+                            doc.reference.set(docUpdates, com.google.firebase.firestore.SetOptions.merge())
                         }
                     }
             }
@@ -3706,10 +3835,15 @@ object TeamRepository {
                         return@addSnapshotListener
                     }
                     if (snapshot == null) return@addSnapshotListener
+                    val deletedIds = preferences?.getStringSet("deleted_substitutions_$code", emptySet()).orEmpty()
+                    val clearedAt = preferences?.getLong("substitutions_cleared_at_$code", 0L) ?: 0L
                     val list = mutableListOf<SubstitutionData>()
                     for (doc in snapshot.documents) {
                         val data = doc.data ?: continue
-                        list.add(SubstitutionData.fromMap(data).copy(id = doc.id))
+                        val item = SubstitutionData.fromMap(data).copy(id = doc.id)
+                        if (item.id !in deletedIds && (item.createdAt == 0L || item.createdAt > clearedAt)) {
+                            list.add(item)
+                        }
                     }
                     list.sortByDescending { it.createdAt }
                     saveSubstitutionsLocally(code, list, preferences)
@@ -3931,6 +4065,28 @@ object TeamRepository {
     /**
      * Sends a chat message to Firestore /teams/{teamCode}/messages/{messageId} and saves it locally.
      */
+    /**
+     * Returns true if a chat message's content, media, edit state, or deletion state has changed.
+     * Ensures real-time sync detects when a picture-only message is deleted (text stays "" while
+     * mediaUrl becomes "" and isDeleted becomes true).
+     */
+    fun hasChatMessageChanged(cur: ChatMessage, incoming: ChatMessage): Boolean {
+        return cur.text != incoming.text ||
+               cur.isEdited != incoming.isEdited ||
+               cur.editedAt != incoming.editedAt ||
+               cur.isDeleted != incoming.isDeleted ||
+               cur.deletedAt != incoming.deletedAt ||
+               cur.mediaUrl != incoming.mediaUrl
+    }
+
+    /**
+     * Returns true if a message ID was retracted/deleted locally (protects against race conditions
+     * where an optimistic photo upload finishes after the user already deleted the message).
+     */
+    fun isMessageRetracted(messageId: String): Boolean {
+        return messageId.isNotBlank() && retractedMessageIds.contains(messageId)
+    }
+
     fun sendChatMessage(
         teamCode: String,
         message: ChatMessage,
@@ -3949,7 +4105,21 @@ object TeamRepository {
         } else {
             message.senderUid.ifBlank { authUid ?: "anonymous" }
         }
-        val sanitizedMsg = if (message.senderUid != effectiveUid) message.copy(senderUid = effectiveUid) else message
+        val wasRetracted = isMessageRetracted(message.id) ||
+            getCachedChatMessages(code, preferences).any { it.id == message.id && it.isDeleted }
+        val sanitizedMsg = if (wasRetracted) {
+            message.copy(
+                senderUid = effectiveUid,
+                isDeleted = true,
+                deletedAt = if (message.deletedAt > 0L) message.deletedAt else System.currentTimeMillis(),
+                text = "",
+                mediaUrl = ""
+            )
+        } else if (message.senderUid != effectiveUid) {
+            message.copy(senderUid = effectiveUid)
+        } else {
+            message
+        }
 
         saveChatMessageLocally(code, sanitizedMsg, preferences)
 
@@ -4033,6 +4203,12 @@ object TeamRepository {
         }
 
         val now = System.currentTimeMillis()
+        retractedMessageIds.add(messageId)
+        preferences?.let { prefs ->
+            val delSet = prefs.getStringSet("deleted_chat_ids_$code", emptySet())?.toMutableSet() ?: mutableSetOf()
+            delSet.add(messageId)
+            prefs.edit().putStringSet("deleted_chat_ids_$code", delSet).apply()
+        }
         val cached = getCachedChatMessages(code, preferences)
         val updatedList = cached.map {
             if (it.id == messageId) {
@@ -4052,7 +4228,7 @@ object TeamRepository {
                 .document(code)
                 .collection(MESSAGES_SUBCOLLECTION)
                 .document(messageId)
-                .update(retractionData)
+                .set(retractionData, com.google.firebase.firestore.SetOptions.merge())
                 .addOnSuccessListener {
                     onComplete?.invoke(Result.success(Unit))
                 }
@@ -4092,9 +4268,17 @@ object TeamRepository {
                     if (snapshot != null) {
                         val deletedIds = preferences?.getStringSet("deleted_chat_ids_$code", emptySet()) ?: emptySet()
                         val remoteMessages = snapshot.documents.mapNotNull { doc ->
-                            doc.data?.let { ChatMessage.fromMap(it) }
-                        }.map { msg -> if (msg.id in deletedIds) msg.copy(isDeleted = true) else msg }
-                         .sortedBy { it.timestamp }
+                            doc.data?.let { data ->
+                                val parsed = ChatMessage.fromMap(data).let { m ->
+                                    if (m.id.isBlank()) m.copy(id = doc.id) else m
+                                }
+                                if (parsed.isDeleted || parsed.id in deletedIds || isMessageRetracted(parsed.id)) {
+                                    parsed.copy(isDeleted = true, text = "", mediaUrl = "")
+                                } else {
+                                    parsed
+                                }
+                            }
+                        }.sortedBy { it.timestamp }
 
                         // Firestore remote snapshot is authoritative across all devices
                         saveAllChatMessagesLocally(code, remoteMessages, preferences)
@@ -4312,6 +4496,33 @@ object TeamRepository {
             items.add(
                 TeamNotificationItem(
                     id = "notif_sub_${sub.id}",
+                    title = title,
+                    message = msg,
+                    timeLabel = formatRelativeNotificationTime(ts),
+                    iconName = "people",
+                    timestamp = ts
+                )
+            )
+        }
+
+        // 4. Re-join Requests
+        val rejoinRequests = getCachedRejoinRequests(code)
+        for (req in rejoinRequests) {
+            val ts = req.createdAt.takeIf { it > 0L } ?: System.currentTimeMillis()
+            val statusLabel = req.status.ifBlank { "Pending" }
+            val memberLabel = req.userName.ifBlank { req.userEmail }.ifBlank { "A member" }
+            val title = "Re-join Request ($statusLabel)"
+            val msg = when {
+                statusLabel.equals("Approved", ignoreCase = true) ->
+                    "$memberLabel's request to re-join the team was approved. Team code ($code) can now be entered to join."
+                statusLabel.equals("Declined", ignoreCase = true) ->
+                    "$memberLabel's request to re-join the team was declined."
+                else ->
+                    "$memberLabel requested approval to re-join the team."
+            }
+            items.add(
+                TeamNotificationItem(
+                    id = "notif_rejoin_${req.id}",
                     title = title,
                     message = msg,
                     timeLabel = formatRelativeNotificationTime(ts),

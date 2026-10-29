@@ -368,6 +368,7 @@ class AdminActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         WindowCompat.setDecorFitsSystemWindows(window, false)
+        ImageLoader.prewarmAppAssets(this)
         syncLocalTeamsToMemory()
         checkAndRequestNotificationPermission()
         displayName = savedInstanceState?.getString("displayName") ?: preferences.getString(SessionManager.KEY_USERNAME, "").orEmpty()
@@ -470,8 +471,37 @@ class AdminActivity : AppCompatActivity() {
             }
             substitutionsListener = TeamRepository.subscribeToSubstitutions(activeCode, preferences) { list ->
                 runOnUiThread {
-                    if (page in listOf("notifications", "announcements")) {
+                    if (page in listOf("notifications", "announcements", "schedule", "service")) {
                         navigate(page, triggerRefresh = false)
+                    }
+                }
+            }
+            customRolesListener = TeamRepository.subscribeToCustomRoles(activeCode) { roles ->
+                runOnUiThread {
+                    if (roles.isNotEmpty() && roles != leaderRoles) {
+                        leaderRoles.clear()
+                        leaderRoles.addAll(roles)
+                        preferences.edit().putString("leaderRoles", org.json.JSONArray(leaderRoles).toString()).apply()
+                        if ((page == "teams" && teamTab == "Role") || page in listOf("teamDetails", "teamRoles", "roleEdit")) {
+                            navigate(page, triggerRefresh = false)
+                        }
+                    }
+                }
+            }
+            rejoinRequestsListener = TeamRepository.subscribeToRejoinRequests(activeCode) { _ ->
+                runOnUiThread {
+                    if (page in listOf("teamDetails", "notifications")) {
+                        navigate(page, triggerRefresh = false)
+                    }
+                }
+            }
+            com.example.syncedn.data.auth.SyncedMessagingService.onLeaderRejoinRequestInApp = { memberName, _ ->
+                runOnUiThread {
+                    if (!isFinishing && !isDestroyed) {
+                        toast("$memberName requested approval to re-join your team!")
+                        if (page in listOf("teamDetails", "notifications")) {
+                            navigate(page, triggerRefresh = false)
+                        }
                     }
                 }
             }
@@ -781,13 +811,20 @@ class AdminActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
+        if (com.example.syncedn.data.auth.SyncedMessagingService.onLeaderRejoinRequestInApp != null) {
+            com.example.syncedn.data.auth.SyncedMessagingService.onLeaderRejoinRequestInApp = null
+        }
         servicesListener?.remove()
         substitutionsListener?.remove()
         rosterListener?.remove()
+        customRolesListener?.remove()
+        rejoinRequestsListener?.remove()
         userMembershipListener?.remove()
         servicesListener = null
         substitutionsListener = null
         rosterListener = null
+        customRolesListener = null
+        rejoinRequestsListener = null
         userMembershipListener = null
         super.onDestroy()
     }
@@ -930,23 +967,27 @@ class AdminActivity : AppCompatActivity() {
                 }
             }
             "home" -> {
+                setupHome()
                 if (triggerRefresh) {
-                    refreshTeamRoster()
-                    refreshTeamServices()
-                    val activeCode = preferences.getString("teamCode", "").orEmpty()
-                        .ifBlank { FirestoreManager.findCodeByTeamName(teamName).orEmpty() }
-                    if (activeCode.isNotBlank()) {
-                        TeamRepository.getAnnouncements(activeCode, false, preferences)
+                    root.post {
+                        if (!isFinishing && !isDestroyed && page == "home") {
+                            refreshTeamRoster()
+                            refreshTeamServices()
+                            val activeCode = preferences.getString("teamCode", "").orEmpty()
+                                .ifBlank { FirestoreManager.findCodeByTeamName(teamName).orEmpty() }
+                            if (activeCode.isNotBlank()) {
+                                TeamRepository.getAnnouncements(activeCode, false, preferences)
+                            }
+                        }
                     }
                 }
-                setupHome()
             }
             "schedule" -> {
-                if (triggerRefresh) refreshTeamServices()
+                if (triggerRefresh) root.post { if (!isFinishing && !isDestroyed && page == "schedule") refreshTeamServices() }
             }
-            "teams" -> if (triggerRefresh) refreshTeamRoster()
+            "teams" -> if (triggerRefresh) root.post { if (!isFinishing && !isDestroyed && page == "teams") refreshTeamRoster() }
             "createService", "memberAvailability", "serviceAssignments", "reviewService" -> {
-                if (triggerRefresh) refreshTeamRoster(force = true)
+                if (triggerRefresh) root.post { if (!isFinishing && !isDestroyed) refreshTeamRoster(force = true) }
             }
             "calendar" -> {
                 if (triggerRefresh) {
@@ -1330,29 +1371,19 @@ class AdminActivity : AppCompatActivity() {
     }
     private fun heading(value: String) = text(value, 21, navy, true)
     private fun image(name: String, description: String? = null) = ImageView(this).apply {
+        val fallbackLoader = {
+            val bytes = Base64.decode(Art.data(name), Base64.DEFAULT)
+            requireNotNull(BitmapFactory.decodeByteArray(bytes, 0, bytes.size))
+        }
         val bitmap = if (name == "profile_photo") {
             val uri = preferences.getString("photoUri", null)?.takeIf { it.isNotBlank() }
             val cached = if (uri != null) ImageLoader.getCachedProfileBitmap(this@AdminActivity, uri) else null
             cached ?: bitmaps.getOrPut(name) {
-                val resId = resources.getIdentifier(name, "drawable", packageName)
-                if (resId != 0) {
-                    val opts = BitmapFactory.Options().apply { inScaled = false }
-                    BitmapFactory.decodeResource(resources, resId, opts)
-                } else {
-                    val bytes = Base64.decode(Art.data(name), Base64.DEFAULT)
-                    requireNotNull(BitmapFactory.decodeByteArray(bytes, 0, bytes.size))
-                }
+                ImageLoader.getAppAssetBitmap(this@AdminActivity, name, fallbackLoader)
             }
         } else {
             bitmaps.getOrPut(name) {
-                val resId = resources.getIdentifier(name, "drawable", packageName)
-                if (resId != 0) {
-                    val opts = BitmapFactory.Options().apply { inScaled = false }
-                    BitmapFactory.decodeResource(resources, resId, opts)
-                } else {
-                    val bytes = Base64.decode(Art.data(name), Base64.DEFAULT)
-                    requireNotNull(BitmapFactory.decodeByteArray(bytes, 0, bytes.size))
-                }
+                ImageLoader.getAppAssetBitmap(this@AdminActivity, name, fallbackLoader)
             }
         }
         setImageBitmap(bitmap); scaleType = ImageView.ScaleType.FIT_CENTER
@@ -2813,6 +2844,9 @@ class AdminActivity : AppCompatActivity() {
             toast("Uploading photo to chat...")
             CloudinaryUploader.uploadProfileImage(this, uri, maxDimension = 800) { result ->
                 result.onSuccess { remoteUrl ->
+                    if (TeamRepository.isMessageRetracted(localMsgId) || chatMessages.any { it.id == localMsgId && it.isDeleted }) {
+                        return@onSuccess
+                    }
                     if (localBitmap != null) {
                         ImageLoader.preseedCache(this, remoteUrl, localBitmap, circular = false)
                     }
@@ -2922,6 +2956,8 @@ class AdminActivity : AppCompatActivity() {
     private var servicesListener: com.google.firebase.firestore.ListenerRegistration? = null
     private var substitutionsListener: com.google.firebase.firestore.ListenerRegistration? = null
     private var rosterListener: com.google.firebase.firestore.ListenerRegistration? = null
+    private var customRolesListener: com.google.firebase.firestore.ListenerRegistration? = null
+    private var rejoinRequestsListener: com.google.firebase.firestore.ListenerRegistration? = null
     private var userMembershipListener: com.google.firebase.firestore.ListenerRegistration? = null
     private var activeServiceIndex = -1
     private var roleMember = "Angelo Daniel"
@@ -3059,7 +3095,7 @@ class AdminActivity : AppCompatActivity() {
             val count = getActiveRoster().size
             val label = "$count Member${if (count == 1) "" else "s"}"
             homeMemberCount?.let { if (it.text.toString() != label) it.text = label }
-        } else if ((page == "teams" && teamTab != "Team Chat") || page in listOf("memberAvailability", "serviceAssignments", "reviewService", "calendar")) {
+        } else if ((page == "teams" && teamTab != "Team Chat") || page in listOf("teamDetails", "teamRoles", "roleEdit", "memberAvailability", "serviceAssignments", "reviewService", "calendar")) {
             val targetPage = page
             val oldRoot = screenRoot
             val oldScroll = primaryScroll(oldRoot)
@@ -6656,7 +6692,11 @@ class AdminActivity : AppCompatActivity() {
         }
     }
 
-    private fun buildChatMessageBubble(msg: ChatMessage, currentUid: String): View {
+    private fun buildChatMessageBubble(
+        msg: ChatMessage,
+        currentUid: String,
+        rosterSnapshot: List<TeamMember>? = null
+    ): View {
         val maxBubbleWidth = (resources.displayMetrics.widthPixels * 0.72f).toInt()
         val isSelf = (msg.senderUid.isNotBlank() && msg.senderUid == currentUid) ||
                 (msg.senderName.equals(displayName, ignoreCase = true) || msg.senderName.equals(fullName, ignoreCase = true))
@@ -6821,7 +6861,7 @@ class AdminActivity : AppCompatActivity() {
                 setPadding(0, dp(4), 0, dp(4))
             }
             val pUri = msg.senderPhotoUri.ifBlank {
-                getActiveRoster().find { it.uid == msg.senderUid || it.fullName.equals(msg.senderName, true) || it.username.equals(msg.senderName, true) }?.photoUri ?: ""
+                (rosterSnapshot ?: getActiveRoster()).find { it.uid == msg.senderUid || it.fullName.equals(msg.senderName, true) || it.username.equals(msg.senderName, true) }?.photoUri ?: ""
             }
             row.add(memberAvatarView(pUri, 32), 32, 32)
 
@@ -6952,7 +6992,7 @@ class AdminActivity : AppCompatActivity() {
             col.add(memberButton("Create or Join Team") { navigate("teamChoice") }, -1, 48)
         }
         val currentCode = preferences.getString("teamCode", "").orEmpty()
-        if (teamTab == "Team Chat" && currentCode.isNotBlank()) {
+        if (currentCode.isNotBlank()) {
             if (chatMessages.isEmpty()) {
                 val cached = TeamRepository.getCachedChatMessages(currentCode, preferences)
                 if (cached.isNotEmpty()) chatMessages.addAll(cached)
@@ -6967,7 +7007,7 @@ class AdminActivity : AppCompatActivity() {
                             val incoming = msgs.filter { it.id !in existingIds }
                             val hasEditedOrUpdated = msgs.any { m ->
                                 val cur = chatMessages.find { it.id == m.id }
-                                cur != null && (cur.text != m.text || cur.isEdited != m.isEdited || (cur.mediaUrl != m.mediaUrl && m.mediaUrl.isNotBlank()))
+                                cur != null && TeamRepository.hasChatMessageChanged(cur, m)
                             }
                             if (hasDeleted || hasEditedOrUpdated) {
                                 chatMessages.clear()
@@ -6985,8 +7025,9 @@ class AdminActivity : AppCompatActivity() {
                                         chatEmptyView = empty
                                         col.add(empty, -1, -2)
                                     } else {
+                                        val rosterSnap = getActiveRoster()
                                         chatMessages.forEach { msg ->
-                                            col.addView(buildChatMessageBubble(msg, myUid))
+                                            col.addView(buildChatMessageBubble(msg, myUid, rosterSnap))
                                         }
                                     }
                                 } else {
@@ -7008,6 +7049,9 @@ class AdminActivity : AppCompatActivity() {
                                 } else {
                                     navigate("teams")
                                 }
+                            } else {
+                                chatMessages.clear()
+                                chatMessages.addAll(msgs)
                             }
                         } else {
                             val map = LinkedHashMap<String, ChatMessage>()
@@ -7211,8 +7255,9 @@ class AdminActivity : AppCompatActivity() {
                     chatEmptyView = empty
                     col.add(empty, -1, -2)
                 } else {
+                    val rosterSnap = getActiveRoster()
                     displayList.forEach { msg ->
-                        col.addView(buildChatMessageBubble(msg, currentUid))
+                        col.addView(buildChatMessageBubble(msg, currentUid, rosterSnap))
                     }
                 }
             }
