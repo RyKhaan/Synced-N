@@ -152,6 +152,8 @@ open class MemberActivity : AppCompatActivity() {
     private var userMembershipListener: com.google.firebase.firestore.ListenerRegistration? = null
     private var userEmailMembershipListener: com.google.firebase.firestore.ListenerRegistration? = null
     private var isShowingRemovedDialog = false
+    private var isSwitchingToLeaderDashboard = false
+    private var lastObservedMinistryRole = ""
     private val chatScrollRunnable = Runnable { chatScrollView?.fullScroll(View.FOCUS_DOWN) }
     protected open val initialPage: String = "home"
     private var page = "start"
@@ -326,69 +328,12 @@ open class MemberActivity : AppCompatActivity() {
                         (currentEmail.isNotBlank() && m.email.trim().lowercase() == currentEmail)
                     }
                     if (myEntry != null) {
-                        val currentPref = preferences.getString("ministryRole", "").orEmpty()
-                        val isPromotedLeader = myEntry.ministryRole.equals("Worship Leader", ignoreCase = true) || myEntry.role.equals("Leader", ignoreCase = true)
-                        if (isPromotedLeader) {
-                            preferences.edit {
-                                putString("role", "Leader")
-                                putString(SessionManager.KEY_ROLE, "Leader")
-                                putString("ministryRole", "Worship Leader")
-                                putString(SessionManager.KEY_MINISTRY_ROLE, "Worship Leader")
-                                val cleanTeam = teamName.trim().lowercase()
-                                if (cleanTeam.isNotBlank() && currentEmail.isNotBlank()) {
-                                    putString("team_leader_email_$cleanTeam", currentEmail)
-                                }
-                            }
-                            toast("You are now the Worship Leader of $teamName!")
-                            val intent = Intent(this@MemberActivity, AdminActivity::class.java)
-                                .putExtra("startPage", "home")
-                                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
-                            startActivity(intent)
-                            finish()
-                        } else if (myEntry.ministryRole.equals("Substitute Leader", ignoreCase = true)) {
-                            if (!currentPref.equals("Substitute Leader", ignoreCase = true)) {
-                                preferences.edit {
-                                    putString("role", "Leader")
-                                    putString(SessionManager.KEY_ROLE, "Leader")
-                                    putString("ministryRole", "Substitute Leader")
-                                    putString(SessionManager.KEY_MINISTRY_ROLE, "Substitute Leader")
-                                }
-                                toast("Assigned as Substitute Leader! Switching to Worship Leader dashboard...")
-                                val intent = Intent(this@MemberActivity, AdminActivity::class.java)
-                                    .putExtra("startPage", "home")
-                                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
-                                startActivity(intent)
-                                finish()
-                            }
-                        } else {
-                            if (currentPref.equals("Substitute Leader", ignoreCase = true) ||
-                                preferences.getString("role", "").equals("Leader", true) ||
-                                (myEntry.ministryRole.isNotBlank() && myEntry.ministryRole != currentPref)) {
-                                val resolvedMinistry = myEntry.ministryRole.ifBlank { "Member" }
-                                preferences.edit {
-                                    putString("role", "Member")
-                                    putString(SessionManager.KEY_ROLE, "Member")
-                                    putString("ministryRole", resolvedMinistry)
-                                    putString(SessionManager.KEY_MINISTRY_ROLE, resolvedMinistry)
-                                    if (currentUid.isNotBlank()) {
-                                        putString("user_role_$currentUid", "Member")
-                                        putString("user_ministry_$currentUid", resolvedMinistry)
-                                    }
-                                    if (currentEmail.isNotBlank()) {
-                                        putString("email_role_$currentEmail", "Member")
-                                        putString("email_ministry_$currentEmail", resolvedMinistry)
-                                    }
-                                    try {
-                                        val map = org.json.JSONObject(preferences.getString(SessionManager.KEY_MEMBER_ROLES, "{}").orEmpty())
-                                        if (currentUid.isNotBlank()) map.put(currentUid, resolvedMinistry)
-                                        if (currentEmail.isNotBlank()) map.put(currentEmail, resolvedMinistry)
-                                        putString(SessionManager.KEY_MEMBER_ROLES, map.toString())
-                                    } catch (_: Throwable) {}
-                                }
-                                updateRosterViews()
-                                if (page == "home") setupHome()
-                            }
-                        }
+                        handleSelfRoleSync(
+                            remoteMinistryRole = myEntry.ministryRole,
+                            remoteRole = myEntry.role,
+                            myUid = currentUid,
+                            myEmail = currentEmail
+                        )
                     }
                 }
             }
@@ -485,9 +430,188 @@ open class MemberActivity : AppCompatActivity() {
         }
     }
 
+    private fun handleSelfRoleSync(
+        remoteMinistryRole: String,
+        remoteRole: String,
+        myUid: String = currentUserId(),
+        myEmail: String = preferences.getString("email", "").orEmpty()
+    ) {
+        if (isFinishing || isDestroyed || isSwitchingToLeaderDashboard) return
+        val isAuthOrOnboardingScreen = javaClass == MainActivity::class.java ||
+            page in listOf("start", "login", "register", "reset", "teamChoice", "createTeam", "joinTeam")
+        val emailLower = myEmail.trim().lowercase()
+        val cleanTeam = teamName.trim().lowercase()
+        val currentPref = preferences.getString("ministryRole", "").orEmpty()
+        val currentRolePref = preferences.getString("role", "").orEmpty()
+
+        // 1. Check Substitute Leader FIRST (because Substitute Leader also has role == "Leader" in Firestore!)
+        if (TeamRepository.isSubstituteLeader(remoteMinistryRole) && !remoteRole.equals("Member", ignoreCase = true)) {
+            val wasAlreadySub = currentPref.equals("Substitute Leader", ignoreCase = true) &&
+                lastObservedMinistryRole.equals("Substitute Leader", ignoreCase = true)
+            lastObservedMinistryRole = "Substitute Leader"
+            preferences.edit {
+                putString("role", "Leader")
+                putString(SessionManager.KEY_ROLE, "Leader")
+                putString("ministryRole", "Substitute Leader")
+                putString(SessionManager.KEY_MINISTRY_ROLE, "Substitute Leader")
+                if (myUid.isNotBlank()) {
+                    putString("user_role_$myUid", "Leader")
+                    putString("user_ministry_$myUid", "Substitute Leader")
+                }
+                if (emailLower.isNotBlank()) {
+                    putString("email_role_$emailLower", "Leader")
+                    putString("email_ministry_$emailLower", "Substitute Leader")
+                    val sig = com.example.syncedn.data.util.ValidationUtils.computeSessionHmac(emailLower, "Leader", myUid)
+                    if (sig.isNotBlank()) putString("session_hmac_sig_$emailLower", sig)
+                }
+                if (cleanTeam.isNotBlank() && preferences.getString("team_leader_email_$cleanTeam", "").equals(emailLower, ignoreCase = true)) {
+                    remove("team_leader_email_$cleanTeam")
+                }
+                try {
+                    val map = org.json.JSONObject(preferences.getString(SessionManager.KEY_MEMBER_ROLES, "{}").orEmpty())
+                    if (myUid.isNotBlank()) map.put(myUid, "Substitute Leader")
+                    if (emailLower.isNotBlank()) map.put(emailLower, "Substitute Leader")
+                    putString(SessionManager.KEY_MEMBER_ROLES, map.toString())
+                } catch (_: Throwable) {}
+            }
+            if (!isAuthOrOnboardingScreen) {
+                isSwitchingToLeaderDashboard = true
+                if (!wasAlreadySub) {
+                    com.example.syncedn.data.auth.SyncedMessagingService.dispatchSystemNotification(
+                        this@MemberActivity,
+                        preferences,
+                        "⭐ Promoted to Substitute Leader",
+                        "You have been assigned as Substitute Leader for ${teamName.ifBlank { "your team" }}! Switching to Leader dashboard..."
+                    )
+                }
+                runOnUiThread {
+                    if (!isFinishing && !isDestroyed) {
+                        toast("You have been assigned as Substitute Leader! Switching to Leader dashboard...")
+                        val intent = Intent(this@MemberActivity, AdminActivity::class.java)
+                            .putExtra("startPage", "home")
+                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_CLEAR_TASK)
+                        startActivity(intent)
+                        finish()
+                    }
+                }
+            }
+            return
+        }
+
+        // 2. Check Permanent Worship Leader (never true for Substitute Leader)
+        if (TeamRepository.isWorshipLeader(remoteMinistryRole, remoteRole)) {
+            val wasAlreadyWorshipLeader = currentPref.equals("Worship Leader", ignoreCase = true) &&
+                lastObservedMinistryRole.equals("Worship Leader", ignoreCase = true)
+            lastObservedMinistryRole = "Worship Leader"
+            preferences.edit {
+                putString("role", "Leader")
+                putString(SessionManager.KEY_ROLE, "Leader")
+                putString("ministryRole", "Worship Leader")
+                putString(SessionManager.KEY_MINISTRY_ROLE, "Worship Leader")
+                if (myUid.isNotBlank()) {
+                    putString("user_role_$myUid", "Leader")
+                    putString("user_ministry_$myUid", "Worship Leader")
+                }
+                if (emailLower.isNotBlank()) {
+                    putString("email_role_$emailLower", "Leader")
+                    putString("email_ministry_$emailLower", "Worship Leader")
+                    val sig = com.example.syncedn.data.util.ValidationUtils.computeSessionHmac(emailLower, "Leader", myUid)
+                    if (sig.isNotBlank()) putString("session_hmac_sig_$emailLower", sig)
+                }
+                if (cleanTeam.isNotBlank() && emailLower.isNotBlank()) {
+                    putString("team_leader_email_$cleanTeam", emailLower)
+                }
+            }
+            if (!isAuthOrOnboardingScreen) {
+                isSwitchingToLeaderDashboard = true
+                if (!wasAlreadyWorshipLeader) {
+                    com.example.syncedn.data.auth.SyncedMessagingService.dispatchSystemNotification(
+                        this@MemberActivity,
+                        preferences,
+                        "👑 Promoted to Worship Leader",
+                        "You are now the Worship Leader of ${teamName.ifBlank { "your team" }}!"
+                    )
+                }
+                runOnUiThread {
+                    if (!isFinishing && !isDestroyed) {
+                        toast("You are now the Worship Leader of $teamName!")
+                        val intent = Intent(this@MemberActivity, AdminActivity::class.java)
+                            .putExtra("startPage", "home")
+                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_CLEAR_TASK)
+                        startActivity(intent)
+                        finish()
+                    }
+                }
+            }
+            return
+        }
+
+        // 3. Ordinary Member Role
+        val resolvedMinistry = if (remoteMinistryRole.isNotBlank() && !TeamRepository.isSubstituteLeader(remoteMinistryRole)) {
+            remoteMinistryRole
+        } else {
+            "Member"
+        }
+        val previousRole = lastObservedMinistryRole.ifBlank { currentPref }
+        val roleMeaningfullyChanged = previousRole.isNotBlank() && !previousRole.equals(resolvedMinistry, ignoreCase = true)
+        val needsPrefSync = roleMeaningfullyChanged ||
+            !currentPref.equals(resolvedMinistry, ignoreCase = true) ||
+            !currentRolePref.equals("Member", ignoreCase = true)
+        lastObservedMinistryRole = resolvedMinistry
+
+        if (needsPrefSync) {
+            preferences.edit {
+                putString("role", "Member")
+                putString(SessionManager.KEY_ROLE, "Member")
+                putString("ministryRole", resolvedMinistry)
+                putString(SessionManager.KEY_MINISTRY_ROLE, resolvedMinistry)
+                if (myUid.isNotBlank()) {
+                    putString("user_role_$myUid", "Member")
+                    putString("user_ministry_$myUid", resolvedMinistry)
+                }
+                if (emailLower.isNotBlank()) {
+                    putString("email_role_$emailLower", "Member")
+                    putString("email_ministry_$emailLower", resolvedMinistry)
+                    val sig = com.example.syncedn.data.util.ValidationUtils.computeSessionHmac(emailLower, "Member", myUid)
+                    if (sig.isNotBlank()) putString("session_hmac_sig_$emailLower", sig)
+                }
+                if (cleanTeam.isNotBlank() && preferences.getString("team_leader_email_$cleanTeam", "").equals(emailLower, ignoreCase = true)) {
+                    remove("team_leader_email_$cleanTeam")
+                }
+                try {
+                    val map = org.json.JSONObject(preferences.getString(SessionManager.KEY_MEMBER_ROLES, "{}").orEmpty())
+                    if (myUid.isNotBlank()) map.put(myUid, resolvedMinistry)
+                    if (emailLower.isNotBlank()) map.put(emailLower, resolvedMinistry)
+                    putString(SessionManager.KEY_MEMBER_ROLES, map.toString())
+                } catch (_: Throwable) {}
+            }
+            if (roleMeaningfullyChanged && !isAuthOrOnboardingScreen) {
+                com.example.syncedn.data.auth.SyncedMessagingService.dispatchSystemNotification(
+                    this@MemberActivity,
+                    preferences,
+                    "🔄 Ministry Role Updated",
+                    "Your ministry role has been updated to $resolvedMinistry."
+                )
+            }
+            runOnUiThread {
+                if (!isFinishing && !isDestroyed) {
+                    if (roleMeaningfullyChanged && !isAuthOrOnboardingScreen) {
+                        toast("Your ministry role has been updated to $resolvedMinistry.")
+                    }
+                    updateRosterViews()
+                    if (page == "home") setupHome()
+                    if (page == "teams" && teamTab in listOf("Role", "Overview")) {
+                        navigate("teams", triggerRefresh = false)
+                    }
+                }
+            }
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         ImageLoader.prewarmAppAssets(this)
+        lastObservedMinistryRole = preferences.getString("ministryRole", "").orEmpty()
         val myCurrentUid = com.example.syncedn.data.auth.AuthManager.currentUser?.uid?.takeIf { it.isNotBlank() }
             ?: preferences.getString(SessionManager.KEY_USER_ID, "").orEmpty().ifBlank {
                 preferences.getString("userId", "").orEmpty()
@@ -558,90 +682,12 @@ open class MemberActivity : AppCompatActivity() {
 
             if (removedByLeader || myActiveTeamCode.isBlank()) return
 
-            val currentPref = preferences.getString("ministryRole", "").orEmpty()
-            val currentRolePref = preferences.getString("role", "").orEmpty()
-            val isPromotedLeader = roleFromDoc.equals("Leader", ignoreCase = true) ||
-                ministryRoleFromDoc.equals("Worship Leader", ignoreCase = true)
-            if (isPromotedLeader) {
-                preferences.edit {
-                    putString("role", "Leader")
-                    putString(SessionManager.KEY_ROLE, "Leader")
-                    putString("ministryRole", "Worship Leader")
-                    putString(SessionManager.KEY_MINISTRY_ROLE, "Worship Leader")
-                    val cleanTeam = teamName.trim().lowercase()
-                    if (cleanTeam.isNotBlank() && myCurrentEmail.isNotBlank()) {
-                        putString("team_leader_email_$cleanTeam", myCurrentEmail.trim().lowercase())
-                    }
-                }
-                runOnUiThread {
-                    if (!isFinishing && !isDestroyed) {
-                        toast("You are now the Worship Leader of $teamName!")
-                        val intent = Intent(this@MemberActivity, AdminActivity::class.java)
-                            .putExtra("startPage", "home")
-                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
-                        startActivity(intent)
-                        finish()
-                    }
-                }
-                return
-            }
-            val isSubLeader = ministryRoleFromDoc.equals("Substitute Leader", ignoreCase = true) && !roleFromDoc.equals("Member", true)
-            if (isSubLeader) {
-                if (!currentPref.equals("Substitute Leader", ignoreCase = true)) {
-                    preferences.edit {
-                        putString("role", "Leader")
-                        putString(SessionManager.KEY_ROLE, "Leader")
-                        putString("ministryRole", "Substitute Leader")
-                        putString(SessionManager.KEY_MINISTRY_ROLE, "Substitute Leader")
-                    }
-                    runOnUiThread {
-                        if (!isFinishing && !isDestroyed) {
-                            toast("You have been assigned as Substitute Leader!")
-                            val intent = Intent(this@MemberActivity, AdminActivity::class.java)
-                                .putExtra("startPage", "home")
-                                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
-                            startActivity(intent)
-                            finish()
-                        }
-                    }
-                }
-            } else {
-                val resolvedMinistry = if (ministryRoleFromDoc.isNotBlank() && !ministryRoleFromDoc.equals("Substitute Leader", ignoreCase = true)) {
-                    ministryRoleFromDoc
-                } else "Member"
-                val needsRoleUpdate = currentPref.equals("Substitute Leader", ignoreCase = true) ||
-                    currentRolePref.equals("Leader", ignoreCase = true) ||
-                    (roleFromDoc.equals("Member", true) && (currentPref != resolvedMinistry || currentRolePref != "Member"))
-                if (needsRoleUpdate) {
-                    preferences.edit {
-                        putString("role", "Member")
-                        putString(SessionManager.KEY_ROLE, "Member")
-                        putString("ministryRole", resolvedMinistry)
-                        putString(SessionManager.KEY_MINISTRY_ROLE, resolvedMinistry)
-                        if (myCurrentUid.isNotBlank()) {
-                            putString("user_role_$myCurrentUid", "Member")
-                            putString("user_ministry_$myCurrentUid", resolvedMinistry)
-                        }
-                        if (myCurrentEmail.isNotBlank()) {
-                            val emailLower = myCurrentEmail.trim().lowercase()
-                            putString("email_role_$emailLower", "Member")
-                            putString("email_ministry_$emailLower", resolvedMinistry)
-                        }
-                        try {
-                            val map = org.json.JSONObject(preferences.getString(SessionManager.KEY_MEMBER_ROLES, "{}").orEmpty())
-                            if (myCurrentUid.isNotBlank()) map.put(myCurrentUid, resolvedMinistry)
-                            if (myCurrentEmail.isNotBlank()) map.put(myCurrentEmail.trim().lowercase(), resolvedMinistry)
-                            putString(SessionManager.KEY_MEMBER_ROLES, map.toString())
-                        } catch (_: Throwable) {}
-                    }
-                    runOnUiThread {
-                        if (!isFinishing && !isDestroyed) {
-                            updateRosterViews()
-                            if (page == "home") setupHome()
-                        }
-                    }
-                }
-            }
+            handleSelfRoleSync(
+                remoteMinistryRole = ministryRoleFromDoc,
+                remoteRole = roleFromDoc,
+                myUid = myCurrentUid,
+                myEmail = myCurrentEmail
+            )
         }
         if (myCurrentUid.isNotBlank()) {
             userMembershipListener?.remove()

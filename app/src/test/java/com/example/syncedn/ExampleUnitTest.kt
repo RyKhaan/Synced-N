@@ -3741,4 +3741,110 @@ class ExampleUnitTest {
         assertTrue(rejoinNotif!!.title.contains("Re-join Request"))
         assertTrue(rejoinNotif.message.contains("Angelo Daniel"))
     }
+
+    @Test
+    fun testSubstituteLeaderPromotionDemotionAndRoleRestrictions() {
+        val repo = com.example.syncedn.data.database.TeamRepository
+        repo.clearCache()
+
+        // 1. Role classification: Substitute Leader has role="Leader" in Firestore,
+        //    so it must NEVER be misclassified as Worship Leader!
+        assertTrue(repo.isSubstituteLeader("Substitute Leader"))
+        assertFalse(repo.isWorshipLeader(ministryRole = "Substitute Leader", role = "Leader"))
+        assertFalse(repo.isOrdinaryMemberRole(ministryRole = "Substitute Leader", role = "Leader"))
+
+        assertTrue(repo.isWorshipLeader(ministryRole = "Worship Leader", role = "Leader"))
+        assertFalse(repo.isSubstituteLeader("Worship Leader"))
+
+        assertTrue(repo.isOrdinaryMemberRole(ministryRole = "Guitarist", role = "Member"))
+        assertTrue(repo.isOrdinaryMemberRole(ministryRole = "Vocalist", role = "Leader")) // stale role="Leader" with ordinary ministryRole must be treated as ordinary member
+
+        // 2. Role choices filtering:
+        //    - Substitute Leader must NOT see "Substitute Leader" or "Worship Leader" in choices
+        //    - Worship Leader editing a non-primary member can see "Substitute Leader" but NOT "Worship Leader"
+        val rawRoles = listOf("Worship Leader", "Substitute Leader", "Vocalist", "Guitarist", "Keyboardist", "Drummer")
+        val subLeaderChoices = repo.filterAssignableRoles(
+            roles = rawRoles,
+            isEditorSubstituteLeader = true,
+            isTargetPrimaryLeader = false
+        )
+        assertFalse("Substitute Leader must not be able to assign Substitute Leader", subLeaderChoices.any { it.equals("Substitute Leader", true) })
+        assertFalse("Substitute Leader must not have Worship Leader in choices", subLeaderChoices.any { it.equals("Worship Leader", true) })
+        assertTrue(subLeaderChoices.contains("Vocalist"))
+        assertTrue(subLeaderChoices.contains("Guitarist"))
+
+        val worshipLeaderChoices = repo.filterAssignableRoles(
+            roles = rawRoles,
+            isEditorSubstituteLeader = false,
+            isTargetPrimaryLeader = false
+        )
+        assertTrue("Worship Leader must be able to assign Substitute Leader", worshipLeaderChoices.any { it.equals("Substitute Leader", true) })
+        assertFalse("Worship Leader choices for regular members must not include Worship Leader", worshipLeaderChoices.any { it.equals("Worship Leader", true) })
+
+        // 3. Promotion & Demotion transition detection via saveRosterLocally + deduplicateRoster:
+        //    When Member One ("Vocalist") is promoted to "Substitute Leader" remotely, saveRosterLocally
+        //    must NOT prematurely overwrite prefs["ministryRole"] before MemberActivity's listener detects the promotion.
+        val memberPrefs = FakePreferences().apply {
+            edit()
+                .putString("userId", "uid_sub_1")
+                .putString("email", "sub1@test.com")
+                .putString("fullName", "Sub Member")
+                .putString("role", "Member")
+                .putString("ministryRole", "Vocalist")
+                .putString("teamName", "Grace Worship")
+                .apply()
+        }
+        val promotedRoster = listOf(
+            com.example.syncedn.data.model.TeamMember(
+                uid = "uid_sub_1",
+                fullName = "Sub Member",
+                username = "sub1",
+                email = "sub1@test.com",
+                role = "Leader",
+                ministryRole = "Substitute Leader",
+                teamCode = "GRC001"
+            )
+        )
+        repo.saveRosterLocally("GRC001", promotedRoster, memberPrefs)
+        assertEquals(
+            "Pre-transition ministryRole must remain 'Vocalist' so MemberActivity detects the promotion to Substitute Leader",
+            "Vocalist",
+            memberPrefs.getString("ministryRole", "")
+        )
+
+        // Simulate MemberActivity applying the Substitute Leader promotion (must NOT set team_leader_email_!)
+        memberPrefs.edit()
+            .putString("role", "Leader")
+            .putString("ministryRole", "Substitute Leader")
+            .putString("user_role_uid_sub_1", "Leader")
+            .putString("email_role_sub1@test.com", "Leader")
+            .putString("user_ministry_uid_sub_1", "Substitute Leader")
+            .putString("email_ministry_sub1@test.com", "Substitute Leader")
+            .apply()
+
+        // Now Leader demotes Sub Member back to "Guitarist" (role="Member")
+        val demotedRaw = listOf(
+            com.example.syncedn.data.model.TeamMember(
+                uid = "uid_sub_1",
+                fullName = "Sub Member",
+                username = "sub1",
+                email = "sub1@test.com",
+                role = "Member",
+                ministryRole = "Guitarist",
+                teamCode = "GRC001"
+            )
+        )
+        val dedupedAfterDemotion = repo.deduplicateRoster(demotedRaw, memberPrefs)
+        assertEquals("Guitarist", dedupedAfterDemotion.single().ministryRole)
+        assertEquals("Member", dedupedAfterDemotion.single().role)
+
+        repo.saveRosterLocally("GRC001", dedupedAfterDemotion, memberPrefs)
+        assertEquals(
+            "Pre-transition ministryRole must remain 'Substitute Leader' so AdminActivity detects the demotion to Guitarist",
+            "Substitute Leader",
+            memberPrefs.getString("ministryRole", "")
+        )
+        assertEquals("Guitarist", memberPrefs.getString("email_ministry_sub1@test.com", ""))
+        assertEquals("Member", memberPrefs.getString("email_role_sub1@test.com", ""))
+    }
 }

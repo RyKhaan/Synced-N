@@ -513,65 +513,17 @@ class AdminActivity : AppCompatActivity() {
                     val currentEmail = preferences.getString("email", "").orEmpty().trim().lowercase()
                     val currentUid = com.example.syncedn.data.auth.AuthManager.currentUser?.uid?.takeIf { it.isNotBlank() }
                         ?: preferences.getString(SessionManager.KEY_USER_ID, "").orEmpty()
-                    val cleanTeamLower = teamName.trim().lowercase()
-                    val teamLeaderEmail = preferences.getString("team_leader_email_$cleanTeamLower", "").orEmpty().trim().lowercase()
-                    val currentMinistry = preferences.getString("ministryRole", "").orEmpty()
-                    val isSubLeader = currentMinistry.equals("Substitute Leader", ignoreCase = true)
-                    val isPrimaryLeader = currentEmail == "ryanlloydgenturo@gmail.com" ||
-                                          (!isSubLeader && teamLeaderEmail.isNotBlank() && teamLeaderEmail == currentEmail)
-                    if (!isPrimaryLeader) {
-                        val myEntry = list.find { m ->
-                            (currentUid.isNotBlank() && m.uid == currentUid) ||
-                            (currentEmail.isNotBlank() && m.email.trim().lowercase() == currentEmail)
-                        }
-                        if (myEntry != null) {
-                            val isPromotedLeader = myEntry.ministryRole.equals("Worship Leader", ignoreCase = true) || myEntry.role.equals("Leader", ignoreCase = true)
-                            if (isPromotedLeader) {
-                                val wasSub = currentMinistry.equals("Substitute Leader", ignoreCase = true)
-                                preferences.edit {
-                                    putString("role", "Leader")
-                                    putString(SessionManager.KEY_ROLE, "Leader")
-                                    putString("ministryRole", "Worship Leader")
-                                    putString(SessionManager.KEY_MINISTRY_ROLE, "Worship Leader")
-                                    if (cleanTeamLower.isNotBlank() && currentEmail.isNotBlank()) {
-                                        putString("team_leader_email_$cleanTeamLower", currentEmail)
-                                    }
-                                }
-                                if (wasSub) {
-                                    toast("You are now the Worship Leader of $teamName!")
-                                }
-                            } else if (!myEntry.ministryRole.equals("Substitute Leader", ignoreCase = true)) {
-                                val newRole = myEntry.ministryRole.ifBlank { "Member" }
-                                preferences.edit {
-                                    putString("role", "Member")
-                                    putString(SessionManager.KEY_ROLE, "Member")
-                                    putString("ministryRole", newRole)
-                                    putString(SessionManager.KEY_MINISTRY_ROLE, newRole)
-                                    if (currentUid.isNotBlank()) {
-                                        putString("user_role_$currentUid", "Member")
-                                        putString("user_ministry_$currentUid", newRole)
-                                    }
-                                    if (currentEmail.isNotBlank()) {
-                                        putString("email_role_$currentEmail", "Member")
-                                        putString("email_ministry_$currentEmail", newRole)
-                                    }
-                                    if (cleanTeamLower.isNotBlank()) remove("team_leader_email_$cleanTeamLower")
-                                    try {
-                                        val map = org.json.JSONObject(preferences.getString(SessionManager.KEY_MEMBER_ROLES, "{}").orEmpty())
-                                        if (currentUid.isNotBlank()) map.put(currentUid, newRole)
-                                        if (currentEmail.isNotBlank()) map.put(currentEmail, newRole)
-                                        putString(SessionManager.KEY_MEMBER_ROLES, map.toString())
-                                    } catch (_: Throwable) {}
-                                }
-                                TeamRepository.updateMemberMinistryRole(currentUid, newRole, memberEmail = currentEmail, preferences = preferences)
-                                toast("Your Substitute Leader assignment has ended.")
-                                val intent = Intent(this@AdminActivity, MemberActivity::class.java)
-                                    .putExtra("startPage", "home")
-                                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
-                                startActivity(intent)
-                                finish()
-                            }
-                        }
+                    val myEntry = list.find { m ->
+                        (currentUid.isNotBlank() && m.uid == currentUid) ||
+                        (currentEmail.isNotBlank() && m.email.trim().lowercase() == currentEmail)
+                    }
+                    if (myEntry != null) {
+                        handleAdminSelfRoleSync(
+                            remoteMinistryRole = myEntry.ministryRole,
+                            remoteRole = myEntry.role,
+                            myUid = currentUid,
+                            myEmail = currentEmail
+                        )
                     }
                 }
             }
@@ -582,83 +534,35 @@ class AdminActivity : AppCompatActivity() {
                 preferences.getString("userId", "").orEmpty()
             }
         val myAdminEmail = preferences.getString("email", "").orEmpty().trim().lowercase()
-        val cleanTeamLower = teamName.trim().lowercase()
-        val teamLeaderEmail = preferences.getString("team_leader_email_$cleanTeamLower", "").orEmpty().trim().lowercase()
-        val myAdminMinistry = preferences.getString("ministryRole", "").orEmpty()
-        val isSubLeaderAdmin = myAdminMinistry.equals("Substitute Leader", ignoreCase = true)
-        val isAdminPrimary = myAdminEmail == "ryanlloydgenturo@gmail.com" ||
-                             (!isSubLeaderAdmin && teamLeaderEmail.isNotBlank() && teamLeaderEmail == myAdminEmail)
-        if (!isAdminPrimary) {
-            val handleDemotion: (String) -> Unit = { newMinistry ->
-                val resolvedRole = newMinistry.ifBlank { "Member" }
-                preferences.edit {
-                    putString("role", "Member")
-                    putString(SessionManager.KEY_ROLE, "Member")
-                    putString("ministryRole", resolvedRole)
-                    putString(SessionManager.KEY_MINISTRY_ROLE, resolvedRole)
-                    if (myAdminUid.isNotBlank()) {
-                        putString("user_role_$myAdminUid", "Member")
-                        putString("user_ministry_$myAdminUid", resolvedRole)
-                    }
-                    if (myAdminEmail.isNotBlank()) {
-                        putString("email_role_$myAdminEmail", "Member")
-                        putString("email_ministry_$myAdminEmail", resolvedRole)
-                    }
-                    if (cleanTeamLower.isNotBlank()) remove("team_leader_email_$cleanTeamLower")
-                    try {
-                        val map = org.json.JSONObject(preferences.getString(SessionManager.KEY_MEMBER_ROLES, "{}").orEmpty())
-                        if (myAdminUid.isNotBlank()) map.put(myAdminUid, resolvedRole)
-                        if (myAdminEmail.isNotBlank()) map.put(myAdminEmail, resolvedRole)
-                        putString(SessionManager.KEY_MEMBER_ROLES, map.toString())
-                    } catch (_: Throwable) {}
-                }
-                TeamRepository.updateMemberMinistryRole(myAdminUid, resolvedRole, memberEmail = myAdminEmail, preferences = preferences)
-                runOnUiThread {
-                    if (!isFinishing && !isDestroyed) {
-                        toast("Your Substitute Leader assignment has ended.")
-                        val intent = Intent(this@AdminActivity, MemberActivity::class.java)
-                            .putExtra("startPage", "home")
-                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_CLEAR_TASK)
-                        startActivity(intent)
-                        finish()
-                    }
-                }
-            }
-
+        if (myAdminEmail != "ryanlloydgenturo@gmail.com") {
             if (myAdminUid.isNotBlank()) {
+                userMembershipListener?.remove()
                 userMembershipListener = com.google.firebase.firestore.FirebaseFirestore.getInstance()
                     .collection("users").document(myAdminUid)
                     .addSnapshotListener { snapshot, error ->
                         if (error != null || snapshot == null || !snapshot.exists()) return@addSnapshotListener
-                        val ministryRoleSnap = snapshot.getString("ministryRole").orEmpty()
-                        val roleSnap = snapshot.getString("role").orEmpty()
-                        val isPromoted = ministryRoleSnap.equals("Worship Leader", ignoreCase = true) || roleSnap.equals("Leader", ignoreCase = true)
-                        if (isPromoted) {
-                            preferences.edit {
-                                putString("role", "Leader")
-                                putString(SessionManager.KEY_ROLE, "Leader")
-                                putString("ministryRole", "Worship Leader")
-                                putString(SessionManager.KEY_MINISTRY_ROLE, "Worship Leader")
-                                if (cleanTeamLower.isNotBlank() && myAdminEmail.isNotBlank()) {
-                                    putString("team_leader_email_$cleanTeamLower", myAdminEmail)
-                                }
-                            }
-                        } else if (!ministryRoleSnap.equals("Substitute Leader", ignoreCase = true) && !roleSnap.equals("Leader", ignoreCase = true)) {
-                            handleDemotion(ministryRoleSnap)
-                        }
+                        handleAdminSelfRoleSync(
+                            remoteMinistryRole = snapshot.getString("ministryRole").orEmpty(),
+                            remoteRole = snapshot.getString("role").orEmpty(),
+                            myUid = myAdminUid,
+                            myEmail = myAdminEmail
+                        )
                     }
             }
             if (myAdminEmail.isNotBlank()) {
-                com.google.firebase.firestore.FirebaseFirestore.getInstance()
+                userEmailMembershipListener?.remove()
+                userEmailMembershipListener = com.google.firebase.firestore.FirebaseFirestore.getInstance()
                     .collection("users").whereEqualTo("email", myAdminEmail)
                     .addSnapshotListener { snapshot, error ->
                         if (error != null || snapshot == null || snapshot.isEmpty) return@addSnapshotListener
                         val doc = snapshot.documents.firstOrNull() ?: return@addSnapshotListener
-                        val ministryRoleSnap = doc.getString("ministryRole").orEmpty()
-                        val roleSnap = doc.getString("role").orEmpty()
-                        if (!ministryRoleSnap.equals("Substitute Leader", ignoreCase = true) && !roleSnap.equals("Leader", ignoreCase = true)) {
-                            handleDemotion(ministryRoleSnap)
-                        }
+                        if (myAdminUid.isNotBlank() && doc.id == myAdminUid) return@addSnapshotListener
+                        handleAdminSelfRoleSync(
+                            remoteMinistryRole = doc.getString("ministryRole").orEmpty(),
+                            remoteRole = doc.getString("role").orEmpty(),
+                            myUid = myAdminUid.ifBlank { doc.id },
+                            myEmail = myAdminEmail
+                        )
                     }
             }
         }
@@ -755,6 +659,165 @@ class AdminActivity : AppCompatActivity() {
         super.onPause()
     }
 
+    private var userEmailMembershipListener: com.google.firebase.firestore.ListenerRegistration? = null
+    private var isHandlingDemotion = false
+
+    private fun isCurrentUserSubstituteLeader(): Boolean {
+        val emailLower = preferences.getString("email", "").orEmpty().trim().lowercase()
+        if (emailLower == "ryanlloydgenturo@gmail.com" || fullName.equals("Ryan Lloyd Genturo", ignoreCase = true)) {
+            return false
+        }
+        val myUid = currentUserId()
+        val selfInRoster = teamRoster.find { m ->
+            (myUid.isNotBlank() && m.uid == myUid) ||
+            (emailLower.isNotBlank() && m.email.trim().lowercase() == emailLower)
+        }
+        if (selfInRoster != null) {
+            if (TeamRepository.isSubstituteLeader(selfInRoster.ministryRole)) return true
+            if (TeamRepository.isWorshipLeader(selfInRoster.ministryRole, selfInRoster.role)) return false
+        }
+        val myMinistry = preferences.getString(SessionManager.KEY_MINISTRY_ROLE, "").orEmpty()
+            .ifBlank { preferences.getString("ministryRole", "").orEmpty() }
+        if (TeamRepository.isSubstituteLeader(myMinistry)) return true
+        val emailMinistry = if (emailLower.isNotBlank()) preferences.getString("email_ministry_$emailLower", "").orEmpty() else ""
+        if (TeamRepository.isSubstituteLeader(emailMinistry)) return true
+        return false
+    }
+
+    private fun handleAdminSelfRoleSync(
+        remoteMinistryRole: String,
+        remoteRole: String,
+        myUid: String = currentUserId(),
+        myEmail: String = preferences.getString("email", "").orEmpty()
+    ) {
+        if (isFinishing || isDestroyed || isHandlingDemotion) return
+        val emailLower = myEmail.trim().lowercase()
+        if (emailLower == "ryanlloydgenturo@gmail.com" || fullName.equals("Ryan Lloyd Genturo", ignoreCase = true)) {
+            return
+        }
+        val cleanTeamLower = teamName.trim().lowercase()
+        val currentMinistry = preferences.getString("ministryRole", "").orEmpty()
+
+        // 1. Substitute Leader in Firestore: keep on AdminActivity as Substitute Leader and clean up any polluted team_leader_email_
+        if (TeamRepository.isSubstituteLeader(remoteMinistryRole) && !remoteRole.equals("Member", ignoreCase = true)) {
+            val needsRepair = !currentMinistry.equals("Substitute Leader", ignoreCase = true) ||
+                (cleanTeamLower.isNotBlank() && preferences.getString("team_leader_email_$cleanTeamLower", "").equals(emailLower, ignoreCase = true))
+            if (needsRepair) {
+                preferences.edit {
+                    putString("role", "Leader")
+                    putString(SessionManager.KEY_ROLE, "Leader")
+                    putString("ministryRole", "Substitute Leader")
+                    putString(SessionManager.KEY_MINISTRY_ROLE, "Substitute Leader")
+                    if (myUid.isNotBlank()) {
+                        putString("user_role_$myUid", "Leader")
+                        putString("user_ministry_$myUid", "Substitute Leader")
+                    }
+                    if (emailLower.isNotBlank()) {
+                        putString("email_role_$emailLower", "Leader")
+                        putString("email_ministry_$emailLower", "Substitute Leader")
+                    }
+                    if (cleanTeamLower.isNotBlank() && preferences.getString("team_leader_email_$cleanTeamLower", "").equals(emailLower, ignoreCase = true)) {
+                        remove("team_leader_email_$cleanTeamLower")
+                    }
+                }
+                runOnUiThread {
+                    if (!isFinishing && !isDestroyed && page == "roleEdit") {
+                        navigate("roleEdit", triggerRefresh = false)
+                    }
+                }
+            }
+            return
+        }
+
+        // 2. Permanent Worship Leader in Firestore
+        if (TeamRepository.isWorshipLeader(remoteMinistryRole, remoteRole)) {
+            val wasSub = currentMinistry.equals("Substitute Leader", ignoreCase = true)
+            preferences.edit {
+                putString("role", "Leader")
+                putString(SessionManager.KEY_ROLE, "Leader")
+                putString("ministryRole", "Worship Leader")
+                putString(SessionManager.KEY_MINISTRY_ROLE, "Worship Leader")
+                if (myUid.isNotBlank()) {
+                    putString("user_role_$myUid", "Leader")
+                    putString("user_ministry_$myUid", "Worship Leader")
+                }
+                if (emailLower.isNotBlank()) {
+                    putString("email_role_$emailLower", "Leader")
+                    putString("email_ministry_$emailLower", "Worship Leader")
+                }
+                if (cleanTeamLower.isNotBlank() && emailLower.isNotBlank()) {
+                    putString("team_leader_email_$cleanTeamLower", emailLower)
+                }
+            }
+            if (wasSub) {
+                com.example.syncedn.data.auth.SyncedMessagingService.dispatchSystemNotification(
+                    this@AdminActivity,
+                    preferences,
+                    "👑 Promoted to Worship Leader",
+                    "You are now the Worship Leader of ${teamName.ifBlank { "your team" }}!"
+                )
+                runOnUiThread {
+                    if (!isFinishing && !isDestroyed) {
+                        toast("You are now the Worship Leader of $teamName!")
+                    }
+                }
+            }
+            return
+        }
+
+        // 3. Demoted to Ordinary Member Role: notify and switch automatically to MemberActivity
+        isHandlingDemotion = true
+        val resolvedRole = if (remoteMinistryRole.isNotBlank() &&
+            !TeamRepository.isSubstituteLeader(remoteMinistryRole) &&
+            !remoteMinistryRole.equals("Worship Leader", ignoreCase = true)
+        ) {
+            remoteMinistryRole
+        } else {
+            "Member"
+        }
+        preferences.edit {
+            putString("role", "Member")
+            putString(SessionManager.KEY_ROLE, "Member")
+            putString("ministryRole", resolvedRole)
+            putString(SessionManager.KEY_MINISTRY_ROLE, resolvedRole)
+            if (myUid.isNotBlank()) {
+                putString("user_role_$myUid", "Member")
+                putString("user_ministry_$myUid", resolvedRole)
+            }
+            if (emailLower.isNotBlank()) {
+                putString("email_role_$emailLower", "Member")
+                putString("email_ministry_$emailLower", resolvedRole)
+                val sig = com.example.syncedn.data.util.ValidationUtils.computeSessionHmac(emailLower, "Member", myUid)
+                if (sig.isNotBlank()) putString("session_hmac_sig_$emailLower", sig)
+            }
+            if (cleanTeamLower.isNotBlank() && preferences.getString("team_leader_email_$cleanTeamLower", "").equals(emailLower, ignoreCase = true)) {
+                remove("team_leader_email_$cleanTeamLower")
+            }
+            try {
+                val map = org.json.JSONObject(preferences.getString(SessionManager.KEY_MEMBER_ROLES, "{}").orEmpty())
+                if (myUid.isNotBlank()) map.put(myUid, resolvedRole)
+                if (emailLower.isNotBlank()) map.put(emailLower, resolvedRole)
+                putString(SessionManager.KEY_MEMBER_ROLES, map.toString())
+            } catch (_: Throwable) {}
+        }
+        com.example.syncedn.data.auth.SyncedMessagingService.dispatchSystemNotification(
+            this@AdminActivity,
+            preferences,
+            "🔄 Ministry Role Updated",
+            "Your role has been updated to $resolvedRole. Switching to Member dashboard..."
+        )
+        runOnUiThread {
+            if (!isFinishing && !isDestroyed) {
+                toast("Your role has been updated to $resolvedRole. Switching to Member dashboard...")
+                val intent = Intent(this@AdminActivity, MemberActivity::class.java)
+                    .putExtra("startPage", "home")
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_CLEAR_TASK)
+                startActivity(intent)
+                finish()
+            }
+        }
+    }
+
     override fun onResume() {
         super.onResume()
         val emailLower = preferences.getString("email", "").orEmpty().trim().lowercase()
@@ -777,29 +840,18 @@ class AdminActivity : AppCompatActivity() {
 
         val myUid = com.example.syncedn.data.auth.AuthManager.currentUser?.uid?.takeIf { it.isNotBlank() }
             ?: preferences.getString(SessionManager.KEY_USER_ID, "").orEmpty()
-        if (!isPermanentLeader && myUid.isNotBlank()) {
+        if (!isRyan && myUid.isNotBlank()) {
             com.google.firebase.firestore.FirebaseFirestore.getInstance()
                 .collection("users").document(myUid)
                 .get()
                 .addOnSuccessListener { snap ->
                     if (snap != null && snap.exists() && !isFinishing && !isDestroyed) {
-                        val remoteMinistry = snap.getString("ministryRole").orEmpty()
-                        val remoteRole = snap.getString("role").orEmpty()
-                        if (!remoteMinistry.equals("Substitute Leader", ignoreCase = true) && !remoteRole.equals("Leader", ignoreCase = true)) {
-                            preferences.edit {
-                                putString("role", "Member")
-                                putString(SessionManager.KEY_ROLE, "Member")
-                                putString("ministryRole", remoteMinistry.ifBlank { "Member" })
-                                putString(SessionManager.KEY_MINISTRY_ROLE, remoteMinistry.ifBlank { "Member" })
-                                if (cleanTeamLower.isNotBlank()) remove("team_leader_email_$cleanTeamLower")
-                            }
-                            toast("Your Substitute Leader assignment has ended.")
-                            val intent = Intent(this@AdminActivity, MemberActivity::class.java)
-                                .putExtra("startPage", "home")
-                                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_CLEAR_TASK)
-                            startActivity(intent)
-                            finish()
-                        }
+                        handleAdminSelfRoleSync(
+                            remoteMinistryRole = snap.getString("ministryRole").orEmpty(),
+                            remoteRole = snap.getString("role").orEmpty(),
+                            myUid = myUid,
+                            myEmail = emailLower
+                        )
                     }
                 }
         }
@@ -820,12 +872,14 @@ class AdminActivity : AppCompatActivity() {
         customRolesListener?.remove()
         rejoinRequestsListener?.remove()
         userMembershipListener?.remove()
+        userEmailMembershipListener?.remove()
         servicesListener = null
         substitutionsListener = null
         rosterListener = null
         customRolesListener = null
         rejoinRequestsListener = null
         userMembershipListener = null
+        userEmailMembershipListener = null
         super.onDestroy()
     }
 
@@ -2980,8 +3034,10 @@ class AdminActivity : AppCompatActivity() {
                 val emailLower = m.email.trim().lowercase()
                 val isPrimaryLeader = emailLower == "ryanlloydgenturo@gmail.com" ||
                                       m.fullName.equals("Ryan Lloyd Genturo", ignoreCase = true)
-                val isExplicitlyMember = !isPrimaryLeader && (
+                val isExplicitSubInModel = TeamRepository.isSubstituteLeader(m.ministryRole) && !m.role.equals("Member", ignoreCase = true)
+                val isExplicitlyMember = !isPrimaryLeader && !isExplicitSubInModel && (
                     m.role.equals("Member", true) ||
+                    TeamRepository.isOrdinaryMemberRole(m.ministryRole, m.role) ||
                     preferences.getString("user_role_${m.uid}", "").equals("Member", true) ||
                     preferences.getString("email_role_$emailLower", "").equals("Member", true)
                 )
@@ -3549,9 +3605,14 @@ class AdminActivity : AppCompatActivity() {
             }.setNegativeButton("Cancel", null).show()
     }
     private fun chooseRole(name: String, initial: String, onSave: (String) -> Unit) {
-        var selected = initial.takeIf { it in leaderRoles } ?: leaderRoles.first()
+        val choices = TeamRepository.filterAssignableRoles(
+            roles = leaderRoles,
+            isEditorSubstituteLeader = isCurrentUserSubstituteLeader(),
+            isTargetPrimaryLeader = false
+        ).ifEmpty { listOf("Vocalist", "Guitarist", "Keyboardist", "Bassist", "Drummer") }
+        var selected = initial.takeIf { sel -> choices.any { it.equals(sel, ignoreCase = true) } } ?: choices.first()
         AlertDialog.Builder(this).setTitle("Role for $name")
-            .setSingleChoiceItems(leaderRoles.toTypedArray(), leaderRoles.indexOf(selected)) { _, position -> selected = leaderRoles[position] }
+            .setSingleChoiceItems(choices.toTypedArray(), choices.indexOfFirst { it.equals(selected, ignoreCase = true) }.coerceAtLeast(0)) { _, position -> selected = choices[position] }
             .setNegativeButton("Cancel", null).setPositiveButton("Save") { _, _ -> onSave(selected) }.show()
     }
     private fun serviceAssignmentsView(): View = memberPage("Service Assignments",
@@ -4850,22 +4911,14 @@ class AdminActivity : AppCompatActivity() {
         val rolesContainer = vertical()
         col.addView(rolesContainer)
 
-        val myMinistryRole = preferences.getString(SessionManager.KEY_MINISTRY_ROLE, "").orEmpty()
-            .ifBlank { preferences.getString("ministryRole", "").orEmpty() }
-        val isSubLeader = myMinistryRole.equals("Substitute Leader", ignoreCase = true)
+        val isSubLeader = isCurrentUserSubstituteLeader()
         val isTargetPrimary = roleMemberEmail.trim().lowercase() == "ryanlloydgenturo@gmail.com" ||
                               roleMember.equals("Ryan Lloyd Genturo", ignoreCase = true)
-        val assignableRoles = if (isTargetPrimary) {
-            listOf("Worship Leader")
-        } else if (isSubLeader) {
-            leaderRoles.filter {
-                !it.equals("Substitute Leader", ignoreCase = true) &&
-                !it.equals("Worship Leader", ignoreCase = true) &&
-                !it.equals("Leader", ignoreCase = true)
-            }
-        } else {
-            leaderRoles
-        }
+        val assignableRoles = TeamRepository.filterAssignableRoles(
+            roles = leaderRoles,
+            isEditorSubstituteLeader = isSubLeader,
+            isTargetPrimaryLeader = isTargetPrimary
+        )
 
         fun renderRoles() {
             rolesContainer.removeAllViews()
@@ -7670,7 +7723,12 @@ class AdminActivity : AppCompatActivity() {
                 val rolesCol = vertical()
                 sheetCol.addView(rolesCol)
 
-                leaderRoles.forEach { role ->
+                val visibleRoles = TeamRepository.filterAssignableRoles(
+                    roles = leaderRoles,
+                    isEditorSubstituteLeader = isCurrentUserSubstituteLeader(),
+                    isTargetPrimaryLeader = false
+                )
+                visibleRoles.forEach { role ->
                     val roleBox = horizontal().apply {
                         gravity = Gravity.CENTER_VERTICAL
                         background = bg(Color.rgb(217, 217, 217), 8)
@@ -7703,6 +7761,13 @@ class AdminActivity : AppCompatActivity() {
                     isFocusable = true
                     setOnClickListener {
                         val entered = newRoleInput.text.toString().trim()
+                        if (entered.equals("Worship Leader", ignoreCase = true) ||
+                            entered.equals("Leader", ignoreCase = true) ||
+                            (isCurrentUserSubstituteLeader() && TeamRepository.isSubstituteLeader(entered))
+                        ) {
+                            toast("Cannot add reserved leadership role.")
+                            return@setOnClickListener
+                        }
                         if (entered.isNotBlank() && !leaderRoles.any { it.equals(entered, ignoreCase = true) }) {
                             leaderRoles.add(entered)
                             preferences.edit().putString("leaderRoles", org.json.JSONArray(leaderRoles).toString()).apply()
@@ -7729,7 +7794,12 @@ class AdminActivity : AppCompatActivity() {
 
                 val currentUid = preferences.getString("userId", "").orEmpty()
                 val currentName = fullName.ifBlank { displayName }
-                val roster = getActiveRoster().filter { it.uid != currentUid && it.fullName != currentName }
+                val roster = getActiveRoster().filter {
+                    it.uid != currentUid &&
+                    it.fullName != currentName &&
+                    !TeamRepository.isWorshipLeader(it.ministryRole, it.role) &&
+                    !it.email.equals("ryanlloydgenturo@gmail.com", ignoreCase = true)
+                }
 
                 if (roster.isEmpty()) {
                     sheetCol.add(text("No members to remove.", 14, Color.WHITE, centered = true))

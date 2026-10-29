@@ -335,8 +335,11 @@ object SessionManager {
             .ifBlank { if (finalTeam.isNotBlank()) preferences.getString("team_leader_code_${finalTeam.trim().lowercase()}", "").orEmpty() else "" }
             .ifBlank { if (finalTeam.isNotBlank()) com.example.syncedn.data.database.FirestoreManager.findCodeByTeamName(finalTeam).orEmpty() else "" }
 
+        val remoteMinistry = profile?.ministryRole.orEmpty()
         val finalRole = when {
             isLeadUser -> "Leader"
+            remoteMinistry.isNotBlank() && com.example.syncedn.data.database.TeamRepository.isOrdinaryMemberRole(remoteMinistry, remoteRole) -> "Member"
+            com.example.syncedn.data.database.TeamRepository.isSubstituteLeader(remoteMinistry) && !remoteRole.equals("Member", ignoreCase = true) -> "Leader"
             remoteRole.isNotBlank() -> remoteRole
             savedRole.isNotBlank() && verifySessionIntegrity(preferences, emailLower) -> savedRole
             finalTeam.isNotBlank() && preferences.getString("team_leader_email_${finalTeam.trim().lowercase()}", "") == emailLower -> "Leader"
@@ -346,6 +349,16 @@ object SessionManager {
         preferences.edit {
             putString(KEY_ROLE, finalRole)
             putString("role", finalRole)
+            if (remoteMinistry.isNotBlank()) {
+                putString(KEY_MINISTRY_ROLE, remoteMinistry)
+                putString("ministryRole", remoteMinistry)
+            }
+            if (finalRole.equals("Member", ignoreCase = true) && finalTeam.isNotBlank()) {
+                val cleanTeamLower = finalTeam.trim().lowercase()
+                if (preferences.getString("team_leader_email_$cleanTeamLower", "").equals(emailLower, ignoreCase = true)) {
+                    remove("team_leader_email_$cleanTeamLower")
+                }
+            }
             if (uid.isNotBlank()) putString("user_role_$uid", finalRole)
             if (emailLower.isNotBlank()) {
                 putString("email_role_$emailLower", finalRole)
