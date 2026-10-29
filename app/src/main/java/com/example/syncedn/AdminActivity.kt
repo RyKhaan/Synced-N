@@ -411,6 +411,15 @@ class AdminActivity : AppCompatActivity() {
             .ifBlank { preferences.getString("user_code_$uid", "").orEmpty() }
             .ifBlank { preferences.getString("team_leader_code_${teamName.trim().lowercase()}", "").orEmpty() }
             .ifBlank { FirestoreManager.findCodeByTeamName(teamName).orEmpty() }
+        if (teamName.isBlank() && activeCode.isNotBlank()) {
+            teamName = preferences.getString("team_registry_$activeCode", "").orEmpty()
+                .ifBlank { FirestoreManager.getLocalTeamName(activeCode).orEmpty() }
+                .ifBlank { "WISE MAN TEAM" }
+            preferences.edit {
+                putString("teamName", teamName)
+                putString("teamCode", activeCode)
+            }
+        }
         if (teamName.isNotBlank()) {
             val userMinistry = preferences.getString("ministryRole", "").orEmpty()
             val currentRole = preferences.getString("role", "").orEmpty()
@@ -428,6 +437,9 @@ class AdminActivity : AppCompatActivity() {
             }
             val effectiveRole = if (isPermanentLeader || isSubLeader || currentRole.equals("Leader", ignoreCase = true)) "Leader" else "Member"
             saveUserTeamState(effectiveRole, teamName, activeCode)
+            if (isPermanentLeader && activeCode.isNotBlank() && uid.isNotBlank()) {
+                FirestoreManager.updateUserRoleAndTeam(uid, "Leader", teamName, activeCode, emailLower)
+            }
         }
         successFlow = savedInstanceState?.getString("successFlow") ?: "register"
         savedInstanceState?.let { state ->
@@ -867,6 +879,12 @@ class AdminActivity : AppCompatActivity() {
 
         val myUid = com.example.syncedn.data.auth.AuthManager.currentUser?.uid?.takeIf { it.isNotBlank() }
             ?: preferences.getString(SessionManager.KEY_USER_ID, "").orEmpty()
+        if (isRyan && myUid.isNotBlank()) {
+            val curCode = activeTeamCode()
+            if (curCode.isNotBlank()) {
+                FirestoreManager.updateUserRoleAndTeam(myUid, "Leader", teamName.ifBlank { "WISE MAN TEAM" }, curCode, emailLower)
+            }
+        }
         if (!isRyan && myUid.isNotBlank()) {
             com.google.firebase.firestore.FirebaseFirestore.getInstance()
                 .collection("users").document(myUid)
@@ -3162,7 +3180,8 @@ class AdminActivity : AppCompatActivity() {
                 }
             }
         }
-        return TeamRepository.deduplicateRoster(applyOverrides(rawList), preferences)
+        val withLeader = TeamRepository.ensureTeamLeaderInRoster(currentCode, rawList, preferences)
+        return TeamRepository.deduplicateRoster(applyOverrides(withLeader), preferences)
     }
 
 
@@ -7059,26 +7078,34 @@ class AdminActivity : AppCompatActivity() {
                     )
                 }
                 setPadding(dp(14), dp(10), dp(14), dp(10))
-                if (msg.replyToText.isNotBlank() || msg.replyToSender.isNotBlank()) {
+                val hasReply = msg.replyToText.isNotBlank() || msg.replyToSender.isNotBlank()
+                if (hasReply) {
+                    minimumWidth = dp(180)
                     val quoteBox = horizontal().apply {
+                        minimumWidth = dp(160)
                         background = GradientDrawable().apply {
                             setColor(Color.argb(45, 255, 255, 255))
                             cornerRadius = dp(8).toFloat()
                         }
                         setPadding(dp(8), dp(4), dp(8), dp(4))
                         val accent = View(this@AdminActivity).apply { setBackgroundColor(Color.WHITE) }
-                        add(accent, dp(3), -1)
-                        space(6)
+                        addView(accent, LinearLayout.LayoutParams(dp(3), ViewGroup.LayoutParams.MATCH_PARENT))
+                        addView(View(this@AdminActivity), LinearLayout.LayoutParams(dp(6), dp(1)))
                         val quoteCol = vertical().apply {
-                            add(text(msg.replyToSender.ifBlank { "Member" }, 11, Color.WHITE, bold = true))
-                            add(text(msg.replyToText, 11, Color.rgb(226, 232, 240)).apply {
+                            val senderTv = text(msg.replyToSender.ifBlank { "Member" }, 11, Color.WHITE, bold = true).apply {
+                                maxLines = 1
+                                ellipsize = android.text.TextUtils.TruncateAt.END
+                            }
+                            addView(senderTv, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+                            val quoteTv = text(msg.replyToText, 11, Color.rgb(226, 232, 240)).apply {
                                 maxLines = 2
                                 ellipsize = android.text.TextUtils.TruncateAt.END
-                            })
+                            }
+                            addView(quoteTv, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
                         }
-                        add(quoteCol, 0, -2, 1f)
+                        addView(quoteCol, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
                     }
-                    add(quoteBox, -1, -2)
+                    addView(quoteBox, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
                     space(6)
                 }
                 if (msg.mediaUrl.isNotBlank()) {
@@ -7103,9 +7130,10 @@ class AdminActivity : AppCompatActivity() {
                     if (msg.text.isNotBlank()) space(6)
                 }
                 if (msg.text.isNotBlank()) {
-                    add(text(msg.text, 14, Color.WHITE).apply {
+                    val tv = text(msg.text, 14, Color.WHITE).apply {
                         maxWidth = maxBubbleWidth - dp(28)
-                    })
+                    }
+                    addView(tv, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
                 }
             }
             bubbleContainer.addView(bubble, LinearLayout.LayoutParams(
@@ -7205,26 +7233,34 @@ class AdminActivity : AppCompatActivity() {
                     )
                 }
                 setPadding(dp(14), dp(10), dp(14), dp(10))
-                if (msg.replyToText.isNotBlank() || msg.replyToSender.isNotBlank()) {
+                val hasReply = msg.replyToText.isNotBlank() || msg.replyToSender.isNotBlank()
+                if (hasReply) {
+                    minimumWidth = dp(180)
                     val quoteBox = horizontal().apply {
+                        minimumWidth = dp(160)
                         background = GradientDrawable().apply {
                             setColor(Color.rgb(226, 232, 240))
                             cornerRadius = dp(8).toFloat()
                         }
                         setPadding(dp(8), dp(4), dp(8), dp(4))
                         val accent = View(this@AdminActivity).apply { setBackgroundColor(purple) }
-                        add(accent, dp(3), -1)
-                        space(6)
+                        addView(accent, LinearLayout.LayoutParams(dp(3), ViewGroup.LayoutParams.MATCH_PARENT))
+                        addView(View(this@AdminActivity), LinearLayout.LayoutParams(dp(6), dp(1)))
                         val quoteCol = vertical().apply {
-                            add(text(msg.replyToSender.ifBlank { "Member" }, 11, navy, bold = true))
-                            add(text(msg.replyToText, 11, Color.rgb(71, 85, 105)).apply {
+                            val senderTv = text(msg.replyToSender.ifBlank { "Member" }, 11, navy, bold = true).apply {
+                                maxLines = 1
+                                ellipsize = android.text.TextUtils.TruncateAt.END
+                            }
+                            addView(senderTv, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+                            val quoteTv = text(msg.replyToText, 11, Color.rgb(71, 85, 105)).apply {
                                 maxLines = 2
                                 ellipsize = android.text.TextUtils.TruncateAt.END
-                            })
+                            }
+                            addView(quoteTv, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
                         }
-                        add(quoteCol, 0, -2, 1f)
+                        addView(quoteCol, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
                     }
-                    add(quoteBox, -1, -2)
+                    addView(quoteBox, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
                     space(6)
                 }
                 if (msg.mediaUrl.isNotBlank()) {
@@ -7249,9 +7285,10 @@ class AdminActivity : AppCompatActivity() {
                     if (msg.text.isNotBlank()) space(6)
                 }
                 if (msg.text.isNotBlank()) {
-                    add(text(msg.text, 14, Color.rgb(21, 28, 50)).apply {
+                    val tv = text(msg.text, 14, Color.rgb(21, 28, 50)).apply {
                         maxWidth = maxBubbleWidth - dp(28)
-                    })
+                    }
+                    addView(tv, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
                 }
             }
             bubble.isClickable = true
@@ -7475,7 +7512,7 @@ class AdminActivity : AppCompatActivity() {
                 val roster = getActiveRoster()
                 val currentUid = preferences.getString(SessionManager.KEY_USER_ID, "").orEmpty()
                 val baseRoles = if (isLeader) leaderRoles else listOf("Worship Leader", "Keyboardist", "Bassist", "Vocalist", "Guitarist")
-                val activeRoles = (baseRoles + roster.map { m ->
+                val activeRoles = (listOf("Worship Leader") + baseRoles + roster.map { m ->
                     if (m.role.equals("Member", true) && m.ministryRole.equals("Substitute Leader", true)) "Member" else m.ministryRole
                 }).filter {
                     it.isNotBlank() && (!it.equals("Substitute Leader", true) || roster.any { m -> m.ministryRole.equals("Substitute Leader", true) && !m.role.equals("Member", true) })
@@ -7483,8 +7520,17 @@ class AdminActivity : AppCompatActivity() {
                 val roles = activeRoles
                 roles.forEach { role ->
                     val people = roster.filter {
-                        val mRole = if (it.role.equals("Member", true) && it.ministryRole.equals("Substitute Leader", true)) "Member" else it.ministryRole
-                        mRole.equals(role, ignoreCase = true)
+                        if (role.equals("Worship Leader", ignoreCase = true)) {
+                            TeamRepository.isWorshipLeader(it.ministryRole, it.role) ||
+                            it.email.trim().lowercase() == "ryanlloydgenturo@gmail.com" ||
+                            it.fullName.equals("Ryan Lloyd Genturo", ignoreCase = true)
+                        } else {
+                            val mRole = if (it.role.equals("Member", true) && it.ministryRole.equals("Substitute Leader", true)) "Member" else it.ministryRole
+                            mRole.equals(role, ignoreCase = true) && !TeamRepository.isWorshipLeader(it.ministryRole, it.role) &&
+                            !it.email.trim().lowercase().equals("ryanlloydgenturo@gmail.com", ignoreCase = true) &&
+                            !it.fullName.equals("Ryan Lloyd Genturo", ignoreCase = true)
+                        } && true // end role check
+
                     }
                     val isInitiallyExpanded = expandedRole == role
                     val arrowView = Symbol(this@AdminActivity, "arrow", Color.rgb(65, 80, 100)).apply {

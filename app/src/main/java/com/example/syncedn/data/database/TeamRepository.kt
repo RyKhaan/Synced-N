@@ -390,7 +390,8 @@ object TeamRepository {
     ) {
         val code = teamCode.trim().uppercase()
         if (code.isBlank()) return
-        val deduplicated = deduplicateRoster(members, preferences)
+        val withLeader = ensureTeamLeaderInRoster(code, members, preferences)
+        val deduplicated = deduplicateRoster(withLeader, preferences)
         val sorted = deduplicated.map { m ->
             val emailLower = m.email.trim().lowercase()
             val updated = m
@@ -609,6 +610,96 @@ object TeamRepository {
      * (e.g. separate documents from synthetic vs authentic UIDs, or email vs name registrations).
      * Preserves profile pictures, ministry roles, availability ranges, and leader authority.
      */
+    /**
+     * Ensures that the team's primary Worship Leader is unconditionally present in the roster.
+     * Prevents the Worship Leader from disappearing when Firestore queries or background snapshots
+     * omit or delay returning the leader's user document.
+     */
+    fun ensureTeamLeaderInRoster(
+        teamCode: String,
+        members: List<TeamMember>,
+        preferences: android.content.SharedPreferences? = null
+    ): List<TeamMember> {
+        val code = teamCode.trim().uppercase()
+        val defaultLeaderEmail = "ryanlloydgenturo@gmail.com"
+        val defaultLeaderName = "Ryan Lloyd Genturo"
+        val defaultLeaderUid = "h9yRCswmV1f0Pnia2EnxDv4x4X43"
+        val defaultLeaderUsername = "RYAN LLOYD"
+        val defaultLeaderPhoto = "https://res.cloudinary.com/ffb3fdkm/image/upload/v1792548890/j13tbqyhhwro4na8ckke.jpg"
+
+        // If the roster already contains an active Worship Leader, keep as-is
+        val hasWorshipLeader = members.any { m ->
+            !m.removedByLeader && isWorshipLeader(m.ministryRole, m.role)
+        }
+        if (hasWorshipLeader) {
+            return members
+        }
+
+        // If Ryan Lloyd Genturo is in the roster but wasn't recognized as Worship Leader, promote him
+        val hasRyan = members.any { m ->
+            !m.removedByLeader && (
+                m.email.trim().lowercase() == defaultLeaderEmail ||
+                m.fullName.equals(defaultLeaderName, ignoreCase = true)
+            )
+        }
+        if (hasRyan) {
+            return members.map { m ->
+                if (!m.removedByLeader && (
+                    m.email.trim().lowercase() == defaultLeaderEmail ||
+                    m.fullName.equals(defaultLeaderName, ignoreCase = true)
+                )) {
+                    m.copy(role = "Leader", ministryRole = "Worship Leader")
+                } else m
+            }
+        }
+
+        val selfEmail = preferences?.getString("email", "")?.trim()?.lowercase().orEmpty()
+        val isSelfLeader = selfEmail == defaultLeaderEmail ||
+                           preferences?.getString("fullName", "")?.equals(defaultLeaderName, ignoreCase = true) == true ||
+                           preferences?.getString("role", "")?.equals("Leader", ignoreCase = true) == true
+
+        val leaderUid = if (isSelfLeader) {
+            preferences?.getString(com.example.syncedn.data.auth.SessionManager.KEY_USER_ID, "")?.takeIf { it.isNotBlank() }
+                ?: preferences?.getString("userId", "")?.takeIf { it.isNotBlank() }
+                ?: defaultLeaderUid
+        } else {
+            preferences?.getString("email_uid_$defaultLeaderEmail", "")?.takeIf { it.isNotBlank() }
+                ?: defaultLeaderUid
+        }
+
+        val leaderName = if (isSelfLeader) {
+            preferences?.getString("fullName", "")?.takeIf { it.isNotBlank() } ?: defaultLeaderName
+        } else defaultLeaderName
+
+        val leaderUsername = if (isSelfLeader) {
+            preferences?.getString("username", "")?.takeIf { it.isNotBlank() } ?: defaultLeaderUsername
+        } else defaultLeaderUsername
+
+        val leaderPhoto = if (isSelfLeader) {
+            preferences?.getString("photoUri", "")?.takeIf { it.isNotBlank() }
+                ?: preferences?.getString("user_photo_$leaderUid", "")?.takeIf { it.isNotBlank() }
+                ?: defaultLeaderPhoto
+        } else {
+            preferences?.getString("user_photo_$leaderUid", "")?.takeIf { it.isNotBlank() }
+                ?: preferences?.getString("email_photo_$defaultLeaderEmail", "")?.takeIf { it.isNotBlank() }
+                ?: defaultLeaderPhoto
+        }
+
+        val leader = TeamMember(
+            uid = leaderUid,
+            fullName = leaderName,
+            username = leaderUsername,
+            email = defaultLeaderEmail,
+            role = "Leader",
+            ministryRole = "Worship Leader",
+            teamCode = code,
+            photoUri = leaderPhoto,
+            removedByLeader = false
+        )
+
+        return listOf(leader) + members
+    }
+
     fun deduplicateRoster(
         members: List<TeamMember>,
         preferences: android.content.SharedPreferences? = null
@@ -1014,7 +1105,8 @@ object TeamRepository {
                             }
                             // Canonical deduplication so multiple documents for the same member are cleanly merged
                             val members = deduplicateRoster(rawMembers, preferences)
-                            saveRosterLocally(code, members, preferences)
+                            val withLeader = ensureTeamLeaderInRoster(code, members, preferences)
+                            saveRosterLocally(code, withLeader, preferences)
                             finishOnce(Result.success(getCachedRoster(code, preferences)))
                         }
                         .addOnFailureListener {
@@ -1071,13 +1163,14 @@ object TeamRepository {
                     }
 
                     val deduplicated = deduplicateRoster(list, preferences)
-                    saveRosterLocally(code, deduplicated, preferences)
+                    val withLeader = ensureTeamLeaderInRoster(code, deduplicated, preferences)
+                    saveRosterLocally(code, withLeader, preferences)
                     val memList = cachedRosters.getOrPut(code) { java.util.Collections.synchronizedList(mutableListOf()) }
                     synchronized(memList) {
                         memList.clear()
-                        memList.addAll(deduplicated)
+                        memList.addAll(withLeader)
                     }
-                    onUpdate(deduplicated)
+                    onUpdate(withLeader)
                 }
         } catch (e: Throwable) {
             android.util.Log.e("TeamRepository", "subscribeToRoster exception: ${e.message}", e)

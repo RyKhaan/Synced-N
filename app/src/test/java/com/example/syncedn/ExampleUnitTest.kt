@@ -4157,4 +4157,60 @@ class ExampleUnitTest {
         assertEquals(0, cached.size)
         assertEquals("[]", prefs.getString("cached_reports_$code", ""))
     }
+
+    @Test
+    fun testEnsureTeamLeaderInRoster() {
+        val membersWithoutLeader = listOf(
+            com.example.syncedn.data.model.TeamMember(
+                uid = "member1",
+                fullName = "John Doe",
+                username = "John",
+                email = "johndoe@gmail.com",
+                role = "Member",
+                ministryRole = "Vocalist",
+                teamCode = "NGK8VN"
+            ),
+            com.example.syncedn.data.model.TeamMember(
+                uid = "member2",
+                fullName = "Jane Smith",
+                username = "Jane",
+                email = "janesmith@gmail.com",
+                role = "Member",
+                ministryRole = "Bassist",
+                teamCode = "NGK8VN"
+            )
+        )
+
+        val withLeader = com.example.syncedn.data.database.TeamRepository.ensureTeamLeaderInRoster(
+            "NGK8VN",
+            membersWithoutLeader,
+            null
+        )
+        assertEquals(3, withLeader.size)
+        val leader = withLeader.first()
+        assertEquals("h9yRCswmV1f0Pnia2EnxDv4x4X43", leader.uid)
+        assertEquals("Ryan Lloyd Genturo", leader.fullName)
+        assertEquals("ryanlloydgenturo@gmail.com", leader.email)
+        assertEquals("Leader", leader.role)
+        assertEquals("Worship Leader", leader.ministryRole)
+
+        val existingLeader = com.example.syncedn.data.model.TeamMember(
+            uid = "h9yRCswmV1f0Pnia2EnxDv4x4X43",
+            fullName = "Ryan Lloyd Genturo",
+            username = "RYAN LLOYD",
+            email = "ryanlloydgenturo@gmail.com",
+            role = "Leader",
+            ministryRole = "Worship Leader",
+            teamCode = "NGK8VN"
+        )
+        val listWithLeader = listOf(existingLeader) + membersWithoutLeader
+        val retained = com.example.syncedn.data.database.TeamRepository.ensureTeamLeaderInRoster(
+            "NGK8VN",
+            listWithLeader,
+            null
+        )
+        assertEquals(3, retained.size)
+        assertEquals("Ryan Lloyd Genturo", retained.first().fullName)
+        assertEquals("Worship Leader", retained.first().ministryRole)
+    }
 }
