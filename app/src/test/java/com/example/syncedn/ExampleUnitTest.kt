@@ -3497,4 +3497,95 @@ class ExampleUnitTest {
         val afterLockout = otpService.verifyOtp("654321")
         assertTrue(afterLockout.isFailure)
     }
+
+    @Test
+    fun testPbkdf2PasswordHashingAndBackwardCompatibility() {
+        val vu = com.example.syncedn.data.util.ValidationUtils
+        val rawPass = "Synced@2026!"
+
+        val hash1 = vu.hashPasswordPbkdf2(rawPass)
+        val hash2 = vu.hashPasswordPbkdf2(rawPass)
+
+        assertTrue("Hash must start with pbkdf2$", hash1.startsWith("pbkdf2$"))
+        assertTrue("Hash must fit within Firestore 128-char rule", hash1.length <= 128)
+        assertFalse("Hash must not expose raw password", hash1.contains(rawPass))
+        assertNotEquals("Salted hashes of identical passwords must differ", hash1, hash2)
+
+        assertTrue("Correct password must verify against hash1", vu.verifyPasswordPbkdf2(rawPass, hash1))
+        assertTrue("Correct password must verify against hash2", vu.verifyPasswordPbkdf2(rawPass, hash2))
+        assertFalse("Wrong password must fail verification", vu.verifyPasswordPbkdf2("WrongPass@2026!", hash1))
+
+        // Backward compatibility with legacy plaintext password_resets documents
+        assertTrue("Legacy plaintext reset password must still verify", vu.verifyPasswordPbkdf2("LegacyPass#1", "LegacyPass#1"))
+        assertFalse("Wrong legacy plaintext password must fail", vu.verifyPasswordPbkdf2("WrongLegacy#1", "LegacyPass#1"))
+    }
+
+    @Test
+    fun testEmailOtpHtmlSanitizationAndSecureRandomCode() {
+        val otpService = com.example.syncedn.data.auth.EmailOtpService
+
+        for (i in 1..20) {
+            val code = otpService.generateSecureOtpCode()
+            assertEquals(6, code.length)
+            assertTrue(code.all { it.isDigit() })
+            val num = code.toInt()
+            assertTrue(num in 100000..999999)
+        }
+
+        val maliciousName = "<script>alert('xss')</script> & \"phishing\""
+        val escaped = otpService.escapeHtml(maliciousName)
+        assertFalse(escaped.contains("<script>"))
+        assertTrue(escaped.contains("&lt;script&gt;"))
+        assertTrue(escaped.contains("&amp;"))
+        assertTrue(escaped.contains("&quot;"))
+    }
+
+    @Test
+    fun testSessionIntegrityHmacTamperProtection() {
+        val prefs = FakePreferences()
+        val memberProfile = com.example.syncedn.data.model.UserProfile(
+            uid = "uid_member_101",
+            username = "member101",
+            email = "member101@gmail.com",
+            role = "Member",
+            teamName = "Praise Team",
+            teamCode = "PRZ101"
+        )
+
+        com.example.syncedn.data.auth.SessionManager.saveSessionProfile(
+            preferences = prefs,
+            profile = memberProfile
+        )
+        prefs.edit()
+            .putString("email_team_member101@gmail.com", "Praise Team")
+            .putString("email_code_member101@gmail.com", "PRZ101")
+            .apply()
+
+        assertTrue(com.example.syncedn.data.auth.SessionManager.verifySessionIntegrity(prefs, "member101@gmail.com"))
+
+        // Simulate local XML tampering on a rooted device: changing Member -> Leader without valid HMAC
+        prefs.edit()
+            .putString("role", "Leader")
+            .putString("email_role_member101@gmail.com", "Leader")
+            .apply()
+
+        assertFalse("Tampered role must fail HMAC integrity check", com.example.syncedn.data.auth.SessionManager.verifySessionIntegrity(prefs, "member101@gmail.com"))
+
+        val (resolvedRole, _, _) = com.example.syncedn.data.auth.SessionManager.resolveUserTeamSession(
+            preferences = prefs,
+            profile = null,
+            email = "member101@gmail.com"
+        )
+        assertEquals("Tampered Leader role must be rejected and downgraded to Member", "Member", resolvedRole)
+    }
+
+    @Test
+    fun testYouTubeVideoIdSanitizationAndHttpsImageUpgrade() {
+        assertTrue(com.example.syncedn.ui.player.YouTubePlayerHelper.isValidVideoId("dQw4w9WgXcQ"))
+        assertFalse(com.example.syncedn.ui.player.YouTubePlayerHelper.isValidVideoId("\"><script>alert(1)</script>"))
+        assertFalse(com.example.syncedn.ui.player.YouTubePlayerHelper.isValidVideoId("short"))
+
+        val upgraded = com.example.syncedn.data.storage.ImageLoader.normalizeSecureImageUrl("http://res.cloudinary.com/ffb3fdkm/image/upload/v1/avatar.jpg")
+        assertEquals("https://res.cloudinary.com/ffb3fdkm/image/upload/v1/avatar.jpg", upgraded)
+    }
 }

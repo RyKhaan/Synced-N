@@ -19,7 +19,15 @@ import com.example.syncedn.data.model.SongData
 
 object YouTubePlayerHelper {
 
+    private val SAFE_VIDEO_ID_REGEX = Regex("^[a-zA-Z0-9_-]{11}$")
+
+    fun isValidVideoId(videoId: String?): Boolean {
+        return !videoId.isNullOrBlank() && SAFE_VIDEO_ID_REGEX.matches(videoId.trim())
+    }
+
     fun openInAppPlayerModal(context: Context, videoId: String, songTitle: String = "") {
+        val cleanVideoId = videoId.trim()
+        if (!isValidVideoId(cleanVideoId)) return
         val dialog = android.app.Dialog(context, android.R.style.Theme_Black_NoTitleBar_Fullscreen)
         val root = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
@@ -101,8 +109,8 @@ object YouTubePlayerHelper {
                 mediaPlaybackRequiresUserGesture = false
                 loadWithOverviewMode = true
                 useWideViewPort = true
-                allowContentAccess = true
-                allowFileAccess = true
+                allowContentAccess = false
+                allowFileAccess = false
                 mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
                 try {
                     val defaultUa = userAgentString
@@ -236,8 +244,8 @@ object YouTubePlayerHelper {
                 mediaPlaybackRequiresUserGesture = false
                 loadWithOverviewMode = true
                 useWideViewPort = true
-                allowContentAccess = true
-                allowFileAccess = true
+                allowContentAccess = false
+                allowFileAccess = false
                 mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
                 cacheMode = WebSettings.LOAD_DEFAULT
                 try {

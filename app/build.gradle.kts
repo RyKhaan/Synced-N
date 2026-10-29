@@ -1,7 +1,26 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.google.services)
+}
+
+val envProps = Properties().apply {
+    val localPropsFile = rootProject.file("local.properties")
+    if (localPropsFile.exists()) {
+        localPropsFile.inputStream().use { load(it) }
+    }
+    val dotEnvFile = rootProject.file(".env")
+    if (dotEnvFile.exists()) {
+        dotEnvFile.inputStream().use { load(it) }
+    }
+}
+
+fun resolveEnvSecret(key: String, defaultVal: String = ""): String {
+    return envProps.getProperty(key)?.trim()?.removeSurrounding("\"")?.takeIf { it.isNotBlank() }
+        ?: System.getenv(key)?.trim()?.takeIf { it.isNotBlank() }
+        ?: defaultVal
 }
 
 android {
@@ -18,6 +37,16 @@ android {
         versionName = "1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+        val brevoKey = resolveEnvSecret("BREVO_API_KEY")
+        val brevoSender = resolveEnvSecret("BREVO_SENDER_EMAIL", "ryanlloydgenturo@gmail.com")
+        val cloudName = resolveEnvSecret("CLOUDINARY_CLOUD_NAME", "ffb3fdkm")
+        val uploadPreset = resolveEnvSecret("CLOUDINARY_UPLOAD_PRESET", "synced_preset")
+
+        buildConfigField("String", "BREVO_API_KEY", "\"$brevoKey\"")
+        buildConfigField("String", "BREVO_SENDER_EMAIL", "\"$brevoSender\"")
+        buildConfigField("String", "CLOUDINARY_CLOUD_NAME", "\"$cloudName\"")
+        buildConfigField("String", "CLOUDINARY_UPLOAD_PRESET", "\"$uploadPreset\"")
     }
 
     buildTypes {
@@ -34,6 +63,7 @@ android {
     }
     buildFeatures {
         compose = true
+        buildConfig = true
     }
     testOptions {
         unitTests.isReturnDefaultValues = true

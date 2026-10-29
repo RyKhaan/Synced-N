@@ -28,7 +28,22 @@ object CloudinaryUploader {
     private const val UPLOAD_URL = "https://api.cloudinary.com/v1_1/$CLOUD_NAME/image/upload"
 
     private val executor = Executors.newSingleThreadExecutor()
+    private const val MAX_UPLOAD_READ_BYTES = 10 * 1024 * 1024 // 10 MB safety limit
     private val mainHandler = Handler(Looper.getMainLooper())
+
+    private fun readBoundedBytes(stream: InputStream, maxBytes: Int = MAX_UPLOAD_READ_BYTES): ByteArray? {
+        val out = ByteArrayOutputStream()
+        val buf = ByteArray(8192)
+        var total = 0
+        while (true) {
+            val read = stream.read(buf)
+            if (read == -1) break
+            total += read
+            if (total > maxBytes) return null
+            out.write(buf, 0, read)
+        }
+        return out.toByteArray()
+    }
 
     /**
      * Downscales and compresses the image from the given Uri, then uploads to Cloudinary.
@@ -44,9 +59,9 @@ object CloudinaryUploader {
     ) {
         // Read raw bytes IMMEDIATELY on caller thread while Uri permission is active!
         val rawBytes = try {
-            context.contentResolver.openInputStream(imageUri)?.use { it.readBytes() }
+            context.contentResolver.openInputStream(imageUri)?.use { readBoundedBytes(it) }
                 ?: if (imageUri.scheme == "file" || imageUri.path?.startsWith("/") == true) {
-                    java.io.File(imageUri.path ?: "").takeIf { it.exists() }?.readBytes()
+                    java.io.File(imageUri.path ?: "").takeIf { it.exists() && it.length() <= MAX_UPLOAD_READ_BYTES }?.readBytes()
                 } else null
         } catch (e: Exception) {
             Log.e(TAG, "Cannot read bytes for Uri: $imageUri", e)
@@ -100,7 +115,7 @@ object CloudinaryUploader {
         quality: Int = 85
     ): ByteArray? {
         val rawBytes = try {
-            context.contentResolver.openInputStream(imageUri)?.use { it.readBytes() }
+            context.contentResolver.openInputStream(imageUri)?.use { readBoundedBytes(it) }
         } catch (_: Exception) { null } ?: return null
         return prepareImageBytesFromBytes(rawBytes, maxDimension, quality)
     }

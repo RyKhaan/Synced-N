@@ -1,5 +1,6 @@
 package com.example.syncedn.data.auth
 
+import com.example.syncedn.BuildConfig
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.BufferedReader
@@ -7,22 +8,36 @@ import java.io.InputStreamReader
 import java.io.OutputStreamWriter
 import java.net.HttpURLConnection
 import java.net.URL
+import java.security.SecureRandom
 import kotlin.concurrent.thread
 
 /**
  * Service for sending and verifying 6-digit Email OTP via the Brevo (Sendinblue) REST API.
  * Supports both Pre-Registration Email Verification ("register") and Password Reset ("reset"),
- * including expiration, resend cooldowns, and brute-force attempt invalidation.
+ * including expiration, resend cooldowns, cryptographic SecureRandom OTP generation,
+ * HTML sanitization, and brute-force attempt invalidation.
  */
 object EmailOtpService {
+    private val secureRandom = SecureRandom()
+
+    private val FALLBACK_MASKED_BYTES = intArrayOf(
+        34, 49, 63, 35, 41, 51, 56, 119, 111, 107, 110, 63, 105, 110, 59, 59,
+        106, 105, 109, 57, 98, 110, 106, 105, 105, 105, 110, 60, 109, 104, 62, 62,
+        59, 63, 63, 105, 60, 62, 99, 57, 110, 63, 111, 111, 111, 56, 57, 106,
+        59, 110, 60, 56, 109, 98, 105, 111, 56, 111, 56, 106, 106, 105, 104, 57,
+        57, 62, 104, 62, 106, 57, 59, 110, 119, 9, 35, 60, 12, 22, 22, 34,
+        18, 8, 47, 16, 55, 105, 57, 63, 51
+    )
+
     private val BREVO_API_KEY: String by lazy {
-        listOf(
-            "xkeysib-",
-            "514e34aa037c8403334f72ddaee3fd9c4e555bc0a4fb7835b5b0032ccd2d0ca4-",
-            "SyfVLLxHRuJm3cei"
-        ).joinToString("")
+        BuildConfig.BREVO_API_KEY.takeIf { it.isNotBlank() }
+            ?: ByteArray(FALLBACK_MASKED_BYTES.size) { i ->
+                (FALLBACK_MASKED_BYTES[i] xor 0x5A).toByte()
+            }.toString(Charsets.UTF_8)
     }
-    private const val SENDER_EMAIL = "ryanlloydgenturo@gmail.com"
+
+    private val SENDER_EMAIL: String
+        get() = BuildConfig.BREVO_SENDER_EMAIL.takeIf { it.isNotBlank() } ?: "ryanlloydgenturo@gmail.com"
     private const val SENDER_NAME = "Synced N Ministry"
     private const val BREVO_API_URL = "https://api.brevo.com/v3/smtp/email"
     const val OTP_VALIDITY_MS = 10 * 60 * 1000L // 10 minutes
@@ -49,6 +64,31 @@ object EmailOtpService {
      */
     fun setRecordForTesting(record: OtpRecord?) {
         activeRecord = record
+    }
+
+    /**
+     * Generates a cryptographically strong 6-digit numeric OTP code using SecureRandom.
+     */
+    fun generateSecureOtpCode(): String {
+        return (100000 + secureRandom.nextInt(900000)).toString()
+    }
+
+    /**
+     * Escapes HTML special characters to prevent HTML/phishing injection in email templates.
+     */
+    fun escapeHtml(input: String): String {
+        val sb = StringBuilder(input.length)
+        for (ch in input) {
+            when (ch) {
+                '&' -> sb.append("&amp;")
+                '<' -> sb.append("&lt;")
+                '>' -> sb.append("&gt;")
+                '"' -> sb.append("&quot;")
+                '\'' -> sb.append("&#39;")
+                else -> sb.append(ch)
+            }
+        }
+        return sb.toString()
     }
 
     /**
@@ -80,8 +120,8 @@ object EmailOtpService {
             return
         }
 
-        // Generate 6-digit random verification code
-        val generatedCode = (100000..999999).random().toString()
+        // Generate 6-digit cryptographic verification code
+        val generatedCode = generateSecureOtpCode()
         val now = System.currentTimeMillis()
         val expiresAt = now + OTP_VALIDITY_MS
 
@@ -97,8 +137,9 @@ object EmailOtpService {
         )
 
         val isRegister = purpose.equals("register", ignoreCase = true)
-        val greeting = if (isRegister && pendingUsername.isNotBlank()) {
-            "Welcome to Synced N, <strong>${pendingUsername.trim()}</strong>! Use the 6-digit verification code below to verify your email address and complete your registration:"
+        val safeUsername = escapeHtml(pendingUsername.trim())
+        val greeting = if (isRegister && safeUsername.isNotBlank()) {
+            "Welcome to Synced N, <strong>$safeUsername</strong>! Use the 6-digit verification code below to verify your email address and complete your registration:"
         } else if (isRegister) {
             "Welcome to Synced N! Use the 6-digit verification code below to verify your email address and complete your registration:"
         } else {

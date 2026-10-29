@@ -385,7 +385,7 @@ object FirestoreManager {
                     .document(effectiveUid)
                     .set(updates, com.google.firebase.firestore.SetOptions.merge())
                     .addOnSuccessListener {
-                        android.util.Log.d("FirestoreManager", "Successfully updated user $effectiveUid in Firestore: $updates")
+                        android.util.Log.d("FirestoreManager", "Successfully updated user $effectiveUid in Firestore")
                         onComplete(Result.success(Unit))
                     }
                     .addOnFailureListener { e ->
@@ -417,7 +417,7 @@ object FirestoreManager {
         try {
             val data = mapOf(
                 "email" to cleanEmail,
-                "password" to newPassword,
+                "password" to com.example.syncedn.data.util.ValidationUtils.hashPasswordPbkdf2(newPassword.trim()),
                 "updatedAt" to System.currentTimeMillis()
             )
             db.collection(PASSWORD_RESETS_COLLECTION)
@@ -430,7 +430,7 @@ object FirestoreManager {
                         .get()
                         .addOnSuccessListener { querySnap ->
                             for (doc in querySnap.documents) {
-                                doc.reference.update("resetPassword", newPassword)
+                                doc.reference.update("resetPassword", com.example.syncedn.data.util.ValidationUtils.hashPasswordPbkdf2(newPassword.trim()))
                             }
                             onComplete(Result.success(Unit))
                         }

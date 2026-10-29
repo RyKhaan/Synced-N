@@ -165,7 +165,11 @@ object SessionManager {
                 putString(KEY_ROLE, computedRole)
                 putString("role", computedRole)
                 if (effectiveUid.isNotBlank()) putString("user_role_$effectiveUid", computedRole)
-                if (emailLower.isNotBlank()) putString("email_role_$emailLower", computedRole)
+                if (emailLower.isNotBlank()) {
+                    putString("email_role_$emailLower", computedRole)
+                    val sig = com.example.syncedn.data.util.ValidationUtils.computeSessionHmac(emailLower, computedRole, effectiveUid)
+                    if (sig.isNotBlank()) putString("session_hmac_sig_$emailLower", sig)
+                }
             }
             if (photoUri.isNotBlank()) {
                 putString(KEY_PHOTO_URI, photoUri)
@@ -320,7 +324,7 @@ object SessionManager {
         val finalRole = when {
             isLeadUser -> "Leader"
             remoteRole.isNotBlank() -> remoteRole
-            savedRole.isNotBlank() -> savedRole
+            savedRole.isNotBlank() && verifySessionIntegrity(preferences, emailLower) -> savedRole
             finalTeam.isNotBlank() && preferences.getString("team_leader_email_${finalTeam.trim().lowercase()}", "") == emailLower -> "Leader"
             else -> "Member"
         }
@@ -329,7 +333,15 @@ object SessionManager {
             putString(KEY_ROLE, finalRole)
             putString("role", finalRole)
             if (uid.isNotBlank()) putString("user_role_$uid", finalRole)
-            if (emailLower.isNotBlank()) putString("email_role_$emailLower", finalRole)
+            if (emailLower.isNotBlank()) {
+                putString("email_role_$emailLower", finalRole)
+                val effectiveSignUid = uid.ifBlank {
+                    preferences.getString("email_uid_$emailLower", "").orEmpty()
+                        .ifBlank { preferences.getString(KEY_USER_ID, "").orEmpty() }
+                }
+                val sig = com.example.syncedn.data.util.ValidationUtils.computeSessionHmac(emailLower, finalRole, effectiveSignUid)
+                if (sig.isNotBlank()) putString("session_hmac_sig_$emailLower", sig)
+            }
         }
 
         if (isLeadUser) {
@@ -357,5 +369,33 @@ object SessionManager {
         }
 
         return Triple(finalRole, finalTeam, finalCode)
+    }
+
+    /**
+     * Verifies that the locally cached role in SharedPreferences has not been tampered with
+     * outside of SessionManager (e.g., via manual XML editing on a rooted device).
+     */
+    fun verifySessionIntegrity(preferences: SharedPreferences, email: String): Boolean {
+        val emailLower = email.trim().lowercase().ifBlank {
+            preferences.getString(KEY_EMAIL, "").orEmpty().trim().lowercase()
+        }
+        if (emailLower.isBlank()) return true
+        val expectedSig = preferences.getString("session_hmac_sig_$emailLower", "").orEmpty()
+        if (expectedSig.isBlank()) return true // Legacy session not yet signed
+
+        val uid = preferences.getString("email_uid_$emailLower", "").orEmpty()
+            .ifBlank { preferences.getString(KEY_USER_ID, "").orEmpty() }
+        val emailRole = preferences.getString("email_role_$emailLower", "").orEmpty()
+        val globalRole = preferences.getString(KEY_ROLE, "").orEmpty()
+        val effectiveRole = emailRole.ifBlank { globalRole }
+        if (emailRole.isNotBlank() && globalRole.isNotBlank() && !emailRole.equals(globalRole, ignoreCase = true)) {
+            return false
+        }
+        return com.example.syncedn.data.util.ValidationUtils.verifySessionHmac(
+            email = emailLower,
+            role = effectiveRole,
+            uid = uid,
+            expectedHmac = expectedSig
+        )
     }
 }

@@ -18,7 +18,7 @@ class SyncedFirebaseMessagingService : FirebaseMessagingService() {
 
     override fun onNewToken(token: String) {
         super.onNewToken(token)
-        Log.d(TAG, "New FCM token generated: $token")
+        Log.d(TAG, "New FCM token generated (len=${token.length})")
         val prefs = getSharedPreferences(SessionManager.PREFS_NAME, Context.MODE_PRIVATE)
         prefs.edit().putString(KEY_FCM_TOKEN, token).apply()
 

@@ -170,7 +170,9 @@ object AuthManager {
                     // 2. Direct auth failed. Check if an existing user has an OTP reset password in Firestore
                     FirestoreManager.getPasswordReset(cleanEmail) { resetResult ->
                         val storedNewPassword = resetResult.getOrNull()
-                        if (!storedNewPassword.isNullOrBlank() && storedNewPassword == cleanPassword) {
+                        if (!storedNewPassword.isNullOrBlank() &&
+                            com.example.syncedn.data.util.ValidationUtils.verifyPasswordPbkdf2(cleanPassword, storedNewPassword)
+                        ) {
                             // Verify that this email actually belongs to an existing registered user in Firestore
                             val onAuthReady = {
                                 FirestoreManager.getUserByEmail(cleanEmail) { profileResult ->
@@ -184,7 +186,7 @@ object AuthManager {
                                             uid = realUid,
                                             username = cleanEmail.substringBefore("@"),
                                             email = cleanEmail,
-                                            resetPassword = cleanPassword
+                                            resetPassword = storedNewPassword
                                         )
                                         onComplete(Result.success(profile.copy(uid = realUid)))
                                     } else {

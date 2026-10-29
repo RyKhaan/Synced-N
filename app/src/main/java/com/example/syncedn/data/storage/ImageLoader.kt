@@ -44,6 +44,19 @@ object ImageLoader {
 
     private val executor = Executors.newFixedThreadPool(4)
     private val mainHandler = Handler(Looper.getMainLooper())
+    private const val MAX_IMAGE_BYTES = 10 * 1024 * 1024 // 10 MB safety cap
+
+    /**
+     * Upgrades insecure http:// remote image URLs to https:// to protect against MITM tampering.
+     */
+    fun normalizeSecureImageUrl(url: String): String {
+        val clean = url.trim()
+        return if (clean.startsWith("http://", ignoreCase = true)) {
+            "https://" + clean.substring(7)
+        } else {
+            clean
+        }
+    }
 
     /**
      * Calculates the optimal power-of-two inSampleSize so decoding avoids allocating
@@ -273,7 +286,7 @@ object ImageLoader {
                     when {
                         trimmedUri.startsWith("http://", ignoreCase = true) ||
                         trimmedUri.startsWith("https://", ignoreCase = true) -> {
-                            downloadBitmap(trimmedUri, maxDimension)
+                            downloadBitmap(normalizeSecureImageUrl(trimmedUri), maxDimension)
                         }
                         else -> {
                             loadLocalBitmap(imageView.context, trimmedUri.toUri(), maxDimension)

@@ -115,6 +115,87 @@ object ValidationUtils {
         return evaluatePassword(password).isStrong
     }
 
+    private const val PBKDF2_PREFIX = "pbkdf2$"
+    private const val PBKDF2_ITERATIONS = 65536
+    private const val PBKDF2_KEY_BITS = 256
+    private val secureRandom = java.security.SecureRandom()
+    private val SESSION_HMAC_SECRET = byteArrayOf(
+        0x53, 0x79, 0x6E, 0x63, 0x65, 0x64, 0x4E, 0x5F,
+        0x48, 0x6D, 0x61, 0x63, 0x5F, 0x32, 0x30, 0x32,
+        0x36, 0x5F, 0x4D, 0x69, 0x6E, 0x69, 0x73, 0x74,
+        0x72, 0x79, 0x5F, 0x53, 0x65, 0x63, 0x75, 0x72
+    )
+
+    /**
+     * Hashes a password using PBKDF2WithHmacSHA256 with a cryptographically random 16-byte salt.
+     * Produces a 76-character string ("pbkdf2$<base64Salt>$<base64Hash>") that fits cleanly within
+     * Firestore's 128-character schema constraint while eliminating plaintext password storage.
+     */
+    fun hashPasswordPbkdf2(password: String): String {
+        if (password.startsWith(PBKDF2_PREFIX)) return password
+        val salt = ByteArray(16).also { secureRandom.nextBytes(it) }
+        val spec = javax.crypto.spec.PBEKeySpec(password.toCharArray(), salt, PBKDF2_ITERATIONS, PBKDF2_KEY_BITS)
+        val hash = javax.crypto.SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256")
+            .generateSecret(spec).encoded
+        val encoder = java.util.Base64.getEncoder()
+        return "$PBKDF2_PREFIX${encoder.encodeToString(salt)}$${encoder.encodeToString(hash)}"
+    }
+
+    /**
+     * Verifies a candidate password against a stored PBKDF2 hash (or legacy plaintext password for backward compatibility).
+     * Uses constant-time byte comparison to prevent timing side-channel attacks.
+     */
+    fun verifyPasswordPbkdf2(candidatePassword: String, storedPasswordOrHash: String): Boolean {
+        if (candidatePassword.isBlank() || storedPasswordOrHash.isBlank()) return false
+        if (!storedPasswordOrHash.startsWith(PBKDF2_PREFIX)) {
+            return java.security.MessageDigest.isEqual(
+                candidatePassword.toByteArray(Charsets.UTF_8),
+                storedPasswordOrHash.toByteArray(Charsets.UTF_8)
+            )
+        }
+        return try {
+            val parts = storedPasswordOrHash.split("$")
+            if (parts.size != 3) return false
+            val decoder = java.util.Base64.getDecoder()
+            val salt = decoder.decode(parts[1])
+            val expectedHash = decoder.decode(parts[2])
+            val spec = javax.crypto.spec.PBEKeySpec(candidatePassword.toCharArray(), salt, PBKDF2_ITERATIONS, PBKDF2_KEY_BITS)
+            val actualHash = javax.crypto.SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256")
+                .generateSecret(spec).encoded
+            java.security.MessageDigest.isEqual(expectedHash, actualHash)
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    /**
+     * Computes an HMAC-SHA256 integrity signature for local session role storage.
+     */
+    fun computeSessionHmac(email: String, role: String, uid: String = ""): String {
+        return try {
+            val mac = javax.crypto.Mac.getInstance("HmacSHA256")
+            mac.init(javax.crypto.spec.SecretKeySpec(SESSION_HMAC_SECRET, "HmacSHA256"))
+            val payload = "${email.trim().lowercase()}|${role.trim()}|${uid.trim()}"
+            val rawHmac = mac.doFinal(payload.toByteArray(Charsets.UTF_8))
+            java.util.Base64.getEncoder().encodeToString(rawHmac)
+        } catch (_: Exception) {
+            ""
+        }
+    }
+
+    /**
+     * Verifies the HMAC-SHA256 integrity signature of a locally cached session role.
+     */
+    fun verifySessionHmac(email: String, role: String, uid: String = "", expectedHmac: String): Boolean {
+        if (expectedHmac.isBlank()) return false
+        val computed = computeSessionHmac(email, role, uid)
+        if (computed.isBlank()) return false
+        return java.security.MessageDigest.isEqual(
+            computed.toByteArray(Charsets.UTF_8),
+            expectedHmac.toByteArray(Charsets.UTF_8)
+        )
+    }
+
     /**
      * Checks if an email address belongs to a known disposable, temporary, or fake domain.
      */

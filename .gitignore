@@ -20,3 +20,6 @@ local.properties
 Synced_N.apk
 *.jks
 release_keystore_base64.txt
+.env
+.env.*
+!.env.example
