@@ -39,7 +39,6 @@ import android.graphics.Color
 import android.graphics.ColorFilter
 import android.graphics.Paint
 import android.graphics.PixelFormat
-import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
 import android.text.InputType
 import android.util.Base64
@@ -50,9 +49,7 @@ import android.widget.ImageView
 import android.widget.LinearLayout
 import androidx.core.view.doOnLayout
 import android.animation.ObjectAnimator
-import android.animation.PropertyValuesHolder
 import android.animation.ValueAnimator
-import android.view.animation.AccelerateDecelerateInterpolator
 import android.view.animation.LinearInterpolator
 import android.graphics.Typeface
 import androidx.core.graphics.PathParser
@@ -913,7 +910,6 @@ open class MemberActivity : AppCompatActivity() {
         val root = buildScreen(page)
         screenRoot = root
         setContentView(root)
-        UiMotion.animateScreenEntry(root)
         ViewCompat.setOnApplyWindowInsetsListener(root) { view, insets ->
             val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
             val keyboard = insets.getInsets(WindowInsetsCompat.Type.ime())
@@ -1160,10 +1156,7 @@ open class MemberActivity : AppCompatActivity() {
     }
 
     private fun click(id: Int, action: () -> Unit) {
-        findViewById<View>(id)?.apply {
-            UiMotion.applyPressScale(this, 0.96f)
-            setOnClickListener { action() }
-        }
+        findViewById<View>(id).setOnClickListener { action() }
     }
     private fun input(id: Int): EditText = findViewById(id)
     private fun invalid(field: EditText, message: String) {
@@ -1525,8 +1518,10 @@ open class MemberActivity : AppCompatActivity() {
     private val navy = Color.rgb(16, 17, 63)
     private val bitmaps = mutableMapOf<String, Bitmap>()
     private fun dp(value: Int) = (value * resources.displayMetrics.density).toInt()
-    private fun bg(color: Int, radius: Int = 0, stroke: Int? = null): Drawable =
-        UiMotion.createModernRipple(color, dp(radius).toFloat(), if (stroke != null) dp(1) else 0, stroke ?: 0)
+    private fun bg(color: Int, radius: Int = 0, stroke: Int? = null) = GradientDrawable().apply {
+        setColor(color); cornerRadius = dp(radius).toFloat()
+        stroke?.let { setStroke(dp(1), it) }
+    }
     private fun vertical() = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; clipChildren=false; clipToPadding=false }
     private fun horizontal() = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; clipChildren=false; clipToPadding=false }
     private fun LinearLayout.add(view: View, width: Int = -1, height: Int = -2, weight: Float = 0f) {
@@ -1592,14 +1587,12 @@ open class MemberActivity : AppCompatActivity() {
     private fun button(id: Int, label: String, width: Int = 180, link: Boolean = false): View =
         if (link) text(label, 14, Color.rgb(0,103,96), centered = true, id = id).apply {
             isClickable = true; isFocusable = true
-            UiMotion.applyPressScale(this, 0.96f)
             layoutParams = LinearLayout.LayoutParams(if (width < 0) width else dp(width), dp(48)).apply { gravity = Gravity.CENTER_HORIZONTAL }
         } else Button(this).apply {
             this.id = id; text = label; textSize = 14f; isAllCaps = false
             setTextColor(Color.WHITE); background = bg(purple, 24)
             minHeight = 0; minimumHeight = 0; minWidth = 0; minimumWidth = 0
             stateListAnimator = null; setPadding(0,0,0,0)
-            UiMotion.applyPressScale(this, 0.96f)
             layoutParams = LinearLayout.LayoutParams(if (width < 0) width else dp(width), dp(40)).apply { gravity = Gravity.CENTER_HORIZONTAL }
         }
     private fun LinearLayout.action(id: Int, label: String, width: Int = 180, link: Boolean = false) {
@@ -1609,19 +1602,12 @@ open class MemberActivity : AppCompatActivity() {
                       email: Boolean = false, number: Boolean = false, icon: String? = null,
                       toggle: Int = View.NO_ID): LinearLayout {
         val container = vertical()
-        if (label.isNotBlank()) container.add(text(label, 13, Color.rgb(51, 65, 85), bold = true).apply { setPadding(dp(16),0,0,dp(5)) })
-        val row = horizontal().apply {
-            background = GradientDrawable().apply {
-                setColor(Color.rgb(248, 250, 252))
-                cornerRadius = dp(12).toFloat()
-                setStroke(dp(1), Color.rgb(226, 232, 240))
-            }
-            setPadding(dp(14),0,dp(6),0)
-        }
-        if (icon != null) row.add(Symbol(this,icon,Color.rgb(148, 163, 184)),22,22)
+        if (label.isNotBlank()) container.add(text(label).apply { setPadding(dp(22),0,0,dp(5)) })
+        val row = horizontal().apply { background = bg(Color.rgb(217,217,217),10); setPadding(dp(12),0,dp(4),0) }
+        if (icon != null) row.add(Symbol(this,icon,Color.GRAY),24,24)
         val edit = EditText(this).apply {
-            this.id = id; this.hint = hint; textSize = 14f; setTextColor(Color.rgb(15, 23, 42))
-            setHintTextColor(Color.rgb(148, 163, 184)); background = null; setPadding(dp(8),0,dp(8),0)
+            this.id = id; this.hint = hint; textSize = 14f; setTextColor(Color.BLACK)
+            setHintTextColor(Color.rgb(115,115,115)); background = null; setPadding(dp(6),0,dp(6),0)
             inputType = when {
                 password -> InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
                 email -> InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS
@@ -1630,24 +1616,12 @@ open class MemberActivity : AppCompatActivity() {
             }
             setSingleLine(true); isSaveEnabled = false
             if (android.os.Build.VERSION.SDK_INT >= 26) importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_NO
-            setOnFocusChangeListener { _, hasFocus ->
-                (row.background as? GradientDrawable)?.apply {
-                    if (hasFocus) {
-                        setStroke(dp(2).coerceAtLeast(1), Color.rgb(168, 85, 247))
-                        setColor(Color.WHITE)
-                    } else {
-                        setStroke(dp(1), Color.rgb(226, 232, 240))
-                        setColor(Color.rgb(248, 250, 252))
-                    }
-                }
-            }
         }
         row.add(edit,0,48,1f)
         if (password) {
             val eye = ImageButton(this).apply {
                 this.id = toggle; background = null; contentDescription = "Show password"
                 setImageDrawable(EyeDrawable()); setPadding(dp(12),dp(12),dp(12),dp(12))
-                UiMotion.applyPressScale(this, 0.90f)
             }
             row.add(eye,48,48)
         }
@@ -1980,15 +1954,10 @@ open class MemberActivity : AppCompatActivity() {
                     divider.add(text("or",centered=true),44,30)
                     divider.add(View(this@MemberActivity).apply { setBackgroundColor(Color.DKGRAY) },0,1,1f)
                     add(divider); space(16)
-                    val google = horizontal().apply {
-                        id = UI.googleButton; gravity = Gravity.CENTER
-                        background = bg(Color.WHITE, 12, Color.rgb(226, 232, 240))
-                        isClickable = true; isFocusable = true; contentDescription = "Continue with Google"
-                        UiMotion.applyPressScale(this, 0.96f)
-                    }
-                    google.add(image("google_mark"), 24, 24)
-                    google.add(text("  Continue with Google", 14, navy, true), -2, 44)
-                    add(google, -1, 46); space(16)
+                    val google = horizontal().apply { id=UI.googleButton; gravity=Gravity.CENTER; background=bg(Color.rgb(217,217,217),10); isClickable=true; isFocusable=true; contentDescription="Continue with Google" }
+                    google.add(image("google_mark"),26,26)
+                    google.add(text("  Continue with Google",14,navy,true),-2,44)
+                    add(google,-1,44); space(16)
                     action(UI.openRegisterButton,"Don’t have an account?   Sign Up",-1,true); space(20)
                 }
             }
@@ -2118,83 +2087,51 @@ open class MemberActivity : AppCompatActivity() {
             scaleType = ImageView.ScaleType.CENTER_CROP
         }, FrameLayout.LayoutParams(-1, -1))
 
-        // Ambient dark vignette overlay for contrast and depth
-        addView(View(this@MemberActivity).apply {
-            background = GradientDrawable(
-                GradientDrawable.Orientation.TOP_BOTTOM,
-                intArrayOf(Color.argb(80, 2, 12, 40), Color.argb(175, 2, 12, 40), Color.argb(240, 2, 12, 40))
-            )
-        }, FrameLayout.LayoutParams(-1, -1))
-
-        val brandBox = vertical().apply {
-            gravity = Gravity.CENTER_HORIZONTAL
-            val logoContainer = FrameLayout(this@MemberActivity)
-            val glow = View(this@MemberActivity).apply {
-                background = GradientDrawable().apply {
-                    shape = GradientDrawable.OVAL
-                    setColor(Color.argb(60, 168, 85, 247))
-                }
-            }
-            logoContainer.addView(glow, FrameLayout.LayoutParams(dp(180), dp(180), Gravity.CENTER))
-
-            val logoImg = ImageView(this@MemberActivity).apply {
-                setImageResource(R.drawable.landing_logo)
-                scaleType = ImageView.ScaleType.FIT_CENTER
-                contentDescription = "Synced N"
-            }
-            logoContainer.addView(logoImg, FrameLayout.LayoutParams(dp(140), dp(140), Gravity.CENTER))
-
-            post {
-                val anim = ObjectAnimator.ofPropertyValuesHolder(
-                    logoContainer,
-                    PropertyValuesHolder.ofFloat(View.SCALE_X, 1.0f, 1.04f, 1.0f),
-                    PropertyValuesHolder.ofFloat(View.SCALE_Y, 1.0f, 1.04f, 1.0f)
-                ).apply {
-                    duration = 3400
-                    repeatCount = ValueAnimator.INFINITE
-                    interpolator = AccelerateDecelerateInterpolator()
-                }
-                anim.start()
-            }
-
-            add(logoContainer, dp(180), dp(180))
-            space(14)
-            add(text("Synced N", 28, Color.WHITE, bold = true, centered = true).apply {
-                letterSpacing = 0.04f
+        // The supplied branded artwork matches the reference's large logo and lettering.
+        // Only its top artwork is used; the button and caption remain native controls.
+        val brandedTop = image("welcome_artwork", "Synced N").apply {
+            val original = (drawable as android.graphics.drawable.BitmapDrawable).bitmap
+            val scaleX = original.width.toFloat() / 360f
+            val scaleY = original.height.toFloat() / 590f
+            val cropHeight = (280 * scaleY).toInt().coerceAtMost(original.height)
+            setImageBitmap(bitmaps.getOrPut("landing_branded_top") {
+                Bitmap.createBitmap(original, 0, 0, original.width, cropHeight)
             })
-            space(6)
-            add(text("Church Ministry Management", 14, Color.rgb(203, 213, 225), centered = true).apply {
-                letterSpacing = 0.02f
-            })
+            scaleType = ImageView.ScaleType.FIT_XY
         }
-        addView(brandBox, FrameLayout.LayoutParams(-1, -2, Gravity.CENTER))
+        addView(brandedTop, FrameLayout.LayoutParams(-1, dp(280), Gravity.TOP or Gravity.CENTER_HORIZONTAL))
 
         val footer = vertical().apply {
             gravity = Gravity.CENTER_HORIZONTAL
-            val getStartedBtn = Button(this@MemberActivity).apply {
-                id = UI.getStartedButton
-                text = "Get Started"
-                textSize = 15f
-                isAllCaps = false
-                setTextColor(Color.WHITE)
-                background = GradientDrawable(
-                    GradientDrawable.Orientation.LEFT_RIGHT,
-                    intArrayOf(Color.rgb(103, 5, 103), Color.rgb(168, 85, 247))
-                ).apply {
-                    cornerRadius = dp(24).toFloat()
-                }
-                minHeight = 0; minimumHeight = 0; minWidth = 0; minimumWidth = 0
-                stateListAnimator = null; setPadding(0, 0, 0, 0)
-                UiMotion.applyPressScale(this, 0.95f)
-                elevation = dp(4).toFloat()
-            }
-            add(getStartedBtn, 200, 48)
-            space(24)
+            add(button(UI.getStartedButton, "Get Started", 180).apply {
+                background = bg(Color.rgb(103, 5, 103), 24)
+            }, 180, 40)
+            space(16)
+            add(text("Church Ministry Management", 15, Color.WHITE, centered = true))
+            space(20)
             add(landingIndicator(), 32, 32)
         }
         addView(footer, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply {
-            bottomMargin = dp(44)
+            bottomMargin = dp(48)
         })
+        addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
+            val availableWidth = width - paddingLeft - paddingRight
+            val availableHeight = height - paddingTop - paddingBottom
+            if (availableWidth > 0 && availableHeight > 0) {
+                val scale = maxOf(availableWidth / 360f, availableHeight / 800f)
+                val photoTop = (availableHeight - 800f * scale) / 2f
+                val brandWidth = (360f * scale).toInt()
+                val brandHeight = (280f * scale).toInt()
+                val brandPosition = brandedTop.layoutParams as FrameLayout.LayoutParams
+                if (brandPosition.width != brandWidth || brandPosition.height != brandHeight || brandPosition.topMargin != photoTop.toInt()) {
+                    brandedTop.post {
+                        brandedTop.layoutParams = brandPosition.apply {
+                            width = brandWidth; height = brandHeight; topMargin = photoTop.toInt()
+                        }
+                    }
+                }
+            }
+        }
     }
     private fun landingIndicator(): View = object : View(this) {
         private val ink = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -2470,7 +2407,6 @@ open class MemberActivity : AppCompatActivity() {
             }
             isClickable = true
             isFocusable = true
-            UiMotion.applyPressScale(this, 0.97f)
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES
 
             val coverUrl = upcomingRec?.optString("coverImageUrl").orEmpty()
@@ -2549,7 +2485,6 @@ open class MemberActivity : AppCompatActivity() {
 
                 val chevronBtn = FrameLayout(this@MemberActivity).apply {
                     background = bg(Color.argb(135, 30, 41, 59), 23, Color.argb(60, 255, 255, 255))
-                    UiMotion.applyPressScale(this, 0.88f)
                     val arrow = TextView(this@MemberActivity).apply {
                         text = "›"
                         setTextColor(Color.WHITE)
@@ -2586,9 +2521,8 @@ open class MemberActivity : AppCompatActivity() {
             val upper=horizontal().apply { gravity=Gravity.TOP }
             val team=FrameLayout(this@MemberActivity).apply {
                 id=UI.teamHubButton
-                background=bg(Color.WHITE,20,Color.rgb(226,232,240))
-                elevation=dp(3).toFloat();isClickable=true;isFocusable=true
-                UiMotion.applyPressScale(this, 0.96f)
+                background=bg(Color.WHITE,24,Color.rgb(211,211,211))
+                elevation=dp(4).toFloat();isClickable=true;isFocusable=true
                 contentDescription="Worship Team, 10 members, view team"
             }
             val teamInfo=vertical().apply {
@@ -2630,7 +2564,6 @@ open class MemberActivity : AppCompatActivity() {
                 background=bg(Color.WHITE,20,Color.rgb(226,232,240))
                 elevation=dp(3).toFloat();setPadding(dp(8),dp(10),dp(10),dp(10))
                 isClickable=true;isFocusable=true;minimumHeight=dp(104)
-                UiMotion.applyPressScale(this, 0.96f)
                 val secondRec = homeUpcomingSecondRecord()
                 if (secondRec != null) {
                     val dateRaw = secondRec.optString("date")
@@ -2671,7 +2604,13 @@ open class MemberActivity : AppCompatActivity() {
             upcoming.add(announcementHomeTile(),0,104,0.37f)
             add(upcoming);space(44)
         }
-        root.add(bottomNavigation("Home"), -1, 64)
+        val nav=horizontal().apply { elevation=dp(8).toFloat();setBackgroundColor(Color.WHITE) }
+        for ((id,symbol,label) in listOf(Triple(UI.homeTab,"home","Home"),Triple(UI.scheduleTab,"calendar","Schedule"),Triple(UI.teamsTab,"teams","Teams"),Triple(UI.settingsTab,"settings","Settings"))) {
+            val c=if(id==UI.homeTab) Color.rgb(214,0,242) else navy
+            val tab=vertical().apply { this.id=id;gravity=Gravity.CENTER;isClickable=true;isFocusable=true;contentDescription=label;add(Symbol(this@MemberActivity,symbol,c),24,24);space(2);add(text(label,9,c,centered=true)) }
+            nav.add(tab,0,64,1f)
+        }
+        root.add(nav,-1,64)
         return root
     }
 
@@ -2698,42 +2637,13 @@ open class MemberActivity : AppCompatActivity() {
         return row
     }
     private fun bottomNavigation(selected: String): View {
-        val nav = horizontal().apply {
-            elevation = dp(10).toFloat()
-            setBackgroundColor(Color.WHITE)
-        }
-        for ((id, icon, label) in listOf(
-            Triple(UI.homeTab, "home", "Home"),
-            Triple(UI.scheduleTab, "calendar", "Schedule"),
-            Triple(UI.teamsTab, "teams", "Teams"),
-            Triple(UI.settingsTab, "settings", "Settings")
-        )) {
-            val isSelected = label == selected
-            val primaryColor = if (isSelected) Color.rgb(168, 85, 247) else Color.rgb(100, 116, 139)
-            val item = vertical().apply {
-                this.id = id; gravity = Gravity.CENTER; isClickable = true; isFocusable = true; contentDescription = label
-                UiMotion.applyPressScale(this, 0.92f)
-
-                val iconHolder = FrameLayout(this@MemberActivity).apply {
-                    if (isSelected) {
-                        background = GradientDrawable().apply {
-                            setColor(Color.argb(24, 168, 85, 247))
-                            cornerRadius = dp(14).toFloat()
-                        }
-                    }
-                    val sym = Symbol(this@MemberActivity, icon, primaryColor)
-                    addView(sym, FrameLayout.LayoutParams(dp(22), dp(22), Gravity.CENTER))
-                    if (isSelected) {
-                        UiMotion.animateTabBounce(sym)
-                    }
-                }
-                addView(iconHolder, LinearLayout.LayoutParams(dp(if (isSelected) 44 else 36), dp(28)).apply {
-                    gravity = Gravity.CENTER_HORIZONTAL
-                })
-                space(2)
-                add(text(label, 10, primaryColor, bold = isSelected, centered = true))
-            }
-            nav.add(item, 0, 64, 1f)
+        val nav=horizontal().apply {elevation=dp(8).toFloat();setBackgroundColor(Color.WHITE)}
+        for((id,icon,label) in listOf(Triple(UI.homeTab,"home","Home"),Triple(UI.scheduleTab,"calendar","Schedule"),Triple(UI.teamsTab,"teams","Teams"),Triple(UI.settingsTab,"settings","Settings"))) {
+            val color=if(label==selected) Color.rgb(214,0,242) else navy
+            nav.add(vertical().apply {
+                this.id=id;gravity=Gravity.CENTER;isClickable=true;isFocusable=true;contentDescription=label
+                add(Symbol(this@MemberActivity,icon,color),24,24);space(2);add(text(label,9,color,centered=true))
+            },0,64,1f)
         }
         return nav
     }
@@ -3442,9 +3352,6 @@ space(48)
             isAllCaps = false
             background = bg(Color.WHITE, 12, strokeColor)
             setTextColor(strokeColor)
-            stateListAnimator = null
-            setPadding(0, 0, 0, 0)
-            UiMotion.applyPressScale(this, 0.96f)
             setOnClickListener { action() }
             minimumHeight = dp(48)
         }
@@ -5582,18 +5489,17 @@ space(48)
         listOf("Team Chat", "Members", "Role").forEach { label ->
             val tab = text(label, 13, if (teamTab == label) Color.WHITE else navy, true, true).apply {
                 if (teamTab == label) background = bg(Color.rgb(21, 28, 50), 20)
-                UiMotion.applyPressScale(this, 0.94f)
                 isFocusable = true; setOnClickListener { teamTab = label; navigate("teams") }
             }
             addView(tab, LinearLayout.LayoutParams(0, dp(32), 1f).apply { rightMargin = dp(8) })
         }
     }
     private fun teamLogo(): View = image("team_brand_logo", "Synced N").apply {
+        // Supplied transparent white/gold logo: draw directly, without a color filter.
         scaleType = ImageView.ScaleType.FIT_CENTER
         background = null
         setPadding(0, 0, 0, 0)
         clearColorFilter()
-        UiMotion.applyPressScale(this, 0.94f)
         (drawable as? android.graphics.drawable.BitmapDrawable)?.paint?.apply {
             isFilterBitmap = true
             isAntiAlias = true
@@ -6298,15 +6204,13 @@ space(48)
 
     private fun memberTile(id: Int, icon: String, label: String, labelSize: Int = 14) = vertical().apply {
         this.id=id;gravity=Gravity.CENTER
-        background=bg(Color.WHITE,20,Color.rgb(226,232,240));elevation=dp(3).toFloat()
+        background=bg(Color.WHITE,24,Color.rgb(211,211,211));elevation=dp(4).toFloat()
         isClickable=true;isFocusable=true;contentDescription=label
-        UiMotion.applyPressScale(this, 0.95f)
-        add(Symbol(this@MemberActivity,icon,Color.rgb(168,85,247)),28,28)
+        add(Symbol(this@MemberActivity,icon,Color.rgb(174,0,234)),28,28)
         space(3);add(text(label,labelSize,navy,true,true))
     }
     private fun hub(id: Int, symbol: String, label: String, backgroundColor: Int, ink: Int) = vertical().apply {
         this.id=id;gravity=Gravity.CENTER;isClickable=true;isFocusable=true;contentDescription=label
-        UiMotion.applyPressScale(this, 0.94f)
         val tile=FrameLayout(this@MemberActivity).apply { background=bg(backgroundColor,20) }
         tile.addView(Symbol(this@MemberActivity,symbol,ink),FrameLayout.LayoutParams(dp(30),dp(30),Gravity.CENTER))
         add(tile,72,72);space(6);add(text(label,14,navy,bold = true,centered = true))
