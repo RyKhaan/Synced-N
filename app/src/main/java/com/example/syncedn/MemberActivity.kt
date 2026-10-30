@@ -4804,6 +4804,15 @@ open class MemberActivity : AppCompatActivity() {
                 !isSelf && !isAlreadyAssigned
             }
             val transferred = preferences.getBoolean("transferred_leadership_$activeCode", false)
+            val teamAvail = if (serviceDate.isNotBlank()) {
+                TeamRepository.checkTeamAvailabilityForDate(activeCode, serviceDate, preferences)
+            } else {
+                Pair(emptyList(), emptyList())
+            }
+            val teamUnavailableMap = teamAvail.second.associate { (m, reason) ->
+                (m.uid.ifBlank { m.fullName.lowercase() }) to reason
+            }
+
             for (member in rosterCandidates) {
                 val mName = member.fullName.ifBlank { member.username }
                 val isLeader = member.role.equals("Leader", true) || (!transferred && (member.email.trim().equals("ryanlloydgenturo@gmail.com", true) || mName.contains("Ryan Lloyd", true)) && !member.role.equals("Member", true))
@@ -4813,16 +4822,19 @@ open class MemberActivity : AppCompatActivity() {
                     member.ministryRole.ifBlank { member.role }
                 }
                 val isSame = mRole.equals(assignedRole, ignoreCase = true) || (assignedRole.isNotBlank() && mRole.contains(assignedRole, ignoreCase = true))
-                val isSelfCand = member.uid == currentUserId() || mName.equals(currentName, true)
-                val memberRanges = if (member.unavailableRanges.isNotEmpty()) {
-                    member.unavailableRanges
-                } else if (isSelfCand) {
-                    TeamRepository.getMemberUnavailableRanges(member.uid, preferences, member.email, mName)
-                } else {
-                    emptyList()
-                }
+                val memberRanges = (member.unavailableRanges + TeamRepository.getMemberUnavailableRanges(member.uid, preferences, member.email, mName))
+                    .distinctBy { it.id.ifBlank { "${it.startDate}_${it.endDate}_${it.reason}" } }
                 val conflictRange = if (serviceDate.isNotBlank()) memberRanges.find { it.includes(serviceDate) } else null
-                candidatesList.add(CandidateItem(member.uid, mName, mRole, isSame, conflictRange?.reason ?: (if (conflictRange != null) "Schedule Conflict" else null), false))
+                val directConflict = if (serviceDate.isNotBlank()) {
+                    TeamRepository.isMemberUnavailableOnDate(activeCode, member.uid, mName, serviceDate, preferences)
+                } else null
+                val resolvedConflictReason = conflictRange?.reason?.ifBlank { "Schedule Conflict" }
+                    ?: directConflict
+                    ?: teamUnavailableMap[member.uid]
+                    ?: teamUnavailableMap[mName.lowercase()]
+                    ?: if (conflictRange != null) "Schedule Conflict" else null
+
+                candidatesList.add(CandidateItem(member.uid, mName, mRole, isSame, resolvedConflictReason, false))
             }
             if (candidatesList.isEmpty()) {
                 ministryMembers.filter { (name, _, _) -> !name.equals(currentName, true) && !assignedNames.contains(name.lowercase()) }.forEach { (name, role, _) ->
@@ -4838,10 +4850,18 @@ open class MemberActivity : AppCompatActivity() {
 
         candidatesList.forEach { cand ->
             val isSelected = (selectedSubstituteUid == cand.uid) || (selectedSubstituteName == cand.name)
+            val isUnavailableCandidate = (!isInclusion && cand.conflictReason != null)
             val candidateCard = LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
-                background = if (isSelected) bg(Color.rgb(250, 245, 255), 14, purple) else bg(Color.WHITE, 14, Color.rgb(226, 232, 240))
+                background = when {
+                    isSelected -> bg(Color.rgb(250, 245, 255), 14, purple)
+                    isUnavailableCandidate -> bg(Color.rgb(248, 249, 250), 14, Color.rgb(226, 232, 240))
+                    else -> bg(Color.WHITE, 14, Color.rgb(226, 232, 240))
+                }
+                if (isUnavailableCandidate) {
+                    alpha = 0.55f
+                }
                 setPadding(dp(12), dp(10), dp(12), dp(10))
                 val rosterMember = getActiveRoster().find { it.uid == cand.uid || it.fullName.equals(cand.name, true) || it.username.equals(cand.name, true) }
                 val pUri = rosterMember?.photoUri
@@ -4851,14 +4871,14 @@ open class MemberActivity : AppCompatActivity() {
                     orientation = LinearLayout.VERTICAL
                     setPadding(dp(12), 0, dp(8), 0)
                     val nameRow = horizontal().apply { gravity = Gravity.CENTER_VERTICAL }
-                    nameRow.addView(text(cand.name, 14, navy, true), LinearLayout.LayoutParams(-2, -2))
+                    nameRow.addView(text(cand.name, 14, if (isUnavailableCandidate) Color.rgb(120, 120, 130) else navy, true), LinearLayout.LayoutParams(-2, -2))
                     if (cand.isSameRole) {
                         val recBadge = TextView(this@MemberActivity).apply {
-                            text = "⭐ Recommended (Same Role)"
-                            setTextColor(Color.rgb(126, 34, 206))
+                            text = if (isUnavailableCandidate) "Same Role (Unavailable)" else "⭐ Recommended (Same Role)"
+                            setTextColor(if (isUnavailableCandidate) Color.rgb(156, 163, 175) else Color.rgb(126, 34, 206))
                             textSize = 9.5f
                             typeface = Typeface.DEFAULT_BOLD
-                            background = bg(Color.rgb(243, 232, 255), 6)
+                            background = if (isUnavailableCandidate) bg(Color.rgb(243, 244, 246), 6) else bg(Color.rgb(243, 232, 255), 6)
                             setPadding(dp(8), dp(2), dp(8), dp(2))
                         }
                         val badgeParams = LinearLayout.LayoutParams(-2, -2).apply {
@@ -4873,6 +4893,9 @@ open class MemberActivity : AppCompatActivity() {
                     add(text(candDisplayRole, 12, Color.rgb(90, 90, 95)), -1, -2)
                     if (cand.conflictReason != null) {
                         add(text("✕ Unavailable • ${cand.conflictReason}", 11, Color.rgb(220, 38, 38), true))
+                        if (!isInclusion) {
+                            add(text("Unavailable on $serviceDate • Cannot be selected", 10, Color.rgb(185, 28, 28)))
+                        }
                     } else if (!isInclusion) {
                         add(text("✓ Available", 11, Color.rgb(22, 163, 74), true))
                     } else {
@@ -4885,6 +4908,14 @@ open class MemberActivity : AppCompatActivity() {
                 isFocusable = !isServicePast
                 setOnClickListener {
                     if (isServicePast) return@setOnClickListener
+                    if (!isInclusion && cand.conflictReason != null) {
+                        android.app.AlertDialog.Builder(this@MemberActivity)
+                            .setTitle("Member Unavailable")
+                            .setMessage("${cand.name} is marked as unavailable on this date ($serviceDate) due to: ${cand.conflictReason}.\n\nPlease choose an available teammate to cover this service.")
+                            .setPositiveButton("OK", null)
+                            .show()
+                        return@setOnClickListener
+                    }
                     selectedSubstituteUid = cand.uid
                     selectedSubstituteName = cand.name
                     selectedRoleForSwap = cand.role
@@ -4944,8 +4975,12 @@ open class MemberActivity : AppCompatActivity() {
                 if (selectedSubstituteName.isBlank() && substitute.isNotBlank() && substitute != "John Doe") {
                     selectedSubstituteName = substitute
                 }
-                if (selectedSubstituteName.isBlank()) {
-                    toast("Please select a teammate.")
+                if (selectedSubstituteName.isBlank() || (!isInclusion && selectedSubstituteName == "John Doe")) {
+                    android.app.AlertDialog.Builder(this@MemberActivity)
+                        .setTitle("Select a Teammate")
+                        .setMessage("Please select an available teammate to substitute for this service before submitting.")
+                        .setPositiveButton("OK", null)
+                        .show()
                     return@setOnClickListener
                 }
                 if (selectedSubstituteUid.isBlank()) {
@@ -4954,6 +4989,26 @@ open class MemberActivity : AppCompatActivity() {
                 if (currentUid.isNotBlank() && selectedSubstituteUid == currentUid) {
                     toast("You cannot select yourself.")
                     return@setOnClickListener
+                }
+
+                if (!isInclusion) {
+                    val chosenCand = candidatesList.find { it.uid == selectedSubstituteUid || it.name.equals(selectedSubstituteName, true) }
+                    val conflictOnDate = chosenCand?.conflictReason
+                        ?: TeamRepository.isMemberUnavailableOnDate(activeCode, selectedSubstituteUid, selectedSubstituteName, serviceDate, preferences)
+                    if (conflictOnDate != null) {
+                        android.app.AlertDialog.Builder(this@MemberActivity)
+                            .setTitle("Unavailable Substitute Selected")
+                            .setMessage("You cannot submit an exclusion request with $selectedSubstituteName because they are marked as unavailable on $serviceDate ($conflictOnDate).\n\nPlease select an available teammate.")
+                            .setPositiveButton("OK", null)
+                            .show()
+                        selectedSubstituteUid = ""
+                        selectedSubstituteName = ""
+                        substitute = ""
+                        cardViews.forEach { (_, view) ->
+                            view.background = bg(Color.WHITE, 14, Color.rgb(226, 232, 240))
+                        }
+                        return@setOnClickListener
+                    }
                 }
 
                 val prefix = if (substitutionType == "Inclusion") "[Inclusion] " else "[Exclusion] "

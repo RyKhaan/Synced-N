@@ -2780,6 +2780,51 @@ object TeamRepository {
         return Pair(available, unavailable)
     }
 
+    /**
+     * Checks if a member has a schedule conflict on a given target date.
+     * Returns the conflict reason (e.g. "Vacation", "Schedule Conflict") if unavailable, or null if available.
+     */
+    @Synchronized
+    @JvmOverloads
+    fun isMemberUnavailableOnDate(
+        teamCode: String,
+        memberUid: String,
+        memberName: String = "",
+        targetDate: String,
+        preferences: android.content.SharedPreferences? = null
+    ): String? {
+        val cleanDate = targetDate.trim()
+        if (cleanDate.isBlank()) return null
+
+        // 1. Direct user ranges check via getMemberUnavailableRanges
+        val directRanges = getMemberUnavailableRanges(memberUid, preferences, "", memberName)
+        val directConflict = directRanges.find { it.includes(cleanDate) }
+        if (directConflict != null) {
+            return directConflict.reason.ifBlank { "Schedule Conflict" }
+        }
+
+        // 2. Roster ranges check
+        val roster = getCachedRoster(teamCode, preferences)
+        val member = roster.find {
+            (memberUid.isNotBlank() && it.uid == memberUid) ||
+            (memberName.isNotBlank() && (it.fullName.equals(memberName, true) || it.username.equals(memberName, true)))
+        }
+        if (member != null) {
+            val rosterConflict = member.unavailableRanges.find { it.includes(cleanDate) }
+            if (rosterConflict != null) {
+                return rosterConflict.reason.ifBlank { "Schedule Conflict" }
+            }
+        }
+
+        // 3. Fallback to checkTeamAvailabilityForDate
+        val (_, unavailList) = checkTeamAvailabilityForDate(teamCode, cleanDate, preferences)
+        val unavailMatch = unavailList.find { (m, _) ->
+            (memberUid.isNotBlank() && m.uid == memberUid) ||
+            (memberName.isNotBlank() && (m.fullName.equals(memberName, true) || m.username.equals(memberName, true)))
+        }
+        return unavailMatch?.second?.ifBlank { "Schedule Conflict" }
+    }
+
     // ===============================================================
     // Worship Services Management & Caching
     // ===============================================================
@@ -4273,6 +4318,26 @@ object TeamRepository {
                 )
             )
             return
+        }
+
+        if (substitution.type.equals("Exclusion", ignoreCase = true) && substitution.serviceDate.isNotBlank()) {
+            val conflictReason = isMemberUnavailableOnDate(
+                teamCode = code,
+                memberUid = substitution.substituteUid,
+                memberName = substitution.substituteName,
+                targetDate = substitution.serviceDate,
+                preferences = preferences
+            )
+            if (conflictReason != null) {
+                onComplete?.invoke(
+                    Result.failure(
+                        IllegalStateException(
+                            "${substitution.substituteName} is marked as unavailable on ${substitution.serviceDate} ($conflictReason). Please select an available teammate."
+                        )
+                    )
+                )
+                return
+            }
         }
 
         saveSubstitutionLocally(code, substitution, preferences)

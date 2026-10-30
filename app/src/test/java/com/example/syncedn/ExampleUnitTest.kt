@@ -4896,4 +4896,143 @@ class ExampleUnitTest {
             renameNotif!!.message
         )
     }
+
+    @Test
+    fun testExclusionBlocksUnavailableSubstituteAndPreventsLockout() {
+        val prefs = FakePreferences()
+        val repo = com.example.syncedn.data.database.TeamRepository
+        val teamCode = "EXCL01"
+        val serviceDate = "2026-11-22"
+        val serviceId = "srv_excl_101"
+        val requesterUid = "req_user_1"
+        val requesterName = "Joshua Member"
+
+        val unavailableSubstituteUid = "unavail_user_2"
+        val unavailableSubstituteName = "Mark Unavailable"
+
+        val availableSubstituteUid = "avail_user_3"
+        val availableSubstituteName = "Sarah Available"
+
+        // Setup mock roster
+        val member1 = com.example.syncedn.data.model.TeamMember(
+            uid = requesterUid,
+            fullName = requesterName,
+            username = "joshua",
+            role = "Member",
+            ministryRole = "Guitarist"
+        )
+        val member2 = com.example.syncedn.data.model.TeamMember(
+            uid = unavailableSubstituteUid,
+            fullName = unavailableSubstituteName,
+            username = "mark",
+            role = "Member",
+            ministryRole = "Guitarist"
+        )
+        val member3 = com.example.syncedn.data.model.TeamMember(
+            uid = availableSubstituteUid,
+            fullName = availableSubstituteName,
+            username = "sarah",
+            role = "Member",
+            ministryRole = "Vocalist"
+        )
+
+        repo.saveRosterLocally(teamCode, listOf(member1, member2, member3), prefs)
+
+        // Set member2 as unavailable for 2026-11-20 to 2026-11-25 (covers serviceDate 2026-11-22)
+        val unavailRange = com.example.syncedn.data.model.UnavailableRange(
+            id = "range_m2_1",
+            startDate = "2026-11-20",
+            endDate = "2026-11-25",
+            reason = "Out of Town Ministry Conference"
+        )
+        repo.addUnavailableRange(unavailableSubstituteUid, unavailRange, prefs)
+
+        // 1. Verify conflict detection
+        val conflictReason = repo.isMemberUnavailableOnDate(
+            teamCode = teamCode,
+            memberUid = unavailableSubstituteUid,
+            memberName = unavailableSubstituteName,
+            targetDate = serviceDate,
+            preferences = prefs
+        )
+        assertNotNull("Conflict reason must be detected for unavailable substitute", conflictReason)
+        assertEquals("Out of Town Ministry Conference", conflictReason)
+
+        val noConflict = repo.isMemberUnavailableOnDate(
+            teamCode = teamCode,
+            memberUid = availableSubstituteUid,
+            memberName = availableSubstituteName,
+            targetDate = serviceDate,
+            preferences = prefs
+        )
+        assertNull("Available substitute must return null conflict", noConflict)
+
+        // 2. Attempt to create Exclusion substitution with unavailable substitute
+        val invalidSub = com.example.syncedn.data.model.SubstitutionData(
+            id = "sub_invalid_1",
+            teamCode = teamCode,
+            serviceId = serviceId,
+            serviceTitle = "Sunday Worship Service",
+            serviceDate = serviceDate,
+            requesterUid = requesterUid,
+            requesterName = requesterName,
+            role = "Guitarist",
+            substituteUid = unavailableSubstituteUid,
+            substituteName = unavailableSubstituteName,
+            reason = "[Exclusion] Unable to attend",
+            type = "Exclusion",
+            status = "Pending",
+            createdBy = requesterUid
+        )
+
+        var failureResult: Result<com.example.syncedn.data.model.SubstitutionData>? = null
+        repo.createSubstitutionRequest(invalidSub, prefs) { res ->
+            failureResult = res
+        }
+
+        assertNotNull(failureResult)
+        assertTrue("Submitting exclusion with unavailable member must fail", failureResult!!.isFailure)
+        assertTrue(
+            "Error message should mention unavailable member",
+            failureResult!!.exceptionOrNull()?.message?.contains("unavailable") == true
+        )
+
+        // 3. User MUST NOT be locked out from making another request
+        val isLockedOut = repo.hasActiveSubstitutionForService(
+            teamCode = teamCode,
+            serviceId = serviceId,
+            serviceTitle = "Sunday Worship Service",
+            serviceDate = serviceDate,
+            requesterUid = requesterUid,
+            requesterName = requesterName,
+            preferences = prefs
+        )
+        assertFalse("User must NOT be locked out after rejected unavailable substitute", isLockedOut)
+
+        // 4. Submitting with valid available substitute must succeed
+        val validSub = invalidSub.copy(
+            id = "sub_valid_1",
+            substituteUid = availableSubstituteUid,
+            substituteName = availableSubstituteName
+        )
+        var successResult: Result<com.example.syncedn.data.model.SubstitutionData>? = null
+        repo.createSubstitutionRequest(validSub, prefs) { res ->
+            successResult = res
+        }
+
+        assertNotNull(successResult)
+        assertTrue("Submitting exclusion with available member must succeed", successResult!!.isSuccess)
+        assertTrue(
+            "User now has active substitution request",
+            repo.hasActiveSubstitutionForService(
+                teamCode = teamCode,
+                serviceId = serviceId,
+                serviceTitle = "Sunday Worship Service",
+                serviceDate = serviceDate,
+                requesterUid = requesterUid,
+                requesterName = requesterName,
+                preferences = prefs
+            )
+        )
+    }
 }
