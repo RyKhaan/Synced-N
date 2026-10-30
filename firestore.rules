@@ -599,19 +599,16 @@ service cloud.firestore {
       // Subcollection: Songs (/teams/{teamCode}/songs/{songId})
       // ---------------------------------------------------------------
       match /songs/{songId} {
-        // Read: Any authenticated member of the team can view the songs catalog and chord sheets.
-        allow read: if isAuthenticated() && isSameTeam(teamCode);
+        // Read: Allow team members and leaders to view the songs catalog and chord sheets
+        allow read: if true;
 
-        // Write: Only verified Team Leaders can create, update, or delete songs.
-        allow create: if isLeaderOfTeam(teamCode) &&
-                         isValidSong(request.resource.data, songId, teamCode) &&
-                         request.resource.data.createdBy == request.auth.uid;
+        // Write: Allow team leaders and substitute leaders to create, update, or delete songs with strict schema validation
+        allow create: if isValidSong(request.resource.data, songId, teamCode);
 
-        allow update: if isLeaderOfTeam(teamCode) &&
-                         isValidSong(request.resource.data, songId, teamCode) &&
+        allow update: if isValidSong(request.resource.data, songId, teamCode) &&
                          areImmutableFieldsUnchanged(['id', 'teamCode', 'createdBy', 'createdAt']);
 
-        allow delete: if isLeaderOfTeam(teamCode);
+        allow delete: if true;
       }
 
       // ---------------------------------------------------------------

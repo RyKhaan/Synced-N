@@ -23,6 +23,7 @@ class MainActivity : MemberActivity() {
         }
 
         val requestedStart = intent.getStringExtra("startPage")
+        val requestedTeamTab = intent.getStringExtra("teamTab")
         if (!requestedStart.isNullOrBlank() && requestedStart in listOf("login", "start", "register")) {
             navigate(requestedStart)
             return
@@ -45,17 +46,30 @@ class MainActivity : MemberActivity() {
         val removedTeamCode = preferences.getString("removedTeamCode", "").orEmpty()
         val removed = preferences.getBoolean("removedByLeader", false) && (removedTeamCode.isBlank() || teamCode.isBlank() || removedTeamCode.equals(teamCode, ignoreCase = true))
 
+        val targetStartPage = requestedStart?.takeIf { it.isNotBlank() && it !in listOf("login", "start", "register") } ?: "home"
         if (savedInstanceState == null && effectiveUid.isNotBlank() && team.isNotBlank() && !leftTeam && !removed) {
             if (userRole.equals("Leader", ignoreCase = true) || userMinistry.equals("Substitute Leader", ignoreCase = true) || isLeadUser) {
-                startActivity(Intent(this, AdminActivity::class.java).putExtra("startPage", "home"))
+                startActivity(
+                    Intent(this, AdminActivity::class.java)
+                        .putExtra("startPage", targetStartPage)
+                        .apply {
+                            if (!requestedTeamTab.isNullOrBlank()) putExtra("teamTab", requestedTeamTab)
+                        }
+                )
                 finish()
             } else {
-                startActivity(Intent(this, MemberActivity::class.java).putExtra("startPage", "home"))
+                startActivity(
+                    Intent(this, MemberActivity::class.java)
+                        .putExtra("startPage", targetStartPage)
+                        .apply {
+                            if (!requestedTeamTab.isNullOrBlank()) putExtra("teamTab", requestedTeamTab)
+                        }
+                )
                 finish()
             }
             return
         } else if (savedInstanceState == null && effectiveUid.isNotBlank() && (team.isBlank() || removed)) {
-            navigate("teamChoice")
+            navigate(if (requestedStart == "joinTeam") "joinTeam" else "teamChoice")
             return
         }
     }

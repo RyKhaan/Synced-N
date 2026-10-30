@@ -2748,10 +2748,7 @@ object TeamRepository {
 
         if (preferences != null) {
             try {
-                var raw = preferences.getString("team_services_$code", null)
-                if (raw.isNullOrBlank()) {
-                    raw = preferences.getString("leaderServices", "[]")
-                }
+                val raw = preferences.getString("team_services_$code", null)
                 val array = org.json.JSONArray(raw.orEmpty().ifBlank { "[]" })
                 val list = mutableListOf<ServiceData>()
                 for (i in 0 until array.length()) {
@@ -3445,6 +3442,79 @@ object TeamRepository {
     }
 
     /**
+     * Attaches a real-time snapshot listener to the team songs subcollection so songs added,
+     * edited, or deleted by either the Worship Leader or Substitute Leader sync immediately
+     * across all users and devices.
+     */
+    fun subscribeToSongs(
+        teamCode: String,
+        preferences: android.content.SharedPreferences? = null,
+        onUpdate: (List<SongData>) -> Unit
+    ): ListenerRegistration? {
+        val code = teamCode.trim().uppercase()
+        if (code.isBlank()) return null
+
+        val initialCached = getCachedSongs(code, preferences)
+        if (initialCached.isNotEmpty()) {
+            onUpdate(initialCached)
+        }
+
+        return try {
+            db.collection(TEAMS_COLLECTION)
+                .document(code)
+                .collection(SONGS_SUBCOLLECTION)
+                .addSnapshotListener { snapshot, err ->
+                    if (err != null) {
+                        android.util.Log.e("TeamRepository", "subscribeToSongs error: ${err.message}")
+                        return@addSnapshotListener
+                    }
+                    if (snapshot != null) {
+                        lastSongsFetchTimes[code] = System.currentTimeMillis()
+                        val fetched = snapshot.documents.mapNotNull { doc ->
+                            doc.data?.let { data ->
+                                val parsed = SongData.fromMap(data)
+                                if (parsed.id.isBlank()) parsed.copy(id = doc.id) else parsed
+                            }
+                        }
+                        val defaultSeeds = getDefaultSeedSongs(code)
+                        val deletedKeys = getDeletedSongKeys(code, preferences)
+                        val activeSeeds = defaultSeeds.filter {
+                            it.id.lowercase() !in deletedKeys && it.title.trim().lowercase() !in deletedKeys
+                        }
+                        val merged = mutableListOf<SongData>()
+                        merged.addAll(
+                            fetched.filter {
+                                it.id.lowercase() !in deletedKeys && it.title.trim().lowercase() !in deletedKeys
+                            }
+                        )
+                        activeSeeds.forEach { seed ->
+                            val existingIdx = merged.indexOfFirst { it.title.equals(seed.title, ignoreCase = true) }
+                            if (existingIdx < 0) {
+                                merged.add(seed)
+                            } else {
+                                val existing = merged[existingIdx]
+                                if (!com.example.syncedn.ChordSheet.hasChords(existing.sheet) &&
+                                    com.example.syncedn.ChordSheet.hasChords(seed.sheet)
+                                ) {
+                                    merged[existingIdx] = existing.copy(
+                                        sheet = seed.sheet,
+                                        lyrics = if (existing.lyrics.isBlank()) seed.lyrics else existing.lyrics
+                                    )
+                                }
+                            }
+                        }
+                        val sorted = merged.sortedBy { it.title.lowercase() }
+                        saveSongsLocally(code, sorted, preferences)
+                        onUpdate(sorted)
+                    }
+                }
+        } catch (e: Throwable) {
+            android.util.Log.e("TeamRepository", "subscribeToSongs exception: ${e.message}", e)
+            null
+        }
+    }
+
+    /**
      * Saves a song to local cache and synchronizes to Cloud Firestore.
      */
     fun saveSong(
@@ -3459,16 +3529,24 @@ object TeamRepository {
             return
         }
 
-        saveSongLocally(code, song, preferences)
+        val effectiveCreatedBy = song.createdBy.ifBlank {
+            com.example.syncedn.data.auth.AuthManager.currentUser?.uid?.takeIf { it.isNotBlank() } ?: "leader"
+        }
+        val normalizedSong = song.copy(
+            teamCode = code,
+            createdBy = effectiveCreatedBy
+        )
+
+        saveSongLocally(code, normalizedSong, preferences)
 
         try {
             db.collection(TEAMS_COLLECTION)
                 .document(code)
                 .collection(SONGS_SUBCOLLECTION)
-                .document(song.id)
-                .set(song.toMap(), com.google.firebase.firestore.SetOptions.merge())
+                .document(normalizedSong.id)
+                .set(normalizedSong.toMap(), com.google.firebase.firestore.SetOptions.merge())
                 .addOnSuccessListener {
-                    onComplete?.invoke(Result.success(song))
+                    onComplete?.invoke(Result.success(normalizedSong))
                 }
                 .addOnFailureListener { err ->
                     android.util.Log.e("TeamRepository", "Firestore saveSong failed: ${err.message}", err)
@@ -3967,6 +4045,45 @@ object TeamRepository {
     }
 
     /**
+     * Checks whether the given user/member already has an active (non-cancelled, non-declined)
+     * substitution request for the specified service/schedule. Enforces the 1-request-per-service
+     * per-member rule to prevent spamming.
+     */
+    fun hasActiveSubstitutionForService(
+        teamCode: String,
+        serviceId: String,
+        serviceTitle: String,
+        serviceDate: String = "",
+        requesterUid: String = "",
+        requesterName: String = "",
+        preferences: android.content.SharedPreferences? = null
+    ): Boolean {
+        val code = teamCode.trim().uppercase()
+        if (code.isBlank()) return false
+        val cleanTitle = serviceTitle.trim()
+        val cleanDate = serviceDate.trim()
+        val cleanUid = requesterUid.trim()
+        val cleanName = requesterName.trim()
+
+        return getCachedSubstitutions(code, preferences).any { existing ->
+            val isActive = !existing.status.equals("Cancelled", ignoreCase = true) &&
+                !existing.status.equals("Declined", ignoreCase = true)
+            if (!isActive) return@any false
+
+            val sameRequester = (cleanUid.isNotBlank() && existing.requesterUid.isNotBlank() && existing.requesterUid == cleanUid) ||
+                (cleanName.isNotBlank() && existing.requesterName.isNotBlank() && existing.requesterName.equals(cleanName, ignoreCase = true))
+            if (!sameRequester) return@any false
+
+            val sameServiceById = serviceId.isNotBlank() && existing.serviceId.isNotBlank() && existing.serviceId == serviceId
+            val sameServiceByTitleAndDate = cleanTitle.isNotBlank() &&
+                existing.serviceTitle.trim().equals(cleanTitle, ignoreCase = true) &&
+                (cleanDate.isBlank() || existing.serviceDate.isBlank() || existing.serviceDate.trim().equals(cleanDate, ignoreCase = true))
+
+            sameServiceById || sameServiceByTitleAndDate
+        }
+    }
+
+    /**
      * Creates a new substitution request in Firestore and updates the local cache.
      */
     fun createSubstitutionRequest(
@@ -3977,6 +4094,24 @@ object TeamRepository {
         val code = substitution.teamCode.trim().uppercase()
         if (code.isBlank() || substitution.id.isBlank()) {
             onComplete?.invoke(Result.failure(IllegalArgumentException("teamCode and id cannot be blank")))
+            return
+        }
+
+        if (hasActiveSubstitutionForService(
+                teamCode = code,
+                serviceId = substitution.serviceId,
+                serviceTitle = substitution.serviceTitle,
+                serviceDate = substitution.serviceDate,
+                requesterUid = substitution.requesterUid,
+                requesterName = substitution.requesterName,
+                preferences = preferences
+            )
+        ) {
+            onComplete?.invoke(
+                Result.failure(
+                    IllegalStateException("You have already submitted a substitute request for this schedule. Only 1 request is allowed per service.")
+                )
+            )
             return
         }
 
@@ -4550,7 +4685,9 @@ object TeamRepository {
                cur.editedAt != incoming.editedAt ||
                cur.isDeleted != incoming.isDeleted ||
                cur.deletedAt != incoming.deletedAt ||
-               cur.mediaUrl != incoming.mediaUrl
+               cur.mediaUrl != incoming.mediaUrl ||
+               cur.replyToText != incoming.replyToText ||
+               cur.replyToSender != incoming.replyToSender
     }
 
     /**
@@ -4685,9 +4822,11 @@ object TeamRepository {
         }
         val cached = getCachedChatMessages(code, preferences)
         val updatedList = cached.map {
-            if (it.id == messageId) {
-                it.copy(isDeleted = true, deletedAt = now, text = "", mediaUrl = "")
-            } else it
+            when {
+                it.id == messageId -> it.copy(isDeleted = true, deletedAt = now, text = "", mediaUrl = "")
+                it.replyToId == messageId -> it.copy(replyToText = "", replyToSender = "")
+                else -> it
+            }
         }
         saveAllChatMessagesLocally(code, updatedList, preferences)
 
@@ -4698,12 +4837,25 @@ object TeamRepository {
                 "text" to "",
                 "mediaUrl" to ""
             )
-            db.collection(TEAMS_COLLECTION)
+            val messagesRef = db.collection(TEAMS_COLLECTION)
                 .document(code)
                 .collection(MESSAGES_SUBCOLLECTION)
-                .document(messageId)
+
+            messagesRef.document(messageId)
                 .set(retractionData, com.google.firebase.firestore.SetOptions.merge())
                 .addOnSuccessListener {
+                    // Best-effort clear of replyToText/replyToSender on any reply messages quoting this deleted message
+                    messagesRef.whereEqualTo("replyToId", messageId).get()
+                        .addOnSuccessListener { replySnap ->
+                            replySnap?.documents?.forEach { replyDoc ->
+                                replyDoc.reference.update(
+                                    mapOf(
+                                        "replyToText" to "",
+                                        "replyToSender" to ""
+                                    )
+                                )
+                            }
+                        }
                     onComplete?.invoke(Result.success(Unit))
                 }
                 .addOnFailureListener { err ->
@@ -4714,6 +4866,31 @@ object TeamRepository {
             android.util.Log.e("TeamRepository", "deleteChatMessage exception: ${e.message}", e)
             onComplete?.invoke(Result.success(Unit))
         }
+    }
+
+    private fun sanitizeChatListWithDeletedReplies(
+        rawMessages: List<ChatMessage>,
+        deletedIds: Set<String>
+    ): List<ChatMessage> {
+        val allDeletedIds = rawMessages
+            .filter { it.isDeleted || it.id in deletedIds || isMessageRetracted(it.id) }
+            .map { it.id }
+            .toSet() + deletedIds
+
+        return rawMessages.map { parsed ->
+            val sanitizedSelf = if (parsed.isDeleted || parsed.id in allDeletedIds || isMessageRetracted(parsed.id)) {
+                parsed.copy(isDeleted = true, text = "", mediaUrl = "")
+            } else {
+                parsed
+            }
+            if (sanitizedSelf.replyToId.isNotBlank() &&
+                (sanitizedSelf.replyToId in allDeletedIds || isMessageRetracted(sanitizedSelf.replyToId))
+            ) {
+                sanitizedSelf.copy(replyToText = "", replyToSender = "")
+            } else {
+                sanitizedSelf
+            }
+        }.sortedBy { it.timestamp }
     }
 
     fun listenTeamMessages(
@@ -4727,7 +4904,8 @@ object TeamRepository {
         // Immediately emit cached messages so UI is never empty
         val initialCached = getCachedChatMessages(code, preferences)
         if (initialCached.isNotEmpty()) {
-            onUpdate(initialCached)
+            val deletedIds = preferences?.getStringSet("deleted_chat_ids_$code", emptySet()) ?: emptySet()
+            onUpdate(sanitizeChatListWithDeletedReplies(initialCached, deletedIds))
         }
 
         return try {
@@ -4741,18 +4919,14 @@ object TeamRepository {
                     }
                     if (snapshot != null) {
                         val deletedIds = preferences?.getStringSet("deleted_chat_ids_$code", emptySet()) ?: emptySet()
-                        val remoteMessages = snapshot.documents.mapNotNull { doc ->
+                        val rawMessages = snapshot.documents.mapNotNull { doc ->
                             doc.data?.let { data ->
-                                val parsed = ChatMessage.fromMap(data).let { m ->
+                                ChatMessage.fromMap(data).let { m ->
                                     if (m.id.isBlank()) m.copy(id = doc.id) else m
                                 }
-                                if (parsed.isDeleted || parsed.id in deletedIds || isMessageRetracted(parsed.id)) {
-                                    parsed.copy(isDeleted = true, text = "", mediaUrl = "")
-                                } else {
-                                    parsed
-                                }
                             }
-                        }.sortedBy { it.timestamp }
+                        }
+                        val remoteMessages = sanitizeChatListWithDeletedReplies(rawMessages, deletedIds)
 
                         // Firestore remote snapshot is authoritative across all devices
                         saveAllChatMessagesLocally(code, remoteMessages, preferences)
@@ -4780,10 +4954,14 @@ object TeamRepository {
                 .get()
                 .addOnSuccessListener { snapshot ->
                     val deletedIds = preferences?.getStringSet("deleted_chat_ids_$code", emptySet()) ?: emptySet()
-                    val msgs = snapshot.documents.mapNotNull { doc ->
-                        doc.data?.let { ChatMessage.fromMap(it) }
-                    }.filter { it.id !in deletedIds }
-                     .sortedBy { it.timestamp }
+                    val rawMsgs = snapshot.documents.mapNotNull { doc ->
+                        doc.data?.let { data ->
+                            ChatMessage.fromMap(data).let { m ->
+                                if (m.id.isBlank()) m.copy(id = doc.id) else m
+                            }
+                        }
+                    }
+                    val msgs = sanitizeChatListWithDeletedReplies(rawMsgs, deletedIds)
                     saveAllChatMessagesLocally(code, msgs, preferences)
                     onComplete(Result.success(msgs))
                 }

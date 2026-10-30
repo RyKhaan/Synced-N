@@ -4664,4 +4664,115 @@ class ExampleUnitTest {
         val shouldSuppressRejoinNotification = isAlreadyInTeam
         assertTrue(shouldSuppressRejoinNotification)
     }
+
+    @Test
+    fun testNineNewFeatures_SubSpam_SongSync_TeamIsolation_ChatReplies() {
+        val repo = com.example.syncedn.data.database.TeamRepository
+        val prefs = FakePreferences()
+        val teamCode = "NEW999"
+
+        // 1. Strict Team Data Isolation: getCachedServices for a new teamCode must NOT inherit legacy "leaderServices"
+        prefs.edit().putString("leaderServices", "[{\"id\":\"legacy_1\",\"title\":\"Old Team Service\",\"status\":\"Published\"}]").apply()
+        val servicesForNewTeam = repo.getCachedServices(teamCode, prefs)
+        assertTrue("New team must not inherit legacy leaderServices from another team", servicesForNewTeam.isEmpty())
+
+        // 2. Substitute Request Anti-Spam (1 request per service per member)
+        assertFalse(
+            repo.hasActiveSubstitutionForService(
+                teamCode = teamCode,
+                serviceId = "srv_101",
+                serviceTitle = "Sunday Morning Service",
+                serviceDate = "2026-11-08",
+                requesterUid = "uid_member_1",
+                requesterName = "Joshua Member",
+                preferences = prefs
+            )
+        )
+
+        val firstSub = com.example.syncedn.data.model.SubstitutionData(
+            id = "sub_1",
+            teamCode = teamCode,
+            serviceId = "srv_101",
+            serviceTitle = "Sunday Morning Service",
+            serviceDate = "2026-11-08",
+            requesterUid = "uid_member_1",
+            requesterName = "Joshua Member",
+            role = "Guitarist",
+            substituteUid = "uid_member_2",
+            substituteName = "Ryan Teammate",
+            reason = "[Exclusion] Family event",
+            type = "Exclusion",
+            status = "Pending",
+            createdBy = "uid_member_1"
+        )
+        var firstSuccess = false
+        repo.createSubstitutionRequest(firstSub, prefs) { res ->
+            firstSuccess = res.isSuccess
+        }
+        assertTrue("First substitution request for service should succeed", firstSuccess)
+        assertTrue(
+            "Member must now be detected as having an active substitution request for srv_101",
+            repo.hasActiveSubstitutionForService(
+                teamCode = teamCode,
+                serviceId = "srv_101",
+                serviceTitle = "Sunday Morning Service",
+                serviceDate = "2026-11-08",
+                requesterUid = "uid_member_1",
+                requesterName = "Joshua Member",
+                preferences = prefs
+            )
+        )
+
+        val duplicateSub = firstSub.copy(id = "sub_2")
+        var secondAllowed = true
+        repo.createSubstitutionRequest(duplicateSub, prefs) { res ->
+            secondAllowed = res.isSuccess
+        }
+        assertFalse("Second substitution request by same member for same service must be blocked", secondAllowed)
+
+        // Different member on same service is still allowed
+        val otherMemberSub = firstSub.copy(
+            id = "sub_3",
+            requesterUid = "uid_member_3",
+            requesterName = "Another Member",
+            createdBy = "uid_member_3"
+        )
+        var otherMemberAllowed = false
+        repo.createSubstitutionRequest(otherMemberSub, prefs) { res ->
+            otherMemberAllowed = res.isSuccess
+        }
+        assertTrue("Different member on same service is allowed 1 request", otherMemberAllowed)
+
+        // 3. Chat Reply Content Removal when original message is deleted
+        val origMsg = com.example.syncedn.data.model.ChatMessage(
+            id = "msg_orig_1",
+            teamCode = teamCode,
+            senderUid = "uid_1",
+            senderName = "Leader Ryan",
+            text = "Rehearsal at 7 AM Saturday!"
+        )
+        val replyMsg = com.example.syncedn.data.model.ChatMessage(
+            id = "msg_reply_1",
+            teamCode = teamCode,
+            senderUid = "uid_2",
+            senderName = "Member Josh",
+            text = "Copy that!",
+            replyToId = "msg_orig_1",
+            replyToSender = "Leader Ryan",
+            replyToText = "Rehearsal at 7 AM Saturday!"
+        )
+        val replyMsgCleared = replyMsg.copy(replyToText = "", replyToSender = "")
+        assertTrue(
+            "hasChatMessageChanged must detect when replyToText/replyToSender is cleared",
+            repo.hasChatMessageChanged(replyMsg, replyMsgCleared)
+        )
+
+        repo.saveAllChatMessagesLocally(teamCode, listOf(origMsg, replyMsg), prefs)
+        repo.deleteChatMessage(teamCode, "msg_orig_1", prefs)
+        val afterDelete = repo.getCachedChatMessages(teamCode, prefs)
+        val updatedReply = afterDelete.find { it.id == "msg_reply_1" }
+        assertNotNull(updatedReply)
+        assertEquals("", updatedReply?.replyToText)
+        assertEquals("", updatedReply?.replyToSender)
+    }
 }

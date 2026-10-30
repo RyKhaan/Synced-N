@@ -146,6 +146,7 @@ open class MemberActivity : AppCompatActivity() {
 
     private var substitutionType = "Exclusion"
     private var servicesListener: com.google.firebase.firestore.ListenerRegistration? = null
+    private var songsListener: com.google.firebase.firestore.ListenerRegistration? = null
     private var substitutionsListener: com.google.firebase.firestore.ListenerRegistration? = null
     private var rosterListener: com.google.firebase.firestore.ListenerRegistration? = null
     private var customRolesListener: com.google.firebase.firestore.ListenerRegistration? = null
@@ -286,6 +287,14 @@ open class MemberActivity : AppCompatActivity() {
     private fun startRealtimeTeamListeners(teamCode: String) {
         val code = teamCode.trim().uppercase()
         if (code.isBlank()) return
+        songsListener?.remove()
+        songsListener = TeamRepository.subscribeToSongs(code, preferences) { _ ->
+            runOnUiThread {
+                if (!isFinishing && !isDestroyed && page in listOf("songs", "songDetails", "lineup")) {
+                    navigate(page, triggerRefresh = false)
+                }
+            }
+        }
         servicesListener?.remove()
         servicesListener = TeamRepository.subscribeToServices(code, isLeader = false, preferences) { updatedList ->
             runOnUiThread {
@@ -812,8 +821,12 @@ open class MemberActivity : AppCompatActivity() {
         )
         val isSubLeader = !isSelfExplicitMember && currentMinistryOnStart.equals("Substitute Leader", ignoreCase = true)
         if (isPrimaryLeader || isSubLeader) {
-            val intent = Intent(this, AdminActivity::class.java).putExtra("startPage", intent.getStringExtra("startPage") ?: "home")
-            startActivity(intent)
+            val adminIntent = Intent(this, AdminActivity::class.java)
+                .putExtra("startPage", intent.getStringExtra("startPage") ?: "home")
+            intent.getStringExtra("teamTab")?.takeIf { it.isNotBlank() }?.let {
+                adminIntent.putExtra("teamTab", it)
+            }
+            startActivity(adminIntent)
             finish()
             return
         }
@@ -839,6 +852,9 @@ open class MemberActivity : AppCompatActivity() {
             substitute = state.getString("substitute", "John Doe") ?: "John Doe"
             songsReturnPage = state.getString("songsReturnPage", "home") ?: "home"
             state.getStringArrayList("lineupSongs")?.let { lineupSongs.clear(); lineupSongs.addAll(it) }
+        }
+        intent.getStringExtra("teamTab")?.takeIf { it.isNotBlank() }?.let { requestedTab ->
+            teamTab = requestedTab
         }
         navigate(savedInstanceState?.getString("page") ?: intent.getStringExtra("startPage") ?: initialPage)
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
@@ -877,9 +893,22 @@ open class MemberActivity : AppCompatActivity() {
         })
     }
 
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        intent.getStringExtra("teamTab")?.takeIf { it.isNotBlank() }?.let { requestedTab ->
+            teamTab = requestedTab
+        }
+        intent.getStringExtra("startPage")?.takeIf { it.isNotBlank() }?.let { targetPage ->
+            navigate(targetPage)
+        }
+    }
+
     override fun onDestroy() {
         servicesListener?.remove()
         servicesListener = null
+        songsListener?.remove()
+        songsListener = null
         substitutionsListener?.remove()
         substitutionsListener = null
         rosterListener?.remove()
@@ -1039,6 +1068,13 @@ open class MemberActivity : AppCompatActivity() {
                             if (result.isSuccess) {
                                 val generatedCode = result.getOrNull().orEmpty()
                                 teamName = enteredTeamName
+                                chatMessages.clear()
+                                selectedSheetService = null
+                                preferences.edit {
+                                    remove("leaderServices")
+                                    remove("leaderDraft")
+                                    remove("requestServiceName")
+                                }
                                 saveUserTeamState("Leader", enteredTeamName, generatedCode)
                                 FirestoreManager.updateUserRoleAndTeam(uid, "Leader", enteredTeamName, generatedCode, emailStr)
                                 val leaderName = fullName.ifBlank { displayName }
@@ -2300,16 +2336,23 @@ open class MemberActivity : AppCompatActivity() {
     }
     private fun homeUpcomingRecord(): org.json.JSONObject? {
         val phtZone = java.util.TimeZone.getTimeZone("Asia/Manila")
-        val today = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).apply { timeZone = phtZone }.format(java.util.Date())
-        val published = storedServices().filter { it.optString("status") == "Published" }
-        val upcoming = published.filter { it.optString("date") >= today }.sortedWith(compareBy({ it.optString("date") }, { it.optString("start") }))
-        if (upcoming.isNotEmpty()) {
-            return upcoming.first()
+        val now = java.util.Date()
+        val today = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).apply { timeZone = phtZone }.format(now)
+        val nowHm = java.text.SimpleDateFormat("HH:mm", java.util.Locale.US).apply { timeZone = phtZone }.format(now)
+        val activeCode = preferences.getString("teamCode", "").orEmpty().trim()
+        val published = storedServices().filter {
+            it.optString("status") == "Published" &&
+                (activeCode.isBlank() || it.optString("teamCode").isBlank() || it.optString("teamCode").equals(activeCode, ignoreCase = true))
         }
-        return published.maxByOrNull { it.optString("date") + it.optString("start") }
+        val upcoming = published.filter {
+            val d = it.optString("date")
+            val end = it.optString("end").ifBlank { it.optString("start") }.ifBlank { "23:59" }
+            d > today || (d == today && end >= nowHm)
+        }.sortedWith(compareBy({ it.optString("date") }, { it.optString("start") }))
+        return upcoming.firstOrNull()
     }
     private fun formatHeroDateSubtitle(rawDate: String?, start: String?, end: String?): String {
-        if (rawDate.isNullOrBlank()) return "Sunday, May 18, 2025 - 9:00 AM"
+        if (rawDate.isNullOrBlank()) return "No service scheduled yet"
         val formattedDate = try {
             val inFormat = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).apply {
                 timeZone = java.util.TimeZone.getTimeZone("Asia/Manila")
@@ -2328,9 +2371,19 @@ open class MemberActivity : AppCompatActivity() {
 
     private fun homeUpcomingSecondRecord(): org.json.JSONObject? {
         val phtZone = java.util.TimeZone.getTimeZone("Asia/Manila")
-        val today = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).apply { timeZone = phtZone }.format(java.util.Date())
-        val published = storedServices().filter { it.optString("status") == "Published" }
-        val upcoming = published.filter { it.optString("date") >= today }.sortedWith(compareBy({ it.optString("date") }, { it.optString("start") }))
+        val now = java.util.Date()
+        val today = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).apply { timeZone = phtZone }.format(now)
+        val nowHm = java.text.SimpleDateFormat("HH:mm", java.util.Locale.US).apply { timeZone = phtZone }.format(now)
+        val activeCode = preferences.getString("teamCode", "").orEmpty().trim()
+        val published = storedServices().filter {
+            it.optString("status") == "Published" &&
+                (activeCode.isBlank() || it.optString("teamCode").isBlank() || it.optString("teamCode").equals(activeCode, ignoreCase = true))
+        }
+        val upcoming = published.filter {
+            val d = it.optString("date")
+            val end = it.optString("end").ifBlank { it.optString("start") }.ifBlank { "23:59" }
+            d > today || (d == today && end >= nowHm)
+        }.sortedWith(compareBy({ it.optString("date") }, { it.optString("start") }))
         if (upcoming.size > 1) {
             return upcoming[1]
         }
@@ -2351,10 +2404,10 @@ open class MemberActivity : AppCompatActivity() {
     private fun storedServices(): List<org.json.JSONObject> = try {
         val currentCode = preferences.getString("teamCode", "").orEmpty()
             .ifBlank { FirestoreManager.findCodeByTeamName(teamName).orEmpty() }
-        val cached = if (currentCode.isNotBlank()) {
-            TeamRepository.getCachedServices(currentCode, preferences).filter { it.status == "Published" }
-        } else emptyList()
-        if (cached.isNotEmpty()) {
+            .trim()
+            .uppercase()
+        if (currentCode.isNotBlank()) {
+            val cached = TeamRepository.getCachedServices(currentCode, preferences).filter { it.status == "Published" }
             cached.map { srv ->
                 val obj = org.json.JSONObject()
                 srv.toMap().forEach { (k, v) ->
@@ -2384,11 +2437,16 @@ open class MemberActivity : AppCompatActivity() {
         openSpecificService(record)
     }
     private fun openHomeSecondUpcoming() {
-        val record = homeUpcomingSecondRecord() ?: homeUpcomingRecord()
+        val record = homeUpcomingSecondRecord()
         openSpecificService(record)
     }
     private fun openSpecificService(record: org.json.JSONObject?) {
         serviceReturnPage = "home"
+        if (record == null && preferences.getString("teamCode", "").orEmpty().isNotBlank()) {
+            toast("No upcoming service scheduled yet.")
+            navigate("schedule")
+            return
+        }
         selectSheetService(record ?: sampleSheetService())
         selectedService = record?.optString("title") ?: "Sunday Worship Service"
         preferences.edit().putString("serviceDate", record?.optString("date") ?: "May 18, 2025")
@@ -2528,10 +2586,14 @@ open class MemberActivity : AppCompatActivity() {
                 clipToPadding = false
 
                 val textCol = vertical().apply {
-                    val rawTitle = upcomingRec?.optString("title")?.ifBlank { "Next Worship\nSession" } ?: "Next Worship\nSession"
-                    val formattedTitle = if (rawTitle.contains("Worship", ignoreCase = true) && !rawTitle.contains("\n")) {
-                        rawTitle.replaceFirst(" ", "\n")
-                    } else rawTitle
+                    val formattedTitle = if (upcomingRec != null) {
+                        val rawTitle = upcomingRec.optString("title").ifBlank { "Next Worship\nSession" }
+                        if (rawTitle.contains("Worship", ignoreCase = true) && !rawTitle.contains("\n")) {
+                            rawTitle.replaceFirst(" ", "\n")
+                        } else rawTitle
+                    } else {
+                        "No Upcoming\nService"
+                    }
 
                     val titleTv = TextView(this@MemberActivity).apply {
                         text = formattedTitle
@@ -2547,7 +2609,11 @@ open class MemberActivity : AppCompatActivity() {
                     val rawDate = upcomingRec?.optString("date")
                     val rawStart = upcomingRec?.optString("start")
                     val rawEnd = upcomingRec?.optString("end")
-                    val formattedSubtitle = formatHeroDateSubtitle(rawDate, rawStart, rawEnd)
+                    val formattedSubtitle = if (upcomingRec != null) {
+                        formatHeroDateSubtitle(rawDate, rawStart, rawEnd)
+                    } else {
+                        "No service scheduled yet"
+                    }
 
                     val subTv = TextView(this@MemberActivity).apply {
                         text = formattedSubtitle
@@ -2563,7 +2629,11 @@ open class MemberActivity : AppCompatActivity() {
                         background = bg(Color.argb(175, 26, 32, 44), 16, Color.argb(90, 255, 255, 255))
                         setPadding(dp(14), dp(6), dp(14), dp(6))
                         val vTv = TextView(this@MemberActivity).apply {
-                            text = upcomingRec?.optString("venue")?.ifBlank { "Main Sanctuary" } ?: "Main Sanctuary"
+                            text = if (upcomingRec != null) {
+                                upcomingRec.optString("venue").ifBlank { "Main Sanctuary" }
+                            } else {
+                                "Waiting for schedule"
+                            }
                             setTextColor(Color.WHITE)
                             textSize = 12f
                             typeface = Typeface.DEFAULT_BOLD
@@ -2578,14 +2648,29 @@ open class MemberActivity : AppCompatActivity() {
 
                 val chevronBtn = FrameLayout(this@MemberActivity).apply {
                     background = bg(Color.argb(135, 30, 41, 59), 23, Color.argb(60, 255, 255, 255))
-                    val arrow = TextView(this@MemberActivity).apply {
-                        text = "›"
-                        setTextColor(Color.WHITE)
-                        textSize = 24f
-                        typeface = Typeface.DEFAULT_BOLD
-                        gravity = Gravity.CENTER
+                    val arrow = object : View(this@MemberActivity) {
+                        private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                            color = Color.WHITE
+                            style = Paint.Style.STROKE
+                            strokeWidth = dp(2).toFloat()
+                            strokeCap = Paint.Cap.ROUND
+                            strokeJoin = Paint.Join.ROUND
+                        }
+                        override fun onDraw(canvas: Canvas) {
+                            super.onDraw(canvas)
+                            val cx = width / 2f
+                            val cy = height / 2f
+                            val arm = dp(5).toFloat()
+                            val shiftX = dp(1).toFloat()
+                            val path = android.graphics.Path().apply {
+                                moveTo(cx - arm / 2f + shiftX, cy - arm)
+                                lineTo(cx + arm / 2f + shiftX, cy)
+                                lineTo(cx - arm / 2f + shiftX, cy + arm)
+                            }
+                            canvas.drawPath(path, paint)
+                        }
                     }
-                    addView(arrow, FrameLayout.LayoutParams(-2, -2, Gravity.CENTER))
+                    addView(arrow, FrameLayout.LayoutParams(-1, -1, Gravity.CENTER))
                 }
                 addView(chevronBtn, LinearLayout.LayoutParams(dp(46), dp(46)).apply {
                     gravity = Gravity.CENTER_VERTICAL
@@ -4469,6 +4554,8 @@ open class MemberActivity : AppCompatActivity() {
                 col.add(memberRow(name, role, badge, photoUri = photoUri, uid = uid))
                 col.space(8)
             }
+        } else if (preferences.getString("teamCode", "").orEmpty().isNotBlank()) {
+            col.add(text("No members assigned to this service yet.", 13, Color.GRAY))
         } else {
             ministryMembers.take(4).forEach { (name, role, badge) ->
                 val photoUri = findMemberPhotoUri(name = name)
@@ -4498,9 +4585,27 @@ open class MemberActivity : AppCompatActivity() {
             }
         }
 
+        val activeTeamCodeForSub = preferences.getString(SessionManager.KEY_TEAM_CODE, "").orEmpty()
+            .ifBlank { preferences.getString("teamCode", "").orEmpty() }
+        val activeServiceIdForSub = currentSheetService?.optString("id").orEmpty()
+        val activeServiceTitleForSub = currentSheetService?.optString("title")?.ifBlank { selectedService } ?: selectedService
+        val alreadyHasSubRequest = TeamRepository.hasActiveSubstitutionForService(
+            teamCode = activeTeamCodeForSub,
+            serviceId = activeServiceIdForSub,
+            serviceTitle = activeServiceTitleForSub,
+            serviceDate = sDate,
+            requesterUid = currentUid,
+            requesterName = currentName,
+            preferences = preferences
+        )
+
         col.space(28)
         if (isServicePast) {
             col.add(text("Service has ended • Substitution closed", 12, Color.GRAY, centered = true))
+        } else if (alreadyHasSubRequest) {
+            col.add(memberButton("Substitute Request Already Submitted", Color.GRAY) {
+                toast("You have already submitted a substitute request for this schedule. Only 1 request is allowed per service.")
+            }, -1, 48)
         } else {
             val label = if (isUserAssigned) "Request Exclusion (Find Cover)" else "Request Inclusion (Step-In / Swap)"
             col.add(memberButton(label) {
@@ -4750,17 +4855,43 @@ open class MemberActivity : AppCompatActivity() {
         }
         col.space(12)
 
+        val alreadyRequestedForService = TeamRepository.hasActiveSubstitutionForService(
+            teamCode = activeCode,
+            serviceId = serviceId,
+            serviceTitle = serviceTitle,
+            serviceDate = serviceDate,
+            requesterUid = currentUid,
+            requesterName = currentName,
+            preferences = preferences
+        )
         val submitBtn = Button(this).apply {
-            text = if (isServicePast) "Service Completed" else "Submit Request"
+            text = when {
+                isServicePast -> "Service Completed"
+                alreadyRequestedForService -> "Request Already Submitted"
+                else -> "Submit Request"
+            }
             setTextColor(Color.WHITE)
             textSize = 15f
             typeface = Typeface.DEFAULT_BOLD
             isAllCaps = false
-            isEnabled = !isServicePast
-            background = if (isServicePast) bg(Color.GRAY, 24) else bg(purple, 24)
+            isEnabled = !isServicePast && !alreadyRequestedForService
+            background = if (isServicePast || alreadyRequestedForService) bg(Color.GRAY, 24) else bg(purple, 24)
             setOnClickListener {
                 if (isServicePast) {
                     toast("Cannot submit substitution for a past service.")
+                    return@setOnClickListener
+                }
+                if (TeamRepository.hasActiveSubstitutionForService(
+                        teamCode = activeCode,
+                        serviceId = serviceId,
+                        serviceTitle = serviceTitle,
+                        serviceDate = serviceDate,
+                        requesterUid = currentUid,
+                        requesterName = currentName,
+                        preferences = preferences
+                    )
+                ) {
+                    toast("You have already submitted a substitute request for this schedule. Only 1 request is allowed per service.")
                     return@setOnClickListener
                 }
                 val rawReason = reason.text.toString().trim()
@@ -4811,12 +4942,13 @@ open class MemberActivity : AppCompatActivity() {
                                 this@MemberActivity,
                                 preferences,
                                 if (substitutionType == "Inclusion") "Inclusion Request Submitted" else "Substitution Request Submitted",
-                                "${newSub.requesterName} requested substitution with ${newSub.substituteName} for ${newSub.role} in ${newSub.serviceTitle}."
+                                "${newSub.requesterName} requested substitution with ${newSub.substituteName} for ${newSub.role} in ${newSub.serviceTitle}.",
+                                targetPage = "notifications"
                             )
+                            navigate("notifications")
                         } else {
-                            toast("Saved offline: ${result.exceptionOrNull()?.message ?: ""}")
+                            toast(result.exceptionOrNull()?.message ?: "Could not submit substitute request.")
                         }
-                        navigate("notifications")
                     }
                 }
             }
@@ -4945,10 +5077,10 @@ open class MemberActivity : AppCompatActivity() {
             }
         }
 
-        // Migrate legacy demo substitution if needed
+        // Migrate legacy demo substitution only when no real teamCode is active
         val legacyServiceName = preferences.getString("requestServiceName", null)
         val cached = TeamRepository.getCachedSubstitutions(activeCode, preferences)
-        if (!legacyServiceName.isNullOrBlank() && cached.isEmpty()) {
+        if (activeCode.isBlank() && !legacyServiceName.isNullOrBlank() && cached.isEmpty()) {
             val legacySub = SubstitutionData(
                 id = "legacy_demo_sub",
                 teamCode = activeCode,
@@ -5951,7 +6083,10 @@ open class MemberActivity : AppCompatActivity() {
                     )
                 }
                 setPadding(dp(14), dp(10), dp(14), dp(10))
-                val hasReply = msg.replyToText.isNotBlank() || msg.replyToSender.isNotBlank()
+                val isRepliedMsgDeleted = msg.replyToId.isNotBlank() &&
+                    (TeamRepository.isMessageRetracted(msg.replyToId) ||
+                     chatMessages.any { it.id == msg.replyToId && it.isDeleted })
+                val hasReply = !isRepliedMsgDeleted && (msg.replyToText.isNotBlank() || msg.replyToSender.isNotBlank())
                 if (hasReply) {
                     minimumWidth = dp(200)
                     val quoteBox = horizontal().apply {
@@ -6090,7 +6225,10 @@ open class MemberActivity : AppCompatActivity() {
                     )
                 }
                 setPadding(dp(14), dp(10), dp(14), dp(10))
-                val hasReply = msg.replyToText.isNotBlank() || msg.replyToSender.isNotBlank()
+                val isRepliedMsgDeleted = msg.replyToId.isNotBlank() &&
+                    (TeamRepository.isMessageRetracted(msg.replyToId) ||
+                     chatMessages.any { it.id == msg.replyToId && it.isDeleted })
+                val hasReply = !isRepliedMsgDeleted && (msg.replyToText.isNotBlank() || msg.replyToSender.isNotBlank())
                 if (hasReply) {
                     minimumWidth = dp(200)
                     val quoteBox = horizontal().apply {
