@@ -281,6 +281,7 @@ class AdminActivity : AppCompatActivity() {
         val cleanTeamLower = team.trim().lowercase()
         val activeCode = code.trim().uppercase()
         val transferred = preferences.getBoolean("transferred_leadership_$activeCode", false)
+        val designatedLeaderUid = preferences.getString("team_leader_uid_$activeCode", "").orEmpty().trim()
         val designatedLeader = preferences.getString("team_leader_email_$activeCode", "").orEmpty().trim().lowercase()
             .ifBlank { preferences.getString("team_leader_email_$cleanTeamLower", "").orEmpty().trim().lowercase() }
         val isExplicitMember = role.equals("Member", ignoreCase = true) || preferences.getString("role", "").equals("Member", ignoreCase = true)
@@ -395,6 +396,7 @@ class AdminActivity : AppCompatActivity() {
         val transferred = preferences.getBoolean("transferred_leadership_$activeCode", false)
         val selfRole = preferences.getString("role", "").orEmpty()
         val selfMinistry = preferences.getString("ministryRole", "").orEmpty()
+        val designatedLeaderUid = preferences.getString("team_leader_uid_$activeCode", "").orEmpty().trim()
         val designatedLeader = preferences.getString("team_leader_email_$activeCode", "").orEmpty().trim().lowercase()
             .ifBlank { preferences.getString("team_leader_email_${teamName.trim().lowercase()}", "").orEmpty().trim().lowercase() }
 
@@ -557,7 +559,7 @@ class AdminActivity : AppCompatActivity() {
                 preferences.getString("userId", "").orEmpty()
             }
         val myAdminEmail = preferences.getString("email", "").orEmpty().trim().lowercase()
-        if (myAdminEmail != "ryanlloydgenturo@gmail.com") {
+        if (true) {
             if (myAdminUid.isNotBlank()) {
                 userMembershipListener?.remove()
                 userMembershipListener = com.google.firebase.firestore.FirebaseFirestore.getInstance()
@@ -691,9 +693,6 @@ class AdminActivity : AppCompatActivity() {
 
     private fun isCurrentUserSubstituteLeader(): Boolean {
         val emailLower = preferences.getString("email", "").orEmpty().trim().lowercase()
-        if (emailLower == "ryanlloydgenturo@gmail.com" || fullName.equals("Ryan Lloyd Genturo", ignoreCase = true)) {
-            return false
-        }
         val myUid = currentUserId()
         val selfInRoster = teamRoster.find { m ->
             (myUid.isNotBlank() && m.uid == myUid) ||
@@ -722,12 +721,13 @@ class AdminActivity : AppCompatActivity() {
         val activeCode = preferences.getString("teamCode", "").orEmpty()
         val cleanTeamLower = teamName.trim().lowercase()
         val transferred = preferences.getBoolean("transferred_leadership_$activeCode", false)
+        val designatedLeaderUid = preferences.getString("team_leader_uid_$activeCode", "").orEmpty().trim()
         val designatedLeader = preferences.getString("team_leader_email_$activeCode", "").orEmpty().trim().lowercase()
             .ifBlank { preferences.getString("team_leader_email_$cleanTeamLower", "").orEmpty().trim().lowercase() }
         val isExplicitMember = remoteRole.equals("Member", ignoreCase = true) || remoteMinistryRole.equals("Member", ignoreCase = true)
-        val isDesignatedLead = (designatedLeader.isNotBlank() && designatedLeader == emailLower) ||
-                               (!transferred && designatedLeader.isBlank() && !isExplicitMember && (emailLower == "ryanlloydgenturo@gmail.com" || fullName.equals("Ryan Lloyd Genturo", ignoreCase = true)))
-        if (isDesignatedLead) {
+        val isDesignatedLead = (designatedLeaderUid.isNotBlank() && myUid == designatedLeaderUid) ||
+                               (designatedLeader.isNotBlank() && designatedLeader == emailLower)
+        if (isDesignatedLead && !isExplicitMember && !TeamRepository.isSubstituteLeader(remoteMinistryRole)) {
             return
         }
         val currentMinistry = preferences.getString("ministryRole", "").orEmpty()
@@ -3137,8 +3137,7 @@ class AdminActivity : AppCompatActivity() {
                     m.role.equals("Member", true) ||
                     TeamRepository.isOrdinaryMemberRole(m.ministryRole, m.role) ||
                     preferences.getString("user_role_${currentCode}_${m.uid}", "").equals("Member", true) ||
-                    preferences.getString("email_role_${currentCode}_$emailLower", "").equals("Member", true) ||
-                    (transferred && (emailLower == "ryanlloydgenturo@gmail.com" || m.fullName.equals("Ryan Lloyd Genturo", ignoreCase = true)))
+                    preferences.getString("email_role_${currentCode}_$emailLower", "").equals("Member", true)
                 )
                 val override = memberRolesMap.optString(m.uid).ifBlank {
                     memberRolesMap.optString(emailLower).ifBlank {
@@ -5234,12 +5233,10 @@ class AdminActivity : AppCompatActivity() {
         col.addView(rolesContainer)
 
         val isSubLeader = isCurrentUserSubstituteLeader()
-        val isTargetPrimary = roleMemberEmail.trim().lowercase() == "ryanlloydgenturo@gmail.com" ||
-                              roleMember.equals("Ryan Lloyd Genturo", ignoreCase = true)
         val assignableRoles = TeamRepository.filterAssignableRoles(
             roles = leaderRoles,
             isEditorSubstituteLeader = isSubLeader,
-            isTargetPrimaryLeader = isTargetPrimary
+            isTargetPrimaryLeader = !isSubLeader
         )
 
         fun renderRoles() {
@@ -5284,10 +5281,7 @@ class AdminActivity : AppCompatActivity() {
                     toast("Choose a role.")
                     return@setOnClickListener
                 }
-                if (isTargetPrimary && !selectedRole.equals("Worship Leader", ignoreCase = true)) {
-                    toast("Primary Leader is permanently assigned as Worship Leader.")
-                    return@setOnClickListener
-                }
+
                 if (isSubLeader && (selectedRole.equals("Substitute Leader", ignoreCase = true) || selectedRole.equals("Worship Leader", ignoreCase = true))) {
                     toast("Substitute Leaders cannot assign another Substitute Leader.")
                     return@setOnClickListener
@@ -5311,20 +5305,35 @@ class AdminActivity : AppCompatActivity() {
                 if (targetMember?.username.orEmpty().isNotBlank()) map.put(targetMember!!.username, selectedRole)
 
                 val isTargetLeader = selectedRole.equals("Substitute Leader", ignoreCase = true) ||
-                                     selectedRole.equals("Worship Leader", ignoreCase = true) ||
-                                     targetEmail == "ryanlloydgenturo@gmail.com" ||
-                                     roleMember.equals("Ryan Lloyd Genturo", ignoreCase = true)
+                                     selectedRole.equals("Worship Leader", ignoreCase = true)
                 val targetRole = if (isTargetLeader) "Leader" else "Member"
+                val activeTeamCode = activeTeamCode()
 
                 preferences.edit {
                     putString(SessionManager.KEY_MEMBER_ROLES, map.toString())
                     if (targetEmail.isNotBlank()) {
                         putString("email_ministry_$targetEmail", selectedRole)
                         putString("email_role_$targetEmail", targetRole)
+                        if (activeTeamCode.isNotBlank()) {
+                            putString("email_ministry_${activeTeamCode}_$targetEmail", selectedRole)
+                            putString("email_role_${activeTeamCode}_$targetEmail", targetRole)
+                        }
                     }
                     if (targetUid.isNotBlank()) {
                         putString("user_ministry_$targetUid", selectedRole)
                         putString("user_role_$targetUid", targetRole)
+                        if (activeTeamCode.isNotBlank()) {
+                            putString("user_ministry_${activeTeamCode}_$targetUid", selectedRole)
+                            putString("user_role_${activeTeamCode}_$targetUid", targetRole)
+                        }
+                    }
+                    if (selectedRole.equals("Worship Leader", ignoreCase = true) && activeTeamCode.isNotBlank()) {
+                        putBoolean("transferred_leadership_$activeTeamCode", false)
+                        putString("team_leader_uid_$activeTeamCode", targetUid)
+                        putString("team_leader_email_$activeTeamCode", targetEmail)
+                        putString("team_leader_name_$activeTeamCode", roleMember)
+                        remove("email_role_${activeTeamCode}_$targetEmail")
+                        remove("user_role_${activeTeamCode}_$targetUid")
                     }
                 }
 
@@ -7615,12 +7624,13 @@ class AdminActivity : AppCompatActivity() {
                     } else {
                         member.ministryRole.ifBlank { if (member.role.equals("Leader", true)) "Worship Leader" else "Member" }
                     }
-                    val isPrimaryLeadMember = (designatedLeaderUid.isNotBlank() && member.uid == designatedLeaderUid) ||
-                                              (designatedLeader.isNotBlank() && member.email.equals(designatedLeader, ignoreCase = true)) ||
-                                              (!transferred && designatedLeader.isBlank() && designatedLeaderUid.isBlank() && (member.email.equals("ryanlloydgenturo@gmail.com", ignoreCase = true) || member.fullName.equals("Ryan Lloyd Genturo", ignoreCase = true)) && !preferences.getString("email_role_${activeCode}_${member.email.trim().lowercase()}", "").equals("Member", true))
+                    val myCurrentUid = preferences.getString(SessionManager.KEY_USER_ID, "").orEmpty()
+                    val myCurrentEmail = preferences.getString("email", "").orEmpty().trim().lowercase()
+                    val isSelfLeaderClick = (member.uid.isNotBlank() && member.uid == myCurrentUid) ||
+                                            (member.email.isNotBlank() && member.email.equals(myCurrentEmail, ignoreCase = true))
                     col.add(memberRow(name, role, badge, if (isLeader) ({
-                        if (isPrimaryLeadMember) {
-                            toast("Primary Leader is permanently assigned as Worship Leader.")
+                        if (isSelfLeaderClick && !isCurrentUserSubstituteLeader()) {
+                            toast("You are the Team Leader. To transfer leadership, go to View Details.")
                         } else {
                             roleMember = name
                             roleMemberUid = member.uid
@@ -7680,9 +7690,12 @@ class AdminActivity : AppCompatActivity() {
                                     add(horizontal().apply {
                                         setPadding(0, dp(8), 0, dp(8))
                                         if (isLeader) setOnClickListener {
-                                            if (member.email.equals("ryanlloydgenturo@gmail.com", ignoreCase = true) ||
-                                                memberName.equals("Ryan Lloyd Genturo", ignoreCase = true)) {
-                                                toast("Primary Leader is permanently assigned as Worship Leader.")
+                                            val myCurrentUid = preferences.getString(SessionManager.KEY_USER_ID, "").orEmpty()
+                                            val myCurrentEmail = preferences.getString("email", "").orEmpty().trim().lowercase()
+                                            val isSelfLeaderClick = (member.uid.isNotBlank() && member.uid == myCurrentUid) ||
+                                                                    (member.email.isNotBlank() && member.email.equals(myCurrentEmail, ignoreCase = true))
+                                            if (isSelfLeaderClick && !isCurrentUserSubstituteLeader()) {
+                                                toast("You are the Team Leader. To transfer leadership, go to View Details.")
                                             } else {
                                                 roleMember = memberName
                                                 roleMemberUid = member.uid

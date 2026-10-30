@@ -3962,6 +3962,79 @@ class ExampleUnitTest {
     }
 
     @Test
+    fun testFormerWorshipLeaderRoleAssignmentAndRealtimeSync() {
+        val repo = com.example.syncedn.data.database.TeamRepository
+        val rawRoles = listOf("Worship Leader", "Substitute Leader", "Vocalist", "Guitarist", "Keyboardist", "Drummer")
+
+        // 1. When Worship Leader edits a former leader (isTargetPrimaryLeader = true):
+        //    All roles (Worship Leader, Substitute Leader, Guitarist, etc.) MUST be available!
+        val assignableRoles = repo.filterAssignableRoles(
+            roles = rawRoles,
+            isEditorSubstituteLeader = false,
+            isTargetPrimaryLeader = true
+        )
+        assertTrue("Worship Leader must be an option", assignableRoles.contains("Worship Leader"))
+        assertTrue("Substitute Leader must be an option", assignableRoles.contains("Substitute Leader"))
+        assertTrue("Guitarist must be an option", assignableRoles.contains("Guitarist"))
+        assertTrue("Vocalist must be an option", assignableRoles.contains("Vocalist"))
+        assertTrue(assignableRoles.size >= 6)
+
+        // 2. Assigning former leader to Guitarist:
+        //    updateMemberMinistryRole must set ministryRole="Guitarist", role="Member"
+        val testPrefs = FakePreferences().apply {
+            edit()
+                .putString("teamCode", "KPABFG")
+                .putString("teamName", "WISE MAN TEAM")
+                .putString("userId", "ryan_uid")
+                .putString("email", "ryanlloydgenturo@gmail.com")
+                .putString("fullName", "Ryan Lloyd Genturo")
+                .putString("role", "Member")
+                .putString("ministryRole", "Member")
+                .putBoolean("transferred_leadership_KPABFG", true)
+                .putString("team_leader_email_KPABFG", "newleader@test.com")
+                .apply()
+        }
+
+        repo.updateMemberMinistryRole(
+            memberUid = "ryan_uid",
+            newRole = "Guitarist",
+            memberName = "Ryan Lloyd Genturo",
+            memberEmail = "ryanlloydgenturo@gmail.com",
+            preferences = testPrefs
+        )
+
+        assertEquals("Guitarist", testPrefs.getString("email_ministry_ryanlloydgenturo@gmail.com", ""))
+        assertEquals("Member", testPrefs.getString("email_role_ryanlloydgenturo@gmail.com", ""))
+        assertEquals("Guitarist", testPrefs.getString("user_ministry_ryan_uid", ""))
+        assertEquals("Member", testPrefs.getString("user_role_ryan_uid", ""))
+
+        // 3. Promoting former leader to Substitute Leader:
+        repo.updateMemberMinistryRole(
+            memberUid = "ryan_uid",
+            newRole = "Substitute Leader",
+            memberName = "Ryan Lloyd Genturo",
+            memberEmail = "ryanlloydgenturo@gmail.com",
+            preferences = testPrefs
+        )
+        assertEquals("Substitute Leader", testPrefs.getString("email_ministry_ryanlloydgenturo@gmail.com", ""))
+        assertEquals("Leader", testPrefs.getString("email_role_ryanlloydgenturo@gmail.com", ""))
+
+        // 4. Promoting former leader back to Worship Leader:
+        repo.updateMemberMinistryRole(
+            memberUid = "ryan_uid",
+            newRole = "Worship Leader",
+            memberName = "Ryan Lloyd Genturo",
+            memberEmail = "ryanlloydgenturo@gmail.com",
+            preferences = testPrefs
+        )
+        assertEquals("Worship Leader", testPrefs.getString("email_ministry_ryanlloydgenturo@gmail.com", ""))
+        assertEquals("Leader", testPrefs.getString("email_role_ryanlloydgenturo@gmail.com", ""))
+        assertFalse(testPrefs.getBoolean("transferred_leadership_KPABFG", true))
+        assertEquals("ryan_uid", testPrefs.getString("team_leader_uid_KPABFG", ""))
+        assertEquals("ryanlloydgenturo@gmail.com", testPrefs.getString("team_leader_email_KPABFG", ""))
+    }
+
+    @Test
     fun testRehearsalScheduleDateNormalizationAndTimeSync() {
         fun normalizeToIsoDate(raw: String): String {
             val trimmed = raw.trim()

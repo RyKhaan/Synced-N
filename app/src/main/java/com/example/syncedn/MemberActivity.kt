@@ -504,10 +504,13 @@ open class MemberActivity : AppCompatActivity() {
         val transferred = preferences.getBoolean("transferred_leadership_$activeTeamCode", false)
         val designatedLeader = preferences.getString("team_leader_email_$activeTeamCode", "").orEmpty().trim().lowercase()
             .ifBlank { preferences.getString("team_leader_email_$cleanTeam", "").orEmpty().trim().lowercase() }
+        val designatedLeaderUid = preferences.getString("team_leader_uid_$activeTeamCode", "").orEmpty().trim()
         val isExplicitMember = remoteRole.equals("Member", ignoreCase = true) || remoteMinistryRole.equals("Member", ignoreCase = true)
         val isWorshipLeadEligible = !isExplicitMember && (
+            (designatedLeaderUid.isNotBlank() && designatedLeaderUid == myUid) ||
             (designatedLeader.isNotBlank() && designatedLeader == emailLower) ||
-            (!transferred && designatedLeader.isBlank() && TeamRepository.isWorshipLeader(remoteMinistryRole, remoteRole))
+            remoteMinistryRole.equals("Worship Leader", ignoreCase = true) ||
+            (!transferred && designatedLeader.isBlank() && designatedLeaderUid.isBlank() && TeamRepository.isWorshipLeader(remoteMinistryRole, remoteRole))
         )
         if (isWorshipLeadEligible) {
             if (now - lastRoleSwitchTime < 3000L && lastSwitchedRole == "Worship Leader") {
@@ -519,21 +522,30 @@ open class MemberActivity : AppCompatActivity() {
                 .putString(SessionManager.KEY_ROLE, "Leader")
                 .putString("ministryRole", "Worship Leader")
                 .putString(SessionManager.KEY_MINISTRY_ROLE, "Worship Leader")
+                .putBoolean("transferred_leadership_$activeTeamCode", false)
                 .putLong("last_role_switch_time_$myUid", now)
                 .putString("last_switched_role_$myUid", "Worship Leader")
             if (myUid.isNotBlank()) {
                 editor.putString("user_role_$myUid", "Leader")
                 editor.putString("user_ministry_$myUid", "Worship Leader")
+                editor.putString("user_role_${activeTeamCode}_$myUid", "Leader")
+                editor.putString("user_ministry_${activeTeamCode}_$myUid", "Worship Leader")
+                editor.putString("team_leader_uid_$activeTeamCode", myUid)
             }
             if (emailLower.isNotBlank()) {
                 editor.putString("email_role_$emailLower", "Leader")
                 editor.putString("email_ministry_$emailLower", "Worship Leader")
+                editor.putString("email_role_${activeTeamCode}_$emailLower", "Leader")
+                editor.putString("email_ministry_${activeTeamCode}_$emailLower", "Worship Leader")
+                editor.putString("team_leader_email_$activeTeamCode", emailLower)
                 val sig = com.example.syncedn.data.util.ValidationUtils.computeSessionHmac(emailLower, "Leader", myUid)
                 if (sig.isNotBlank()) editor.putString("session_hmac_sig_$emailLower", sig)
             }
             if (cleanTeam.isNotBlank() && emailLower.isNotBlank()) {
                 editor.putString("team_leader_email_$cleanTeam", emailLower)
             }
+            editor.remove("email_role_${activeTeamCode}_$emailLower")
+            editor.remove("user_role_${activeTeamCode}_$myUid")
             editor.commit()
 
             val lastNotifiedRole = preferences.getString("last_notified_role_$myUid", "").orEmpty()
@@ -569,7 +581,8 @@ open class MemberActivity : AppCompatActivity() {
             "Member"
         }
         val lastNotifiedRole = preferences.getString("last_notified_role_$myUid", "").orEmpty()
-        val roleMeaningfullyChanged = lastNotifiedRole.isNotBlank() && !lastNotifiedRole.equals(resolvedMinistry, ignoreCase = true)
+        val roleMeaningfullyChanged = (!lastNotifiedRole.isBlank() && !lastNotifiedRole.equals(resolvedMinistry, ignoreCase = true)) ||
+                                      (!currentPref.isBlank() && !currentPref.equals(resolvedMinistry, ignoreCase = true))
         val needsPrefSync = roleMeaningfullyChanged ||
             !currentPref.equals(resolvedMinistry, ignoreCase = true) ||
             !currentRolePref.equals("Member", ignoreCase = true)
@@ -586,10 +599,18 @@ open class MemberActivity : AppCompatActivity() {
             if (myUid.isNotBlank()) {
                 editor.putString("user_role_$myUid", "Member")
                 editor.putString("user_ministry_$myUid", resolvedMinistry)
+                if (activeTeamCode.isNotBlank()) {
+                    editor.putString("user_role_${activeTeamCode}_$myUid", "Member")
+                    editor.putString("user_ministry_${activeTeamCode}_$myUid", resolvedMinistry)
+                }
             }
             if (emailLower.isNotBlank()) {
                 editor.putString("email_role_$emailLower", "Member")
                 editor.putString("email_ministry_$emailLower", resolvedMinistry)
+                if (activeTeamCode.isNotBlank()) {
+                    editor.putString("email_role_${activeTeamCode}_$emailLower", "Member")
+                    editor.putString("email_ministry_${activeTeamCode}_$emailLower", resolvedMinistry)
+                }
                 val sig = com.example.syncedn.data.util.ValidationUtils.computeSessionHmac(emailLower, "Member", myUid)
                 if (sig.isNotBlank()) editor.putString("session_hmac_sig_$emailLower", sig)
             }
@@ -620,7 +641,7 @@ open class MemberActivity : AppCompatActivity() {
                     }
                     updateRosterViews()
                     if (page == "home") setupHome()
-                    if (page == "teams" && teamTab in listOf("Role", "Overview")) {
+                    if (page == "teams") {
                         navigate("teams", triggerRefresh = false)
                     }
                 }
@@ -3252,8 +3273,7 @@ open class MemberActivity : AppCompatActivity() {
                 val isExplicitlyMember = !isPrimaryLeader && (
                     (isSelf && (selfRole.equals("Member", true) || !selfMinistry.equals("Substitute Leader", true))) ||
                     preferences.getString("user_role_${currentCode}_${m.uid}", "").equals("Member", true) ||
-                    preferences.getString("email_role_${currentCode}_$emailLower", "").equals("Member", true) ||
-                    (transferred && (emailLower == "ryanlloydgenturo@gmail.com" || m.fullName.equals("Ryan Lloyd Genturo", ignoreCase = true)))
+                    preferences.getString("email_role_${currentCode}_$emailLower", "").equals("Member", true)
                 )
 
                 val override = if (isSelf && selfMinistry.isNotBlank() && !selfMinistry.equals("Substitute Leader", ignoreCase = true)) {
@@ -3270,7 +3290,11 @@ open class MemberActivity : AppCompatActivity() {
                     }
                 }
                 val rawLiveRole = if (isSelf && selfMinistry.isNotBlank() && !selfMinistry.equals("Substitute Leader", ignoreCase = true)) {
-                    selfMinistry
+                    if (selfMinistry.equals("Member", ignoreCase = true) && m.ministryRole.isNotBlank() && !m.ministryRole.equals("Member", ignoreCase = true)) {
+                        m.ministryRole
+                    } else {
+                        selfMinistry
+                    }
                 } else if (m.ministryRole.isNotBlank() && !m.ministryRole.equals("Substitute Leader", ignoreCase = true)) {
                     m.ministryRole
                 } else {
