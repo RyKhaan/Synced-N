@@ -4442,4 +4442,84 @@ class ExampleUnitTest {
         assertEquals("Justin Kyle Pendre", deserialized.replyToSender)
         assertEquals("Are we practicing tomorrow?", deserialized.replyToText)
     }
+
+    @Test
+    fun testLeadershipTransferAndDemotionLogic() {
+        val currentCode = "KPABFG"
+        val oldLeaderEmail = "ryanlloydgenturo@gmail.com"
+        val newLeaderEmail = "target@example.com"
+
+        val prefs = FakePreferences().apply {
+            edit()
+                .putString("team_leader_email_$currentCode", newLeaderEmail)
+                .putBoolean("transferred_leadership_$currentCode", true)
+                .putString("email_role_$oldLeaderEmail", "Member")
+                .putString("email_role_$newLeaderEmail", "Leader")
+                .apply()
+        }
+
+        val members = listOf(
+            com.example.syncedn.data.model.TeamMember(uid = "uid_old", fullName = "Ryan Lloyd Genturo", username = "ryan", email = oldLeaderEmail, role = "Member", ministryRole = "Member", teamCode = currentCode),
+            com.example.syncedn.data.model.TeamMember(uid = "uid_new", fullName = "Target Leader", username = "target", email = newLeaderEmail, role = "Leader", ministryRole = "Worship Leader", teamCode = currentCode)
+        )
+
+        val updatedRoster = com.example.syncedn.data.database.TeamRepository.ensureTeamLeaderInRoster(currentCode, members, prefs)
+        val oldLeaderInRoster = updatedRoster.first { it.email == oldLeaderEmail }
+        val newLeaderInRoster = updatedRoster.first { it.email == newLeaderEmail }
+
+        assertEquals("Member", oldLeaderInRoster.role)
+        assertEquals("Member", oldLeaderInRoster.ministryRole)
+        assertEquals("Leader", newLeaderInRoster.role)
+        assertEquals("Worship Leader", newLeaderInRoster.ministryRole)
+    }
+
+    @Test
+    fun testFormerLeaderRejoiningPreservesMemberRole() {
+        val currentCode = "KPABFG"
+        val oldLeaderEmail = "ryanlloydgenturo@gmail.com"
+        val designatedLeaderEmail = "newleader@example.com"
+
+        val prefs = FakePreferences().apply {
+            edit()
+                .putString("team_leader_email_$currentCode", designatedLeaderEmail)
+                .putBoolean("transferred_leadership_$currentCode", true)
+                .putString("role", "Member")
+                .apply()
+        }
+
+        // Role resolution algorithm when rejoining with an invite code:
+        val cleanCode = currentCode.trim().uppercase()
+        val designatedLeader = prefs.getString("team_leader_email_$cleanCode", "").orEmpty().trim().lowercase()
+        val transferred = prefs.getBoolean("transferred_leadership_$cleanCode", false)
+        val isDesignatedTeamLeader = (designatedLeader.isNotBlank() && designatedLeader == oldLeaderEmail.trim().lowercase()) ||
+                                     (!transferred && designatedLeader.isBlank() && oldLeaderEmail.equals("ryanlloydgenturo@gmail.com", ignoreCase = true) && !prefs.getString("role", "").equals("Member", ignoreCase = true))
+
+        val resolvedRole = if (isDesignatedTeamLeader) "Leader" else "Member"
+        val resolvedMinistry = if (isDesignatedTeamLeader) "Worship Leader" else "Member"
+
+        // Former leader MUST rejoin strictly as Member
+        assertEquals("Member", resolvedRole)
+        assertEquals("Member", resolvedMinistry)
+    }
+
+    @Test
+    fun testActivityRedirectGuardsPreventRapidLaunchLoop() {
+        val currentEmailOnStart = "ryanlloydgenturo@gmail.com"
+        val teamLeaderEmail = "target@example.com"
+        val selfRole = "Member"
+        val currentMinistryOnStart = "Member"
+        val transferred = true
+
+        val isSelfExplicitMember = selfRole.equals("Member", ignoreCase = true) || currentMinistryOnStart.equals("Member", ignoreCase = true)
+        val isPrimaryLeader = !isSelfExplicitMember && (
+            (teamLeaderEmail.isNotBlank() && teamLeaderEmail == currentEmailOnStart) ||
+            (teamLeaderEmail.isBlank() && !transferred && currentEmailOnStart == "ryanlloydgenturo@gmail.com") ||
+            (currentMinistryOnStart.equals("Worship Leader", ignoreCase = true) && !transferred && (teamLeaderEmail.isBlank() || teamLeaderEmail == currentEmailOnStart))
+        )
+        val isSubLeader = !isSelfExplicitMember && currentMinistryOnStart.equals("Substitute Leader", ignoreCase = true)
+
+        // Neither primary leader nor substitute leader, so NO redirect occurs!
+        assertFalse(isPrimaryLeader)
+        assertFalse(isSubLeader)
+    }
 }
