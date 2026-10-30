@@ -3123,22 +3123,38 @@ class AdminActivity : AppCompatActivity() {
             val selfPhoto = preferences.getString("photoUri", null)?.takeIf { it.isNotBlank() }
             val selfUid = preferences.getString(SessionManager.KEY_USER_ID, "").orEmpty()
             val selfEmail = preferences.getString("email", "").orEmpty().trim().lowercase()
+            val transferred = preferences.getBoolean("transferred_leadership_$currentCode", false)
+            val designatedLeaderUid = preferences.getString("team_leader_uid_$currentCode", "").orEmpty().trim()
+            val designatedLeader = preferences.getString("team_leader_email_$currentCode", "").orEmpty().trim().lowercase()
+
+            val leaderInList = list.find {
+                (designatedLeaderUid.isNotBlank() && it.uid == designatedLeaderUid) ||
+                (designatedLeader.isNotBlank() && it.email.trim().lowercase() == designatedLeader)
+            } ?: if (!transferred) {
+                list.find { it.email.trim().lowercase() == "ryanlloydgenturo@gmail.com" || it.fullName.equals("Ryan Lloyd Genturo", true) }
+                    ?: list.find { it.ministryRole.equals("Worship Leader", true) || (it.role.equals("Leader", true) && !TeamRepository.isSubstituteLeader(it.ministryRole)) }
+            } else {
+                list.find { it.ministryRole.equals("Worship Leader", true) || (it.role.equals("Leader", true) && !TeamRepository.isSubstituteLeader(it.ministryRole)) }
+            }
+
+            if (designatedLeaderUid.isBlank() && leaderInList != null && leaderInList.uid.isNotBlank() && currentCode.isNotBlank()) {
+                preferences.edit {
+                    putString("team_leader_uid_$currentCode", leaderInList.uid)
+                    if (leaderInList.email.isNotBlank()) putString("team_leader_email_$currentCode", leaderInList.email.trim().lowercase())
+                    if (leaderInList.fullName.isNotBlank()) putString("team_leader_name_$currentCode", leaderInList.fullName)
+                }
+            }
+
             return list.map { m ->
                 val emailLower = m.email.trim().lowercase()
-                val transferred = preferences.getBoolean("transferred_leadership_$currentCode", false)
-                val designatedLeaderUid = preferences.getString("team_leader_uid_$currentCode", "").orEmpty().trim()
-                val designatedLeader = preferences.getString("team_leader_email_$currentCode", "").orEmpty().trim().lowercase()
-                val isExplicitSubInModel = TeamRepository.isSubstituteLeader(m.ministryRole) && !m.role.equals("Member", ignoreCase = true)
-                val isExplicitWorshipInModel = TeamRepository.isWorshipLeader(m.ministryRole, m.role) && !m.role.equals("Member", ignoreCase = true)
-                val isExplicitlyMember = preferences.getString("user_role_${currentCode}_${m.uid}", "").equals("Member", true) ||
-                                         preferences.getString("email_role_${currentCode}_$emailLower", "").equals("Member", true) ||
-                                         (m.role.equals("Member", true) && !isExplicitSubInModel && !isExplicitWorshipInModel) ||
-                                         TeamRepository.isOrdinaryMemberRole(m.ministryRole, m.role)
-                val isPrimaryLeader = !isExplicitlyMember && (
-                                          (designatedLeaderUid.isNotBlank() && m.uid == designatedLeaderUid) ||
-                                          (designatedLeader.isNotBlank() && designatedLeader == emailLower) ||
-                                          (!transferred && designatedLeader.isBlank() && designatedLeaderUid.isBlank() && (emailLower == "ryanlloydgenturo@gmail.com" || m.fullName.equals("Ryan Lloyd Genturo", ignoreCase = true)))
-                                      )
+                val isPrimaryLeader = (leaderInList != null && (
+                    (m.uid.isNotBlank() && m.uid == leaderInList.uid) ||
+                    (emailLower.isNotBlank() && emailLower == leaderInList.email.trim().lowercase()) ||
+                    (m.fullName.isNotBlank() && m.fullName.equals(leaderInList.fullName, true))
+                )) || (!transferred && leaderInList == null && (emailLower == "ryanlloydgenturo@gmail.com" || m.fullName.equals("Ryan Lloyd Genturo", true)))
+
+                val isExplicitSubInModel = !isPrimaryLeader && TeamRepository.isSubstituteLeader(m.ministryRole) && !m.role.equals("Member", ignoreCase = true)
+
                 val override = memberRolesMap.optString(m.uid).ifBlank {
                     memberRolesMap.optString(emailLower).ifBlank {
                         memberRolesMap.optString(m.fullName).ifBlank {
@@ -3149,16 +3165,18 @@ class AdminActivity : AppCompatActivity() {
                     }
                 }
                 val rawLiveRole = m.ministryRole.takeIf { it.isNotBlank() } ?: override
-                val liveRole = if (isExplicitlyMember && rawLiveRole.equals("Substitute Leader", true)) "Member" else rawLiveRole
-                var updated = if (liveRole.isNotBlank()) {
-                    val isOverrideLeader = when {
-                        isPrimaryLeader -> true
-                        isExplicitlyMember -> false
-                        else -> liveRole.equals("Substitute Leader", ignoreCase = true) ||
-                                liveRole.equals("Worship Leader", ignoreCase = true)
-                    }
-                    m.copy(ministryRole = liveRole, role = if (isOverrideLeader) "Leader" else "Member")
-                } else m
+                val liveRole = when {
+                    isPrimaryLeader -> "Worship Leader"
+                    isExplicitSubInModel || rawLiveRole.equals("Substitute Leader", true) -> "Substitute Leader"
+                    rawLiveRole.equals("Worship Leader", true) -> "Member"
+                    else -> rawLiveRole.ifBlank { "Member" }
+                }
+                val liveRoleCategory = when {
+                    isPrimaryLeader -> "Leader"
+                    isExplicitSubInModel || liveRole.equals("Substitute Leader", true) -> "Leader"
+                    else -> "Member"
+                }
+                var updated = m.copy(ministryRole = liveRole, role = liveRoleCategory)
                 if (updated.photoUri.isBlank()) {
                     val p = preferences.getString("user_photo_${m.uid}", "").orEmpty().ifBlank {
                         preferences.getString("email_photo_${emailLower}", "").orEmpty().ifBlank {
@@ -5334,15 +5352,24 @@ class AdminActivity : AppCompatActivity() {
                         putString("team_leader_name_$activeTeamCode", roleMember)
                         remove("email_role_${activeTeamCode}_$targetEmail")
                         remove("user_role_${activeTeamCode}_$targetUid")
-                    } else if (targetRole == "Member" && activeTeamCode.isNotBlank()) {
+                    } else if (activeTeamCode.isNotBlank()) {
                         val teamLeadUid = preferences.getString("team_leader_uid_$activeTeamCode", "").orEmpty().trim()
-                        if (targetUid.isNotBlank() && teamLeadUid == targetUid) {
-                            remove("team_leader_uid_$activeTeamCode")
-                            remove("team_leader_name_$activeTeamCode")
-                        }
                         val teamLeadEmail = preferences.getString("team_leader_email_$activeTeamCode", "").orEmpty().trim().lowercase()
-                        if (targetEmail.isNotBlank() && teamLeadEmail == targetEmail) {
-                            remove("team_leader_email_$activeTeamCode")
+                        val wasTargetLeader = (targetUid.isNotBlank() && teamLeadUid == targetUid) ||
+                                              (targetEmail.isNotBlank() && teamLeadEmail == targetEmail)
+                        if (wasTargetLeader) {
+                            val currentSelfUid = currentUserId()
+                            val currentSelfEmail = preferences.getString("email", "").orEmpty().trim().lowercase()
+                            val currentSelfName = fullName.ifBlank { displayName }
+                            if (currentSelfUid.isNotBlank() && currentSelfUid != targetUid) {
+                                putString("team_leader_uid_$activeTeamCode", currentSelfUid)
+                                if (currentSelfEmail.isNotBlank()) putString("team_leader_email_$activeTeamCode", currentSelfEmail)
+                                if (currentSelfName.isNotBlank()) putString("team_leader_name_$activeTeamCode", currentSelfName)
+                            } else {
+                                remove("team_leader_uid_$activeTeamCode")
+                                remove("team_leader_name_$activeTeamCode")
+                                remove("team_leader_email_$activeTeamCode")
+                            }
                         }
                     }
                 }
@@ -7215,9 +7242,9 @@ class AdminActivity : AppCompatActivity() {
                 setPadding(dp(14), dp(10), dp(14), dp(10))
                 val hasReply = msg.replyToText.isNotBlank() || msg.replyToSender.isNotBlank()
                 if (hasReply) {
-                    minimumWidth = dp(180)
+                    minimumWidth = dp(200)
                     val quoteBox = horizontal().apply {
-                        minimumWidth = dp(160)
+                        minimumWidth = dp(180)
                         background = GradientDrawable().apply {
                             setColor(Color.argb(45, 255, 255, 255))
                             cornerRadius = dp(8).toFloat()
@@ -7227,20 +7254,25 @@ class AdminActivity : AppCompatActivity() {
                         addView(accent, LinearLayout.LayoutParams(dp(3), dp(32)))
                         addView(View(this@AdminActivity), LinearLayout.LayoutParams(dp(6), dp(1)))
                         val quoteCol = vertical().apply {
+                            minimumWidth = dp(140)
                             val senderTv = text(msg.replyToSender.ifBlank { "Member" }, 11, Color.WHITE, bold = true).apply {
                                 maxLines = 1
+                                minWidth = dp(120)
+                                maxWidth = maxBubbleWidth - dp(45)
                                 ellipsize = android.text.TextUtils.TruncateAt.END
                             }
-                            addView(senderTv, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+                            addView(senderTv, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
                             val quoteTv = text(msg.replyToText.ifBlank { "Message" }, 11, Color.rgb(226, 232, 240)).apply {
                                 maxLines = 2
+                                minWidth = dp(120)
+                                maxWidth = maxBubbleWidth - dp(45)
                                 ellipsize = android.text.TextUtils.TruncateAt.END
                             }
-                            addView(quoteTv, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+                            addView(quoteTv, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
                         }
-                        addView(quoteCol, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+                        addView(quoteCol, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
                     }
-                    addView(quoteBox, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+                    addView(quoteBox, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
                     space(6)
                 }
                 if (msg.mediaUrl.isNotBlank()) {
@@ -7371,9 +7403,9 @@ class AdminActivity : AppCompatActivity() {
                 setPadding(dp(14), dp(10), dp(14), dp(10))
                 val hasReply = msg.replyToText.isNotBlank() || msg.replyToSender.isNotBlank()
                 if (hasReply) {
-                    minimumWidth = dp(180)
+                    minimumWidth = dp(200)
                     val quoteBox = horizontal().apply {
-                        minimumWidth = dp(160)
+                        minimumWidth = dp(180)
                         background = GradientDrawable().apply {
                             setColor(Color.rgb(226, 232, 240))
                             cornerRadius = dp(8).toFloat()
@@ -7383,20 +7415,25 @@ class AdminActivity : AppCompatActivity() {
                         addView(accent, LinearLayout.LayoutParams(dp(3), dp(32)))
                         addView(View(this@AdminActivity), LinearLayout.LayoutParams(dp(6), dp(1)))
                         val quoteCol = vertical().apply {
+                            minimumWidth = dp(140)
                             val senderTv = text(msg.replyToSender.ifBlank { "Member" }, 11, navy, bold = true).apply {
                                 maxLines = 1
+                                minWidth = dp(120)
+                                maxWidth = maxBubbleWidth - dp(45)
                                 ellipsize = android.text.TextUtils.TruncateAt.END
                             }
-                            addView(senderTv, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+                            addView(senderTv, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
                             val quoteTv = text(msg.replyToText.ifBlank { "Message" }, 11, Color.rgb(71, 85, 105)).apply {
                                 maxLines = 2
+                                minWidth = dp(120)
+                                maxWidth = maxBubbleWidth - dp(45)
                                 ellipsize = android.text.TextUtils.TruncateAt.END
                             }
-                            addView(quoteTv, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+                            addView(quoteTv, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
                         }
-                        addView(quoteCol, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+                        addView(quoteCol, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
                     }
-                    addView(quoteBox, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+                    addView(quoteBox, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
                     space(6)
                 }
                 if (msg.mediaUrl.isNotBlank()) {
@@ -7623,20 +7660,21 @@ class AdminActivity : AppCompatActivity() {
                 val designatedLeader = preferences.getString("team_leader_email_$activeCode", "").orEmpty().trim().lowercase()
                 roster.forEach { member ->
                     val name = member.fullName.ifBlank { member.username.ifBlank { "Member" } }
-                    val isExplicitMember = member.role.equals("Member", true) ||
-                                           preferences.getString("email_role_${activeCode}_${member.email.trim().lowercase()}", "").equals("Member", true) ||
-                                           preferences.getString("user_role_${activeCode}_${member.uid}", "").equals("Member", true)
-                    val isLeaderBadge = !isExplicitMember && (
-                        member.ministryRole.equals("Worship Leader", ignoreCase = true) ||
-                        (member.ministryRole.equals("Substitute Leader", ignoreCase = true) && !member.role.equals("Member", true)) ||
-                        (designatedLeaderUid.isNotBlank() && member.uid == designatedLeaderUid) ||
-                        (designatedLeader.isNotBlank() && member.email.equals(designatedLeader, ignoreCase = true))
-                    )
-                    val badge = if (isLeaderBadge) "Leader" else "Member"
-                    val role = if (badge == "Member" && member.ministryRole.equals("Substitute Leader", ignoreCase = true)) {
-                        "Member"
-                    } else {
-                        member.ministryRole.ifBlank { if (badge == "Leader") "Worship Leader" else "Member" }
+                    val isLeader = (designatedLeaderUid.isNotBlank() && member.uid == designatedLeaderUid) ||
+                                   (designatedLeader.isNotBlank() && member.email.trim().lowercase() == designatedLeader) ||
+                                   (!transferred && designatedLeader.isBlank() && designatedLeaderUid.isBlank() && (member.email.trim().lowercase() == "ryanlloydgenturo@gmail.com" || member.fullName.equals("Ryan Lloyd Genturo", true))) ||
+                                   member.ministryRole.equals("Worship Leader", true)
+                    val isSubLeader = !isLeader && member.ministryRole.equals("Substitute Leader", true) && !member.role.equals("Member", true)
+
+                    val badge = when {
+                        isLeader -> "Leader"
+                        isSubLeader -> "Substitute Leader"
+                        else -> "Member"
+                    }
+                    val role = when {
+                        isLeader -> "Worship Leader"
+                        isSubLeader -> "Substitute Leader"
+                        else -> member.ministryRole.ifBlank { "Member" }
                     }
                     val myCurrentUid = preferences.getString(SessionManager.KEY_USER_ID, "").orEmpty()
                     val myCurrentEmail = preferences.getString("email", "").orEmpty().trim().lowercase()
@@ -7660,32 +7698,29 @@ class AdminActivity : AppCompatActivity() {
                 val roster = getActiveRoster()
                 val currentUid = preferences.getString(SessionManager.KEY_USER_ID, "").orEmpty()
                 val baseRoles = if (isLeader) leaderRoles else listOf("Worship Leader", "Keyboardist", "Bassist", "Vocalist", "Guitarist")
-                val activeRoles = (listOf("Worship Leader") + baseRoles + roster.map { m ->
-                    if (m.role.equals("Member", true) && m.ministryRole.equals("Substitute Leader", true)) "Member" else m.ministryRole
-                }).filter {
-                    it.isNotBlank() && (!it.equals("Substitute Leader", true) || roster.any { m -> m.ministryRole.equals("Substitute Leader", true) && !m.role.equals("Member", true) })
-                }.distinct()
+                val activeRoles = (listOf("Worship Leader") + baseRoles + roster.map { it.ministryRole })
+                    .filter {
+                        it.isNotBlank() && (!it.equals("Substitute Leader", true) || roster.any { m -> m.ministryRole.equals("Substitute Leader", true) && !m.role.equals("Member", true) })
+                    }.distinct()
                 val roles = activeRoles
                 val activeCode = preferences.getString("teamCode", "").orEmpty()
                 val transferred = preferences.getBoolean("transferred_leadership_$activeCode", false)
                 val designatedLeaderUid = preferences.getString("team_leader_uid_$activeCode", "").orEmpty().trim()
                 val designatedLeader = preferences.getString("team_leader_email_$activeCode", "").orEmpty().trim().lowercase()
                 roles.forEach { role ->
-                    val people = roster.filter {
-                        val isExplicitMember = it.role.equals("Member", true) ||
-                                               preferences.getString("email_role_${activeCode}_${it.email.trim().lowercase()}", "").equals("Member", true) ||
-                                               preferences.getString("user_role_${activeCode}_${it.uid}", "").equals("Member", true)
-                        val isLead = !isExplicitMember && (
-                            it.ministryRole.equals("Worship Leader", ignoreCase = true) ||
-                            (!TeamRepository.isSubstituteLeader(it.ministryRole) &&
-                             ((designatedLeaderUid.isNotBlank() && it.uid == designatedLeaderUid) ||
-                              (designatedLeader.isNotBlank() && it.email.equals(designatedLeader, ignoreCase = true))))
-                        )
+                    val people = roster.filter { member ->
+                        val isLead = (designatedLeaderUid.isNotBlank() && member.uid == designatedLeaderUid) ||
+                                     (designatedLeader.isNotBlank() && member.email.trim().lowercase() == designatedLeader) ||
+                                     (!transferred && designatedLeader.isBlank() && designatedLeaderUid.isBlank() && (member.email.trim().lowercase() == "ryanlloydgenturo@gmail.com" || member.fullName.equals("Ryan Lloyd Genturo", true))) ||
+                                     member.ministryRole.equals("Worship Leader", true)
+                        val isSub = !isLead && member.ministryRole.equals("Substitute Leader", true) && !member.role.equals("Member", true)
+
                         if (role.equals("Worship Leader", ignoreCase = true)) {
                             isLead
+                        } else if (role.equals("Substitute Leader", ignoreCase = true)) {
+                            isSub
                         } else {
-                            val mRole = if (it.role.equals("Member", true) && it.ministryRole.equals("Substitute Leader", true)) "Member" else it.ministryRole
-                            mRole.equals(role, ignoreCase = true) && !isLead
+                            !isLead && !isSub && member.ministryRole.equals(role, ignoreCase = true)
                         }
                     }
                     val isInitiallyExpanded = expandedRole == role
