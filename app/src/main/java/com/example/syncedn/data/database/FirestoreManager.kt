@@ -131,17 +131,21 @@ object FirestoreManager {
     const val TEAMS_COLLECTION = "teams"
     private const val TEAM_CODE_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
     private val localTeams = mutableMapOf<String, String>()
+    private val localTeamLeaders = mutableMapOf<String, String>()
     private val localUserRoleTeam = mutableMapOf<String, Triple<String, String, String>>()
     private val localUserRoleTeamByEmail = mutableMapOf<String, Triple<String, String, String>>()
 
     /**
-     * Registers a team code and team name in the local in-memory registry.
+     * Registers a team code, team name, and leader UID in the local in-memory registry.
      */
-    fun registerLocalTeam(teamCode: String, teamName: String) {
+    fun registerLocalTeam(teamCode: String, teamName: String, leaderUid: String = "") {
         val cleanCode = teamCode.trim().uppercase()
         val cleanName = teamName.trim()
         if (isValidTeamCodeFormat(cleanCode) && cleanName.isNotBlank()) {
             localTeams[cleanCode] = cleanName
+            if (leaderUid.isNotBlank()) {
+                localTeamLeaders[cleanCode] = leaderUid.trim()
+            }
         }
     }
 
@@ -151,6 +155,15 @@ object FirestoreManager {
     fun removeLocalTeam(teamCode: String) {
         val cleanCode = teamCode.trim().uppercase()
         localTeams.remove(cleanCode)
+        localTeamLeaders.remove(cleanCode)
+    }
+
+    /**
+     * Looks up a team leader UID by 6-character team code in the local in-memory registry.
+     */
+    fun getLocalTeamLeaderUid(teamCode: String): String? {
+        val cleanCode = teamCode.trim().uppercase()
+        return localTeamLeaders[cleanCode]
     }
 
     /**
@@ -340,8 +353,9 @@ object FirestoreManager {
                             return@addOnSuccessListener
                         }
                         val foundTeamName = snapshot.getString("teamName").orEmpty()
+                        val leaderUid = snapshot.getString("leaderUid").orEmpty()
                         if (foundTeamName.isNotBlank()) {
-                            registerLocalTeam(cleanCode, foundTeamName)
+                            registerLocalTeam(cleanCode, foundTeamName, leaderUid)
                             finishOnce(Result.success(cleanCode to foundTeamName))
                             return@addOnSuccessListener
                         }

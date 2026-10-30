@@ -627,6 +627,53 @@ object TeamRepository {
         val defaultLeaderUsername = "RYAN LLOYD"
         val defaultLeaderPhoto = "https://res.cloudinary.com/ffb3fdkm/image/upload/v1792548890/j13tbqyhhwro4na8ckke.jpg"
 
+        val designatedLeaderUid = preferences?.getString("team_leader_uid_$code", "")?.trim().orEmpty()
+        val designatedLeaderName = preferences?.getString("team_leader_name_$code", "")?.trim().orEmpty()
+        val designatedLeaderEmail = preferences?.getString("team_leader_email_$code", "")?.trim()?.lowercase().orEmpty()
+        val transferred = preferences?.getBoolean("transferred_leadership_$code", false) == true
+
+        // If a designated leader UID or Email exists from Firestore /teams/{code}:
+        if (designatedLeaderUid.isNotBlank() || designatedLeaderEmail.isNotBlank()) {
+            val hasDesignated = members.any { m ->
+                !m.removedByLeader && (
+                    (designatedLeaderUid.isNotBlank() && m.uid == designatedLeaderUid) ||
+                    (designatedLeaderEmail.isNotBlank() && m.email.trim().lowercase() == designatedLeaderEmail)
+                )
+            }
+            if (hasDesignated) {
+                return members.map { m ->
+                    val isDes = (designatedLeaderUid.isNotBlank() && m.uid == designatedLeaderUid) ||
+                                (designatedLeaderEmail.isNotBlank() && m.email.trim().lowercase() == designatedLeaderEmail)
+                    if (!m.removedByLeader && isDes) {
+                        m.copy(role = "Leader", ministryRole = "Worship Leader")
+                    } else if (transferred && (m.email.trim().lowercase() == defaultLeaderEmail || m.fullName.equals(defaultLeaderName, ignoreCase = true))) {
+                        m.copy(role = "Member", ministryRole = if (m.ministryRole.equals("Worship Leader", true)) "Member" else m.ministryRole)
+                    } else m
+                }
+            } else {
+                // Synthesize the real leader using designatedLeaderUid / designatedLeaderName / designatedLeaderEmail
+                val desName = designatedLeaderName.ifBlank { "Worship Leader" }
+                val desUid = designatedLeaderUid.ifBlank { java.util.UUID.randomUUID().toString() }
+                val desPhoto = preferences?.getString("team_leader_photo_$code", "").orEmpty()
+                val synthesizedLeader = TeamMember(
+                    uid = desUid,
+                    fullName = desName,
+                    username = desName.split(" ").firstOrNull() ?: desName,
+                    email = designatedLeaderEmail,
+                    role = "Leader",
+                    ministryRole = "Worship Leader",
+                    teamCode = code,
+                    photoUri = desPhoto,
+                    removedByLeader = false
+                )
+                return listOf(synthesizedLeader) + members.map { m ->
+                    if (transferred && (m.email.trim().lowercase() == defaultLeaderEmail || m.fullName.equals(defaultLeaderName, ignoreCase = true))) {
+                        m.copy(role = "Member", ministryRole = if (m.ministryRole.equals("Worship Leader", true)) "Member" else m.ministryRole)
+                    } else m
+                }
+            }
+        }
+
         // If the roster already contains an active Worship Leader, keep as-is
         val hasWorshipLeader = members.any { m ->
             !m.removedByLeader && isWorshipLeader(m.ministryRole, m.role)
@@ -635,22 +682,8 @@ object TeamRepository {
             return members
         }
 
-        val designatedLeaderEmail = preferences?.getString("team_leader_email_$code", "")?.trim()?.lowercase().orEmpty()
-        val transferred = preferences?.getBoolean("transferred_leadership_$code", false) == true
-
-        if (designatedLeaderEmail.isNotBlank()) {
-            val hasDesignated = members.any { m -> !m.removedByLeader && m.email.trim().lowercase() == designatedLeaderEmail }
-            if (hasDesignated) {
-                return members.map { m ->
-                    if (!m.removedByLeader && m.email.trim().lowercase() == designatedLeaderEmail) {
-                        m.copy(role = "Leader", ministryRole = "Worship Leader")
-                    } else m
-                }
-            }
-        }
-
         // Only promote default leader Ryan if leadership has NOT been transferred away
-        if (!transferred && (designatedLeaderEmail.isBlank() || designatedLeaderEmail == defaultLeaderEmail)) {
+        if (!transferred) {
             val hasRyan = members.any { m ->
                 !m.removedByLeader && (
                     m.email.trim().lowercase() == defaultLeaderEmail ||
@@ -667,24 +700,6 @@ object TeamRepository {
                     } else m
                 }
             }
-        }
-
-        if (transferred && designatedLeaderEmail.isNotBlank()) {
-            val desName = preferences?.getString("team_leader_name_$code", "")?.takeIf { it.isNotBlank() } ?: "Worship Leader"
-            val desUid = preferences?.getString("team_leader_uid_$code", "")?.takeIf { it.isNotBlank() } ?: java.util.UUID.randomUUID().toString()
-            val desPhoto = preferences?.getString("team_leader_photo_$code", "").orEmpty()
-            val synthesizedLeader = TeamMember(
-                uid = desUid,
-                fullName = desName,
-                username = desName.split(" ").firstOrNull() ?: desName,
-                email = designatedLeaderEmail,
-                role = "Leader",
-                ministryRole = "Worship Leader",
-                teamCode = code,
-                photoUri = desPhoto,
-                removedByLeader = false
-            )
-            return listOf(synthesizedLeader) + members
         }
 
         if (transferred) {
@@ -1096,13 +1111,37 @@ object TeamRepository {
             db.collection(TEAMS_COLLECTION).document(code).get()
                 .addOnCompleteListener { tTask ->
                     val teamRemovedSet = mutableSetOf<String>()
+                    var docLeaderUid = ""
+                    var docLeaderName = ""
                     if (tTask.isSuccessful && tTask.result != null) {
-                        val list = (tTask.result.get("removedMembers") as? List<*>)?.mapNotNull { it?.toString()?.trim()?.lowercase() }.orEmpty()
+                        val teamDoc = tTask.result
+                        docLeaderUid = teamDoc.getString("leaderUid").orEmpty()
+                        docLeaderName = teamDoc.getString("leaderName").orEmpty()
+                        val list = (teamDoc.get("removedMembers") as? List<*>)?.mapNotNull { it?.toString()?.trim()?.lowercase() }.orEmpty()
                         teamRemovedSet.addAll(list)
+                        if (docLeaderUid.isNotBlank() && preferences != null) {
+                            preferences.edit()
+                                .putString("team_leader_uid_$code", docLeaderUid)
+                                .putString("team_leader_name_$code", docLeaderName)
+                                .apply()
+                        }
                     }
                     if (preferences != null) {
                         preferences.getStringSet("team_removed_members_$code", null)?.let { s ->
                             teamRemovedSet.addAll(s.map { it.trim().lowercase() })
+                        }
+                        if (docLeaderUid.isNotBlank() && preferences.getString("team_leader_email_$code", "").isNullOrBlank()) {
+                            try {
+                                db.collection(USERS_COLLECTION).document(docLeaderUid).get()
+                                    .addOnSuccessListener { uDoc ->
+                                        if (uDoc != null && uDoc.exists()) {
+                                            val lEmail = uDoc.getString("email").orEmpty().trim().lowercase()
+                                            if (lEmail.isNotBlank()) {
+                                                preferences.edit().putString("team_leader_email_$code", lEmail).apply()
+                                            }
+                                        }
+                                    }
+                            } catch (_: Throwable) {}
                         }
                     }
 
@@ -1616,24 +1655,27 @@ object TeamRepository {
             "leaderName" to newLeaderName
         ))
 
-        // 2. Update new leader's user document
+        // 2. Update new leader's user document (using SetOptions.merge to safely create or merge)
         val newLeaderRef = db.collection(USERS_COLLECTION).document(newLeaderUid)
-        batch.update(newLeaderRef, mapOf<String, Any>(
+        batch.set(newLeaderRef, mapOf<String, Any>(
+            "uid" to newLeaderUid,
             "role" to "Leader",
             "ministryRole" to "Worship Leader"
-        ))
+        ), com.google.firebase.firestore.SetOptions.merge())
 
-        // 3. Update old leader's user document
+        // 3. Update old leader's user document (using SetOptions.merge)
         val oldLeaderRef = db.collection(USERS_COLLECTION).document(currentLeaderUid)
-        batch.update(oldLeaderRef, mapOf<String, Any>(
+        batch.set(oldLeaderRef, mapOf<String, Any>(
+            "uid" to currentLeaderUid,
             "role" to "Member",
             "ministryRole" to "Member"
-        ))
+        ), com.google.firebase.firestore.SetOptions.merge())
 
         batch.commit()
             .addOnSuccessListener {
                 val cleanEmail = newLeaderEmail.trim().lowercase()
                 val cleanOldEmail = oldLeaderEmail.trim().lowercase()
+                val cleanTeamCode = code.trim().uppercase()
                 for ((_, roster) in cachedRosters) {
                     synchronized(roster) {
                         val oldIdx = roster.indexOfFirst { it.uid == currentLeaderUid || (cleanOldEmail.isNotBlank() && it.email.equals(cleanOldEmail, true)) }
@@ -1654,23 +1696,26 @@ object TeamRepository {
                     editor.putString("ministryRole", "Member")
                     editor.putString(com.example.syncedn.data.auth.SessionManager.KEY_MINISTRY_ROLE, "Member")
                     if (currentLeaderUid.isNotBlank()) {
-                        editor.putString("user_role_$currentLeaderUid", "Member")
-                        editor.putString("user_ministry_$currentLeaderUid", "Member")
+                        editor.putString("user_role_${cleanTeamCode}_$currentLeaderUid", "Member")
+                        editor.putString("user_ministry_${cleanTeamCode}_$currentLeaderUid", "Member")
                     }
                     if (cleanOldEmail.isNotBlank()) {
-                        editor.putString("email_role_$cleanOldEmail", "Member")
-                        editor.putString("email_ministry_$cleanOldEmail", "Member")
+                        editor.putString("email_role_${cleanTeamCode}_$cleanOldEmail", "Member")
+                        editor.putString("email_ministry_${cleanTeamCode}_$cleanOldEmail", "Member")
                     }
                     if (newLeaderUid.isNotBlank()) {
-                        editor.putString("user_role_$newLeaderUid", "Leader")
-                        editor.putString("user_ministry_$newLeaderUid", "Worship Leader")
+                        editor.putString("user_role_${cleanTeamCode}_$newLeaderUid", "Leader")
+                        editor.putString("user_ministry_${cleanTeamCode}_$newLeaderUid", "Worship Leader")
+                        editor.putString("team_leader_uid_$cleanTeamCode", newLeaderUid)
+                    }
+                    if (newLeaderName.isNotBlank()) {
+                        editor.putString("team_leader_name_$cleanTeamCode", newLeaderName)
                     }
                     if (cleanEmail.isNotBlank()) {
-                        editor.putString("email_role_$cleanEmail", "Leader")
-                        editor.putString("email_ministry_$cleanEmail", "Worship Leader")
+                        editor.putString("email_role_${cleanTeamCode}_$cleanEmail", "Leader")
+                        editor.putString("email_ministry_${cleanTeamCode}_$cleanEmail", "Worship Leader")
+                        editor.putString("team_leader_email_$cleanTeamCode", cleanEmail)
                     }
-                    val cleanTeamCode = code.trim().uppercase()
-                    editor.putString("team_leader_email_$cleanTeamCode", cleanEmail)
                     editor.putBoolean("transferred_leadership_$cleanTeamCode", true)
                     val cleanTeamLower = preferences.getString("teamName", "").orEmpty().trim().lowercase()
                     if (cleanTeamLower.isNotBlank() && cleanEmail.isNotBlank()) {
@@ -1688,6 +1733,27 @@ object TeamRepository {
                     } catch (_: Throwable) {}
                     editor.commit()
                 }
+
+                // Update all user documents for old leader in Firestore to Member
+                if (cleanOldEmail.isNotBlank()) {
+                    try {
+                        db.collection(USERS_COLLECTION)
+                            .whereEqualTo("email", cleanOldEmail)
+                            .get()
+                            .addOnSuccessListener { snap ->
+                                if (snap != null) {
+                                    for (doc in snap.documents) {
+                                        doc.reference.update(mapOf(
+                                            "role" to "Member",
+                                            "ministryRole" to "Member"
+                                        ))
+                                    }
+                                }
+                            }
+                    } catch (_: Throwable) {}
+                }
+
+                // Update all user documents for new leader in Firestore to Leader
                 if (cleanEmail.isNotBlank()) {
                     try {
                         db.collection(USERS_COLLECTION)
