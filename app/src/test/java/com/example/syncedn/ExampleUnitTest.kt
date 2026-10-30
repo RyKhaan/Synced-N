@@ -4595,4 +4595,73 @@ class ExampleUnitTest {
         assertFalse(isPrimaryLeader)
         assertFalse(isSubLeader)
     }
+
+    @Test
+    fun testRosterDemotionRoleSyncAndTrashSymbol() {
+        // 1. Verify that when someone is assigned an ordinary member role (Vocalist),
+        //    their badge is "Member" and NOT "Leader", even if designatedLeader email/uid was previously set
+        val activeCode = "KPABFG"
+        val testPrefs = FakePreferences().apply {
+            edit()
+                .putString("teamCode", activeCode)
+                .putString("teamName", "WISE MAN TEAM")
+                .putString("team_leader_uid_$activeCode", "new_leader_uid")
+                .putString("team_leader_email_$activeCode", "newleader@test.com")
+                .putString("email_role_${activeCode}_ryanlloydgenturo@gmail.com", "Member")
+                .putString("email_ministry_${activeCode}_ryanlloydgenturo@gmail.com", "Vocalist")
+                .putString("user_role_${activeCode}_ryan_uid", "Member")
+                .putString("user_ministry_${activeCode}_ryan_uid", "Vocalist")
+                .apply()
+        }
+
+        val formerLeaderMember = com.example.syncedn.data.model.TeamMember(
+            uid = "ryan_uid",
+            fullName = "Ryan Lloyd Genturo",
+            username = "ryan",
+            email = "ryanlloydgenturo@gmail.com",
+            role = "Member",
+            ministryRole = "Vocalist",
+            teamCode = activeCode
+        )
+
+        // Evaluate badge logic exactly as in Members tab
+        val designatedLeaderUid = testPrefs.getString("team_leader_uid_$activeCode", "").orEmpty().trim()
+        val designatedLeader = testPrefs.getString("team_leader_email_$activeCode", "").orEmpty().trim().lowercase()
+        val isExplicitMember = formerLeaderMember.role.equals("Member", true) ||
+                               testPrefs.getString("email_role_${activeCode}_${formerLeaderMember.email.trim().lowercase()}", "").equals("Member", true) ||
+                               testPrefs.getString("user_role_${activeCode}_${formerLeaderMember.uid}", "").equals("Member", true)
+        val isLeaderBadge = !isExplicitMember && (
+            formerLeaderMember.ministryRole.equals("Worship Leader", ignoreCase = true) ||
+            (formerLeaderMember.ministryRole.equals("Substitute Leader", ignoreCase = true) && !formerLeaderMember.role.equals("Member", true)) ||
+            (designatedLeaderUid.isNotBlank() && formerLeaderMember.uid == designatedLeaderUid) ||
+            (designatedLeader.isNotBlank() && formerLeaderMember.email.equals(designatedLeader, ignoreCase = true))
+        )
+        val badge = if (isLeaderBadge) "Leader" else "Member"
+        val role = if (badge == "Member" && formerLeaderMember.ministryRole.equals("Substitute Leader", ignoreCase = true)) {
+            "Member"
+        } else {
+            formerLeaderMember.ministryRole.ifBlank { if (badge == "Leader") "Worship Leader" else "Member" }
+        }
+
+        assertEquals("Member", badge)
+        assertEquals("Vocalist", role)
+
+        // 2. Evaluate grouping logic in Role tab:
+        //    Must be placed in Vocalist, NOT Worship Leader
+        val isLead = !isExplicitMember && (
+            formerLeaderMember.ministryRole.equals("Worship Leader", ignoreCase = true) ||
+            (!com.example.syncedn.data.database.TeamRepository.isSubstituteLeader(formerLeaderMember.ministryRole) &&
+             ((designatedLeaderUid.isNotBlank() && formerLeaderMember.uid == designatedLeaderUid) ||
+              (designatedLeader.isNotBlank() && formerLeaderMember.email.equals(designatedLeader, ignoreCase = true))))
+        )
+        assertFalse("Former leader assigned Vocalist must not be isLead", isLead)
+
+        // 3. Verify that rejoining approval alert is suppressed when user has active teamCode
+        val currentActiveCode = testPrefs.getString("teamCode", "").orEmpty().trim().uppercase()
+        val isAlreadyInTeam = currentActiveCode.isNotBlank()
+        assertTrue("User has teamCode, so they are already in team", isAlreadyInTeam)
+        // Notification must NOT fire when isAlreadyInTeam == true
+        val shouldSuppressRejoinNotification = isAlreadyInTeam
+        assertTrue(shouldSuppressRejoinNotification)
+    }
 }

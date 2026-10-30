@@ -1368,6 +1368,11 @@ object TeamRepository {
                         if (teamLeadEmail == cleanEmail) {
                             remove("team_leader_email_$activeCode")
                         }
+                        val teamLeadUid = preferences.getString("team_leader_uid_$activeCode", "").orEmpty().trim()
+                        if (memberUid.isNotBlank() && teamLeadUid == memberUid) {
+                            remove("team_leader_uid_$activeCode")
+                            remove("team_leader_name_$activeCode")
+                        }
                     }
                 }
             }

@@ -179,8 +179,10 @@ object SyncedMessagingService {
                             val reqUid = doc.getString("userUid").orEmpty().trim()
                             val reqEmail = doc.getString("userEmail").orEmpty().trim().lowercase()
                             knownRejoinStatuses[doc.id] = st
+                            val currentActiveCode = preferences.getString("teamCode", "").orEmpty().trim().uppercase()
+                            val isAlreadyInTeam = currentActiveCode.isNotBlank()
                             val isMine = (myUid.isNotBlank() && reqUid == myUid) || (myEmail.isNotBlank() && reqEmail == myEmail)
-                            if (isMine && st.equals("Approved", ignoreCase = true) && !notifiedApproved.contains(doc.id)) {
+                            if (!isAlreadyInTeam && isMine && st.equals("Approved", ignoreCase = true) && !notifiedApproved.contains(doc.id)) {
                                 notifiedApproved.add(doc.id)
                                 preferences.edit()
                                     .putStringSet("notified_approved_rejoins", notifiedApproved)
@@ -222,6 +224,8 @@ object SyncedMessagingService {
                         val prevStatus = knownRejoinStatuses[id]
                         knownRejoinStatuses[id] = status
 
+                        val currentActiveCode = preferences.getString("teamCode", "").orEmpty().trim().uppercase()
+                        val isAlreadyInTeam = currentActiveCode.isNotBlank()
                         val isMine = (myUid.isNotBlank() && reqUid == myUid) || (myEmail.isNotBlank() && reqEmail == myEmail)
 
                         if (isLeader && !isMine && status.equals("Pending", ignoreCase = true) && !prevStatus.equals("Pending", ignoreCase = true)) {
@@ -232,7 +236,7 @@ object SyncedMessagingService {
                                 "$reqName requested approval to re-join your team ($rejoinWatchCode)."
                             )
                             onLeaderRejoinRequestInApp?.invoke(reqName, rejoinWatchCode)
-                        } else if (isMine && status.equals("Approved", ignoreCase = true) && !prevStatus.equals("Approved", ignoreCase = true)) {
+                        } else if (!isAlreadyInTeam && isMine && status.equals("Approved", ignoreCase = true) && !prevStatus.equals("Approved", ignoreCase = true)) {
                             notifiedApproved.add(id)
                             preferences.edit()
                                 .putStringSet("notified_approved_rejoins", notifiedApproved)
