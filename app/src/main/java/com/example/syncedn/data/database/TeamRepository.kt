@@ -1141,6 +1141,7 @@ object TeamRepository {
                         teamRemovedSet.addAll(list)
                         if (docTeamName.isNotBlank()) {
                             FirestoreManager.registerLocalTeam(code, docTeamName, docLeaderUid)
+                            syncTeamNameLocally(code, docTeamName, preferences)
                         }
                         if (docLeaderUid.isNotBlank() && preferences != null) {
                             preferences.edit().apply {
@@ -1184,6 +1185,11 @@ object TeamRepository {
                                     val memberEmailLower = (data["email"] as? String).orEmpty().trim().lowercase()
                                     if (memberEmailLower.isNotBlank() && teamRemovedSet.contains(memberEmailLower)) {
                                         uidsToPruneFromTeam.add(memberEmailLower)
+                                    }
+                                    if (docTeamName.isNotBlank() && (data["teamName"] as? String)?.trim() != docTeamName) {
+                                        try {
+                                            doc.reference.update("teamName", docTeamName)
+                                        } catch (_: Throwable) {}
                                     }
 
                                     rawMembers.add(TeamMember.fromMap(mapWithId))
@@ -5338,6 +5344,40 @@ object TeamRepository {
             )
         }
 
+        // 5. Team Name Updates
+        if (preferences != null) {
+            val rawHistory = preferences.getString("notif_team_name_history_$code", null)
+            if (!rawHistory.isNullOrBlank()) {
+                try {
+                    val arr = org.json.JSONArray(rawHistory)
+                    for (i in 0 until arr.length()) {
+                        val obj = arr.optJSONObject(i) ?: continue
+                        val id = obj.optString("id").ifBlank { "notif_team_name_${code}_$i" }
+                        val oldName = obj.optString("oldName")
+                        val newName = obj.optString("newName")
+                        val ts = obj.optLong("timestamp", System.currentTimeMillis())
+                        if (newName.isNotBlank()) {
+                            val msg = if (oldName.isNotBlank() && oldName != newName) {
+                                "Your Team Leader has changed the team name from \"$oldName\" to \"$newName\"."
+                            } else {
+                                "Your Team Leader has updated the team name to \"$newName\"."
+                            }
+                            items.add(
+                                TeamNotificationItem(
+                                    id = id,
+                                    title = "Team Name Updated",
+                                    message = msg,
+                                    timeLabel = formatRelativeNotificationTime(ts),
+                                    iconName = "people",
+                                    timestamp = ts
+                                )
+                            )
+                        }
+                    }
+                } catch (_: Throwable) {}
+            }
+        }
+
         val clearedAt = preferences?.getLong("notifications_cleared_at", 0L) ?: 0L
         val deletedIds = preferences?.getStringSet("deleted_notifications", emptySet()).orEmpty()
         return items.filter { it.timestamp > clearedAt && it.id !in deletedIds }.sortedByDescending { it.timestamp }.take(50)
@@ -5707,8 +5747,16 @@ object TeamRepository {
                     val docLeaderName = snapshot.getString("leaderName").orEmpty().trim()
                     val docLeaderEmail = snapshot.getString("leaderEmail").orEmpty().trim().lowercase()
                     val docTeamName = snapshot.getString("teamName").orEmpty().trim()
+                    var teamNameChanged = false
                     if (docTeamName.isNotBlank()) {
+                        val prevTeamName = preferences?.getString("teamName", "")?.trim().orEmpty()
+                            .ifBlank { preferences?.getString("team_registry_$code", "")?.trim().orEmpty() }
+                        teamNameChanged = prevTeamName != docTeamName
+                        if (prevTeamName.isNotBlank() && prevTeamName != docTeamName) {
+                            recordTeamNameChangeNotification(code, prevTeamName, docTeamName, preferences)
+                        }
                         FirestoreManager.registerLocalTeam(code, docTeamName, docLeaderUid)
+                        syncTeamNameLocally(code, docTeamName, preferences)
                     }
                     if (docLeaderUid.isNotBlank()) {
                         val currentRoster = cachedRosters[code]?.let { synchronized(it) { it.toList() } }.orEmpty()
@@ -5733,14 +5781,143 @@ object TeamRepository {
                             val updatedRoster = ensureTeamLeaderInRoster(code, currentRoster, preferences)
                             saveRosterLocally(code, updatedRoster, preferences)
                         }
-                        if (leaderChanged || onTeamUpdated != null) {
+                        if (leaderChanged || teamNameChanged || onTeamUpdated != null) {
                             onTeamUpdated?.invoke()
                         }
+                    } else if (teamNameChanged) {
+                        onTeamUpdated?.invoke()
                     }
                 }
         } catch (_: Exception) {
             null
         }
+    }
+
+    /**
+     * Synchronizes the authoritative team name for [teamCode] across SharedPreferences keys
+     * when the current user belongs to [teamCode].
+     */
+    fun syncTeamNameLocally(
+        teamCode: String,
+        newTeamName: String,
+        preferences: android.content.SharedPreferences?
+    ) {
+        val code = teamCode.trim().uppercase()
+        val cleanName = newTeamName.trim()
+        if (code.isBlank() || cleanName.isBlank() || preferences == null) return
+        val activeCode = preferences.getString("teamCode", "").orEmpty().trim().uppercase()
+            .ifBlank { preferences.getString(com.example.syncedn.data.auth.SessionManager.KEY_TEAM_CODE, "").orEmpty().trim().uppercase() }
+        val leftTeam = preferences.getBoolean("leftTeam", false)
+        val myUid = preferences.getString(com.example.syncedn.data.auth.SessionManager.KEY_USER_ID, "").orEmpty()
+            .ifBlank { preferences.getString("userId", "").orEmpty() }
+        val myEmail = preferences.getString("email", "").orEmpty().trim().lowercase()
+        preferences.edit().apply {
+            putString("team_registry_$code", cleanName)
+            putString("team_leader_code_${cleanName.lowercase()}", code)
+            if (!leftTeam && (activeCode.isBlank() || activeCode == code)) {
+                putString("teamName", cleanName)
+                putString(com.example.syncedn.data.auth.SessionManager.KEY_TEAM_NAME, cleanName)
+                if (myUid.isNotBlank()) {
+                    putString("user_team_$myUid", cleanName)
+                }
+                if (myEmail.isNotBlank()) {
+                    putString("email_team_$myEmail", cleanName)
+                }
+            }
+        }.apply()
+    }
+
+    /**
+     * Records a team name change event in local SharedPreferences so it appears in Recent Notifications
+     * without duplicating identical back-to-back updates.
+     */
+    fun recordTeamNameChangeNotification(
+        teamCode: String,
+        oldName: String,
+        newName: String,
+        preferences: android.content.SharedPreferences?,
+        timestamp: Long = System.currentTimeMillis()
+    ) {
+        val code = teamCode.trim().uppercase()
+        val cleanOld = oldName.trim()
+        val cleanNew = newName.trim()
+        if (code.isBlank() || cleanNew.isBlank() || cleanOld == cleanNew || preferences == null) return
+        try {
+            val raw = preferences.getString("notif_team_name_history_$code", "[]").orEmpty()
+            val arr = try { org.json.JSONArray(raw) } catch (_: Throwable) { org.json.JSONArray() }
+            if (arr.length() > 0) {
+                val last = arr.optJSONObject(arr.length() - 1)
+                if (last != null && last.optString("newName") == cleanNew && last.optString("oldName") == cleanOld) {
+                    return
+                }
+            }
+            val entry = org.json.JSONObject().apply {
+                put("id", "notif_team_name_${code}_$timestamp")
+                put("oldName", cleanOld)
+                put("newName", cleanNew)
+                put("timestamp", timestamp)
+            }
+            arr.put(entry)
+            preferences.edit()
+                .putString("notif_team_name_history_$code", arr.toString())
+                .putString("notif_known_team_name_$code", cleanNew)
+                .apply()
+        } catch (_: Throwable) {}
+    }
+
+    /**
+     * Updates the team's name locally and in Cloud Firestore (/teams/{teamCode} and all member /users/{uid} docs),
+     * and records a notification item for the team.
+     */
+    fun updateTeamName(
+        teamCode: String,
+        newTeamName: String,
+        preferences: android.content.SharedPreferences? = null,
+        onComplete: (Result<String>) -> Unit = {}
+    ) {
+        val code = teamCode.trim().uppercase()
+        val cleanName = newTeamName.trim()
+        if (code.isBlank()) {
+            onComplete(Result.failure(IllegalArgumentException("Team code cannot be blank.")))
+            return
+        }
+        if (cleanName.isBlank() || cleanName.length > 100) {
+            onComplete(Result.failure(IllegalArgumentException("Enter a valid team name (1-100 characters).")))
+            return
+        }
+
+        val oldName = preferences?.getString("teamName", "")?.trim().orEmpty()
+            .ifBlank { preferences?.getString("team_registry_$code", "")?.trim().orEmpty() }
+            .ifBlank { FirestoreManager.getLocalTeamName(code).orEmpty().trim() }
+        val leaderUid = preferences?.getString("team_leader_uid_$code", "")?.trim().orEmpty()
+            .ifBlank { FirestoreManager.getLocalTeamLeaderUid(code).orEmpty() }
+
+        FirestoreManager.registerLocalTeam(code, cleanName, leaderUid)
+        syncTeamNameLocally(code, cleanName, preferences)
+        if (oldName.isNotBlank() && oldName != cleanName) {
+            recordTeamNameChangeNotification(code, oldName, cleanName, preferences)
+        } else if (preferences != null) {
+            preferences.edit().putString("notif_known_team_name_$code", cleanName).apply()
+        }
+
+        onComplete(Result.success(cleanName))
+
+        try {
+            db.collection(TEAMS_COLLECTION).document(code)
+                .update("teamName", cleanName)
+                .addOnSuccessListener {
+                    db.collection(USERS_COLLECTION)
+                        .whereEqualTo("teamCode", code)
+                        .get()
+                        .addOnSuccessListener { snap ->
+                            if (snap != null) {
+                                for (doc in snap.documents) {
+                                    doc.reference.update("teamName", cleanName)
+                                }
+                            }
+                        }
+                }
+        } catch (_: Throwable) {}
     }
 
     /**

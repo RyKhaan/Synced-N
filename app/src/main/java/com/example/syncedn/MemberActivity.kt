@@ -322,8 +322,18 @@ open class MemberActivity : AppCompatActivity() {
             onTeamUpdated = {
                 runOnUiThread {
                     if (!isFinishing && !isDestroyed) {
+                        val syncedName = preferences.getString("teamName", "").orEmpty()
+                            .ifBlank { FirestoreManager.getLocalTeamName(code).orEmpty() }
+                        val nameChanged = syncedName.isNotBlank() && syncedName != teamName
+                        if (syncedName.isNotBlank()) {
+                            teamName = syncedName
+                            findViewById<TextView>(UI.teamTitle)?.text = teamName
+                        }
                         teamRoster = TeamRepository.getCachedRoster(code, preferences)
                         updateRosterViews()
+                        if (nameChanged && page in listOf("teams", "teamDetails", "settings", "notifications")) {
+                            navigate(page, triggerRefresh = false)
+                        }
                     }
                 }
             },
@@ -774,7 +784,6 @@ open class MemberActivity : AppCompatActivity() {
         }
         if (myCurrentEmail.isNotBlank()) {
             userEmailMembershipListener?.remove()
-        teamDocListener?.remove()
             userEmailMembershipListener = com.google.firebase.firestore.FirebaseFirestore.getInstance()
                 .collection("users").whereEqualTo("email", myCurrentEmail)
                 .addSnapshotListener { snapshot, error ->
@@ -3572,6 +3581,12 @@ open class MemberActivity : AppCompatActivity() {
         TeamRepository.getTeamRoster(currentCode, force, preferences) { result ->
             runOnUiThread {
                 if ((ticket == -1L || rosterRefreshGate.finish(ticket)) && !isFinishing && !isDestroyed && activeTeamCode() == currentCode) {
+                    val syncedName = preferences.getString("teamName", "").orEmpty()
+                        .ifBlank { FirestoreManager.getLocalTeamName(currentCode).orEmpty() }
+                    if (syncedName.isNotBlank() && syncedName != teamName) {
+                        teamName = syncedName
+                        findViewById<TextView>(UI.teamTitle)?.text = teamName
+                    }
                     result.getOrNull()?.let { list ->
                         teamRoster = list
                         if (getActiveRoster().sortedBy { it.uid } != previous) updateRosterViews()
@@ -5439,7 +5454,9 @@ open class MemberActivity : AppCompatActivity() {
             }
         }
         subHeader.add(clearSubBtn, -2, -2)
-        col.add(subHeader); col.space(12)
+        col.add(subHeader); col.space(4)
+        col.add(text("Note: View your substitution requests and leader approval updates for upcoming services.", 11, Color.rgb(100, 116, 139)))
+        col.space(10)
         substitutionFeed(col)
         col.space(16)
 
@@ -5471,7 +5488,9 @@ open class MemberActivity : AppCompatActivity() {
             }
         }
         notifHeader.add(clearBtn, -2, -2)
-        col.add(notifHeader); col.space(12)
+        col.add(notifHeader); col.space(4)
+        col.add(text("Note: Stay updated on team name changes, published schedules, new songs, and ministry announcements.", 11, Color.rgb(100, 116, 139)))
+        col.space(10)
         recentNotificationsList(col)
     }
 
@@ -6775,9 +6794,11 @@ open class MemberActivity : AppCompatActivity() {
             gravity = Gravity.CENTER_VERTICAL
             background = bg(Color.rgb(217, 217, 217), 10)
             setPadding(dp(16), 0, dp(16), 0)
-            add(text(teamName.ifBlank { "Worship Team" }, 14, Color.BLACK, bold = true), 0, -2, 1f)
+            add(text(teamName.ifBlank { "WORSHIP TEAM" }, 14, Color.BLACK, bold = true), 0, -2, 1f)
         }
-        col.add(teamNameBox, -1, 42); col.space(24)
+        col.add(teamNameBox, -1, 42); col.space(6)
+        col.add(text("Note: Only the Team Leader can edit the team name. Any changes made by leadership will automatically sync here and notify all members.", 11, Color.rgb(100, 116, 139)))
+        col.space(20)
         val row = horizontal().apply {
             gravity = Gravity.CENTER_VERTICAL
             setPadding(0, dp(4), 0, dp(4))

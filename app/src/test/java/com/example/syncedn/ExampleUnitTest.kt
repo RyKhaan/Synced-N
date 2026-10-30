@@ -4848,4 +4848,52 @@ class ExampleUnitTest {
         assertEquals("RL", stalePrefs.getString("team_leader_name_$teamCode", ""))
         assertTrue(stalePrefs.getBoolean("transferred_leadership_$teamCode", false))
     }
+
+    @Test
+    fun testEditTeamNameSyncAndNotification() {
+        val repo = com.example.syncedn.data.database.TeamRepository
+        val teamCode = "KPABFG"
+        val leaderUid = "h9yRCswmV1f0Pnia2EnxDv4x4X43"
+        val leaderEmail = "ryanlloydgenturo@gmail.com"
+
+        val prefs = FakePreferences().apply {
+            edit()
+                .putString("teamCode", teamCode)
+                .putString("teamName", "WORSHIP TEAM")
+                .putString(com.example.syncedn.data.auth.SessionManager.KEY_TEAM_NAME, "WORSHIP TEAM")
+                .putString("team_registry_$teamCode", "WORSHIP TEAM")
+                .putString("userId", leaderUid)
+                .putString(com.example.syncedn.data.auth.SessionManager.KEY_USER_ID, leaderUid)
+                .putString("email", leaderEmail)
+                .apply()
+        }
+        com.example.syncedn.data.database.FirestoreManager.registerLocalTeam(teamCode, "WORSHIP TEAM", leaderUid)
+
+        var callbackResult: Result<String>? = null
+        repo.updateTeamName(
+            teamCode = teamCode,
+            newTeamName = "PRAISE & WORSHIP TEAM",
+            preferences = prefs
+        ) { res ->
+            callbackResult = res
+        }
+
+        assertNotNull(callbackResult)
+        assertTrue(callbackResult!!.isSuccess)
+        assertEquals("PRAISE & WORSHIP TEAM", callbackResult!!.getOrNull())
+        assertEquals("PRAISE & WORSHIP TEAM", prefs.getString("teamName", ""))
+        assertEquals("PRAISE & WORSHIP TEAM", prefs.getString(com.example.syncedn.data.auth.SessionManager.KEY_TEAM_NAME, ""))
+        assertEquals("PRAISE & WORSHIP TEAM", prefs.getString("team_registry_$teamCode", ""))
+        assertEquals("PRAISE & WORSHIP TEAM", prefs.getString("user_team_$leaderUid", ""))
+        assertEquals("PRAISE & WORSHIP TEAM", prefs.getString("email_team_$leaderEmail", ""))
+        assertEquals("PRAISE & WORSHIP TEAM", com.example.syncedn.data.database.FirestoreManager.getLocalTeamName(teamCode))
+
+        val recentNotifs = repo.getRecentTeamNotifications(teamCode, prefs)
+        val renameNotif = recentNotifs.find { it.title == "Team Name Updated" }
+        assertNotNull("Expected Team Name Updated notification in Recent Notifications", renameNotif)
+        assertEquals(
+            "Your Team Leader has changed the team name from \"WORSHIP TEAM\" to \"PRAISE & WORSHIP TEAM\".",
+            renameNotif!!.message
+        )
+    }
 }

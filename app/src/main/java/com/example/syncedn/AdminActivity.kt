@@ -449,7 +449,7 @@ class AdminActivity : AppCompatActivity() {
         if (teamName.isBlank() && activeCode.isNotBlank()) {
             teamName = preferences.getString("team_registry_$activeCode", "").orEmpty()
                 .ifBlank { FirestoreManager.getLocalTeamName(activeCode).orEmpty() }
-                .ifBlank { "WISE MAN TEAM" }
+                .ifBlank { "WORSHIP TEAM" }
             preferences.edit {
                 putString("teamName", teamName)
                 putString("teamCode", activeCode)
@@ -590,8 +590,18 @@ class AdminActivity : AppCompatActivity() {
                 onTeamUpdated = {
                     runOnUiThread {
                         if (!isFinishing && !isDestroyed) {
+                            val syncedName = preferences.getString("teamName", "").orEmpty()
+                                .ifBlank { FirestoreManager.getLocalTeamName(activeCode).orEmpty() }
+                            val nameChanged = syncedName.isNotBlank() && syncedName != teamName
+                            if (syncedName.isNotBlank()) {
+                                teamName = syncedName
+                                findViewById<TextView>(UI.teamTitle)?.text = teamName
+                            }
                             teamRoster = TeamRepository.getCachedRoster(activeCode, preferences)
                             updateRosterViews()
+                            if (nameChanged && page in listOf("teams", "settings", "notifications")) {
+                                navigate(page, triggerRefresh = false)
+                            }
                         }
                     }
                 },
@@ -625,7 +635,6 @@ class AdminActivity : AppCompatActivity() {
             }
             if (myAdminEmail.isNotBlank()) {
                 userEmailMembershipListener?.remove()
-        teamDocListener?.remove()
                 userEmailMembershipListener = com.google.firebase.firestore.FirebaseFirestore.getInstance()
                     .collection("users").whereEqualTo("email", myAdminEmail)
                     .addSnapshotListener { snapshot, error ->
@@ -1013,7 +1022,7 @@ class AdminActivity : AppCompatActivity() {
         }
 
         if (isPermanentLeader && myUid.isNotBlank() && curCode.isNotBlank()) {
-            FirestoreManager.updateUserRoleAndTeam(myUid, "Leader", teamName.ifBlank { "WISE MAN TEAM" }, curCode, emailLower)
+            FirestoreManager.updateUserRoleAndTeam(myUid, "Leader", teamName.ifBlank { "WORSHIP TEAM" }, curCode, emailLower)
         }
         if (myUid.isNotBlank()) {
             com.google.firebase.firestore.FirebaseFirestore.getInstance()
@@ -3475,6 +3484,12 @@ class AdminActivity : AppCompatActivity() {
         TeamRepository.getTeamRoster(currentCode, force, preferences) { result ->
             runOnUiThread {
                 if ((ticket == -1L || rosterRefreshGate.finish(ticket)) && !isFinishing && !isDestroyed && activeTeamCode() == currentCode) {
+                    val syncedName = preferences.getString("teamName", "").orEmpty()
+                        .ifBlank { FirestoreManager.getLocalTeamName(currentCode).orEmpty() }
+                    if (syncedName.isNotBlank() && syncedName != teamName) {
+                        teamName = syncedName
+                        findViewById<TextView>(UI.teamTitle)?.text = teamName
+                    }
                     result.getOrNull()?.let { list ->
                         teamRoster = list
                         if (getActiveRoster().sortedBy { it.uid } != previous) updateRosterViews()
@@ -6673,7 +6688,8 @@ class AdminActivity : AppCompatActivity() {
             .ifBlank { FirestoreManager.findCodeByTeamName(teamName).orEmpty() }
 
         if (isLeader) {
-            col.add(text("Re-join Requests", 15, purple, bold = true)); col.space(12)
+            col.add(text("Re-join Requests", 15, purple, bold = true)); col.space(4)
+            col.add(text("Note: Review and approve or decline requests from former members who wish to rejoin the team.", 11, Color.GRAY)); col.space(10)
             rejoinRequestsFeed(col)
             col.space(16)
         }
@@ -6706,7 +6722,8 @@ class AdminActivity : AppCompatActivity() {
             }
         }
         subHeader.add(clearSubBtn, -2, -2)
-        col.add(subHeader); col.space(12)
+        col.add(subHeader); col.space(4)
+        col.add(text("Note: View and manage service schedule substitution requests from team members.", 11, Color.GRAY)); col.space(10)
         substitutionFeed(col)
         col.space(16)
 
@@ -6738,7 +6755,8 @@ class AdminActivity : AppCompatActivity() {
             }
         }
         notifHeader.add(clearBtn, -2, -2)
-        col.add(notifHeader); col.space(12)
+        col.add(notifHeader); col.space(4)
+        col.add(text("Note: Real-time alerts for published services, announcements, team name updates, and member activity (delivered even when the app is closed).", 11, Color.GRAY)); col.space(10)
         recentNotificationsList(col)
     }
 
@@ -8153,13 +8171,88 @@ class AdminActivity : AppCompatActivity() {
         root.addView(mainCol, FrameLayout.LayoutParams(-1, -1))
 
         col.add(text("Team Name", 14, Color.BLACK, true)); col.space(8)
-        val teamNameBox = horizontal().apply {
-            gravity = Gravity.CENTER_VERTICAL
-            background = bg(Color.rgb(217, 217, 217), 10)
-            setPadding(dp(16), 0, dp(16), 0)
-            add(text(teamName.ifBlank { "Worship Team" }, 14, Color.BLACK, bold = true), 0, -2, 1f)
+        if (isLeader) {
+            val editRow = horizontal().apply {
+                gravity = Gravity.CENTER_VERTICAL
+            }
+            val teamNameInput = EditText(this).apply {
+                setText(teamName.ifBlank { "WORSHIP TEAM" })
+                textSize = 14f
+                setTextColor(Color.BLACK)
+                setTypeface(typeface, Typeface.BOLD)
+                background = bg(Color.rgb(217, 217, 217), 10)
+                setPadding(dp(16), 0, dp(16), 0)
+                isSingleLine = true
+                hint = "Enter team name"
+            }
+            val saveNameBtn = Button(this).apply {
+                text = "Save"
+                textSize = 13f
+                isAllCaps = false
+                setTextColor(Color.WHITE)
+                setTypeface(typeface, Typeface.BOLD)
+                background = bg(purple, 10)
+                minHeight = 0; minimumHeight = 0; minWidth = 0; minimumWidth = 0
+                stateListAnimator = null
+                setPadding(dp(16), 0, dp(16), 0)
+                setOnClickListener {
+                    val newName = teamNameInput.text.toString().trim()
+                    if (newName.isBlank()) {
+                        invalid(teamNameInput, "Please enter a valid team name.")
+                        return@setOnClickListener
+                    }
+                    val currentCode = activeTeamCode()
+                    if (currentCode.isBlank()) {
+                        toast("No active team code found.")
+                        return@setOnClickListener
+                    }
+                    val oldName = teamName.trim().ifBlank { "WORSHIP TEAM" }
+                    if (newName == oldName) {
+                        toast("Team name is already \"$newName\".")
+                        return@setOnClickListener
+                    }
+                    isEnabled = false
+                    TeamRepository.updateTeamName(
+                        teamCode = currentCode,
+                        newTeamName = newName,
+                        preferences = preferences
+                    ) { res ->
+                        runOnUiThread {
+                            isEnabled = true
+                            if (res.isSuccess) {
+                                teamName = newName
+                                com.example.syncedn.data.auth.SyncedMessagingService.dispatchSystemNotification(
+                                    this@AdminActivity,
+                                    preferences,
+                                    "✏️ Team Name Updated",
+                                    "Your Team Leader has changed the team name from \"$oldName\" to \"$newName\".",
+                                    targetPage = "teams"
+                                )
+                                toast("Team name updated to \"$newName\"!")
+                                navigate("teamDetails", triggerRefresh = false)
+                            } else {
+                                toast(res.exceptionOrNull()?.message ?: "Failed to update team name.")
+                            }
+                        }
+                    }
+                }
+            }
+            editRow.add(teamNameInput, 0, 42, 1f)
+            editRow.add(View(this), 10, 1)
+            editRow.add(saveNameBtn, 84, 42)
+            col.add(editRow, -1, 42)
+            col.space(6)
+            col.add(text("Note: Saving a new team name automatically updates it across all team members' devices and sends a real-time notification.", 11, Color.GRAY))
+            col.space(16)
+        } else {
+            val teamNameBox = horizontal().apply {
+                gravity = Gravity.CENTER_VERTICAL
+                background = bg(Color.rgb(217, 217, 217), 10)
+                setPadding(dp(16), 0, dp(16), 0)
+                add(text(teamName.ifBlank { "WORSHIP TEAM" }, 14, Color.BLACK, bold = true), 0, -2, 1f)
+            }
+            col.add(teamNameBox, -1, 42); col.space(20)
         }
-        col.add(teamNameBox, -1, 42); col.space(20)
 
         if (isLeader) {
             val emailLower = preferences.getString("email", "").orEmpty().trim().lowercase()

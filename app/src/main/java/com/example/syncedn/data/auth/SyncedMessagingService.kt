@@ -36,6 +36,7 @@ object SyncedMessagingService {
     private var substitutionsListener: ListenerRegistration? = null
     private var messagesListener: ListenerRegistration? = null
     private var rosterWatcherListener: ListenerRegistration? = null
+    private var teamDocWatcherListener: ListenerRegistration? = null
     private var rejoinRequestsListener: ListenerRegistration? = null
 
     @Volatile
@@ -774,6 +775,41 @@ object SyncedMessagingService {
                 }
             }
 
+        // 6. Watch Team Document (/teams/{code}) for Team Name Updates
+        teamDocWatcherListener = db.collection("teams").document(code)
+            .addSnapshotListener { snapshot, error ->
+                if (error != null || snapshot == null || !snapshot.exists()) return@addSnapshotListener
+                val docTeamName = snapshot.getString("teamName").orEmpty().trim()
+                val docLeaderUid = snapshot.getString("leaderUid").orEmpty().trim()
+                if (docTeamName.isBlank()) return@addSnapshotListener
+
+                val prevKnownName = preferences.getString("notif_known_team_name_$code", "").orEmpty().trim()
+                com.example.syncedn.data.database.FirestoreManager.registerLocalTeam(code, docTeamName, docLeaderUid)
+                com.example.syncedn.data.database.TeamRepository.syncTeamNameLocally(code, docTeamName, preferences)
+
+                if (prevKnownName.isBlank()) {
+                    preferences.edit().putString("notif_known_team_name_$code", docTeamName).apply()
+                    return@addSnapshotListener
+                }
+
+                if (prevKnownName != docTeamName) {
+                    preferences.edit().putString("notif_known_team_name_$code", docTeamName).apply()
+                    com.example.syncedn.data.database.TeamRepository.recordTeamNameChangeNotification(
+                        teamCode = code,
+                        oldName = prevKnownName,
+                        newName = docTeamName,
+                        preferences = preferences
+                    )
+                    dispatchSystemNotification(
+                        appCtx,
+                        preferences,
+                        "✏️ Team Name Updated",
+                        "Your Team Leader has changed the team name from \"$prevKnownName\" to \"$docTeamName\".",
+                        targetPage = "teams"
+                    )
+                }
+            }
+
         Log.d(TAG, "Started real-time notification watchers for team $code")
     }
 
@@ -783,11 +819,13 @@ object SyncedMessagingService {
         substitutionsListener?.remove()
         messagesListener?.remove()
         rosterWatcherListener?.remove()
+        teamDocWatcherListener?.remove()
         servicesListener = null
         announcementsListener = null
         substitutionsListener = null
         messagesListener = null
         rosterWatcherListener = null
+        teamDocWatcherListener = null
         activeTeamCode = ""
         knownServices.clear()
         knownAnnouncements.clear()
