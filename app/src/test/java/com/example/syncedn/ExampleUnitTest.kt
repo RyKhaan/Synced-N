@@ -4213,4 +4213,233 @@ class ExampleUnitTest {
         assertEquals("Ryan Lloyd Genturo", retained.first().fullName)
         assertEquals("Worship Leader", retained.first().ministryRole)
     }
+
+    @Test
+    fun testRehearsalDefaultDateAndTimingValidation() {
+        fun computeDefaultRehearsalDate(serviceDateStr: String): String {
+            return try {
+                val sdf = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US)
+                val cal = java.util.Calendar.getInstance()
+                cal.time = sdf.parse(serviceDateStr) ?: java.util.Date()
+                cal.add(java.util.Calendar.DAY_OF_MONTH, -1)
+                val todayCal = java.util.Calendar.getInstance()
+                todayCal.set(java.util.Calendar.HOUR_OF_DAY, 0)
+                todayCal.set(java.util.Calendar.MINUTE, 0)
+                todayCal.set(java.util.Calendar.SECOND, 0)
+                todayCal.set(java.util.Calendar.MILLISECOND, 0)
+                if (cal.timeInMillis < todayCal.timeInMillis) {
+                    sdf.format(todayCal.time)
+                } else {
+                    sdf.format(cal.time)
+                }
+            } catch (_: Throwable) {
+                serviceDateStr
+            }
+        }
+
+        // Sunday Nov 1, 2026 -> Saturday Oct 31, 2026
+        val defaultDate = computeDefaultRehearsalDate("2026-11-01")
+        assertEquals("2026-10-31", defaultDate)
+
+        // Validation logic
+        fun validateTiming(sDate: String, sStart: String, rDate: String, rStart: String, rEnd: String): String? {
+            return when {
+                rStart >= rEnd -> "End time must be after start time."
+                rDate > sDate -> "Rehearsal date cannot be after service date ($sDate)."
+                rDate == sDate && rStart == sStart -> "Service and rehearsal cannot have the same date and time."
+                rDate == sDate && rStart >= sStart -> "Rehearsal must start before the service start time ($sStart)."
+                else -> null
+            }
+        }
+
+        // Valid: Rehearsal 07:00 - 09:00 on Saturday Oct 31, Service 09:00 on Sunday Nov 1
+        assertNull(validateTiming("2026-11-01", "09:00", "2026-10-31", "07:00", "09:00"))
+
+        // Valid: Same date, but Rehearsal starts earlier (07:00 vs 09:00)
+        assertNull(validateTiming("2026-11-01", "09:00", "2026-11-01", "07:00", "08:30"))
+
+        // Invalid: Rehearsal date after service date
+        assertEquals(
+            "Rehearsal date cannot be after service date (2026-11-01).",
+            validateTiming("2026-11-01", "09:00", "2026-11-02", "07:00", "09:00")
+        )
+
+        // Invalid: Same date and same time
+        assertEquals(
+            "Service and rehearsal cannot have the same date and time.",
+            validateTiming("2026-11-01", "09:00", "2026-11-01", "09:00", "11:00")
+        )
+
+        // Invalid: Same date, rehearsal start is after service start
+        assertEquals(
+            "Rehearsal must start before the service start time (09:00).",
+            validateTiming("2026-11-01", "09:00", "2026-11-01", "10:00", "12:00")
+        )
+
+        // Invalid: End time <= start time
+        assertEquals(
+            "End time must be after start time.",
+            validateTiming("2026-11-01", "09:00", "2026-10-31", "09:00", "07:00")
+        )
+    }
+
+    @Test
+    fun testScheduleChronologicalHierarchyWithDateAndTime() {
+        data class MockScheduleItem(val title: String, val date: String, val rawStart: String)
+
+        val items = listOf(
+            MockScheduleItem("Sunday Morning Service", "2026-11-01", "09:00"),
+            MockScheduleItem("Saturday Rehearsal", "2026-10-31", "07:00"),
+            MockScheduleItem("Sunday Evening Service", "2026-11-01", "17:00"),
+            MockScheduleItem("Sunday Morning Rehearsal", "2026-11-01", "07:00")
+        )
+
+        val sorted = items.sortedWith(compareBy({ it.date }, { it.rawStart }))
+
+        assertEquals("Saturday Rehearsal", sorted[0].title)
+        assertEquals("2026-10-31", sorted[0].date)
+        assertEquals("07:00", sorted[0].rawStart)
+
+        assertEquals("Sunday Morning Rehearsal", sorted[1].title)
+        assertEquals("2026-11-01", sorted[1].date)
+        assertEquals("07:00", sorted[1].rawStart)
+
+        assertEquals("Sunday Morning Service", sorted[2].title)
+        assertEquals("2026-11-01", sorted[2].date)
+        assertEquals("09:00", sorted[2].rawStart)
+
+        assertEquals("Sunday Evening Service", sorted[3].title)
+        assertEquals("2026-11-01", sorted[3].date)
+        assertEquals("17:00", sorted[3].rawStart)
+    }
+
+    @Test
+    fun testScheduleNotificationSchedulerEpochParsing() {
+        val epoch = com.example.syncedn.data.notification.ScheduleNotificationScheduler.parseDateTimeToEpoch(
+            "2026-11-01",
+            "07:00"
+        )
+        assertNotNull(epoch)
+        assertTrue(epoch!! > 0L)
+    }
+
+    @Test
+    fun testTransferTeamLeadershipDemotionAndRetention() {
+        val mockPrefs = FakePreferences()
+        mockPrefs.edit()
+            .putString("role", "Member")
+            .putString("ministryRole", "Member")
+            .putBoolean("transferred_leadership_NGK8VN", true)
+            .putString("team_leader_email_NGK8VN", "joshualagare255@gmail.com")
+            .apply()
+
+        val rosterWithFormerLeaderAsMember = listOf(
+            com.example.syncedn.data.model.TeamMember(
+                uid = "newLeader1",
+                fullName = "Joshua Lagare",
+                username = "Joshua",
+                email = "joshualagare255@gmail.com",
+                role = "Leader",
+                ministryRole = "Worship Leader",
+                teamCode = "NGK8VN"
+            ),
+            com.example.syncedn.data.model.TeamMember(
+                uid = "h9yRCswmV1f0Pnia2EnxDv4x4X43",
+                fullName = "Ryan Lloyd Genturo",
+                username = "RYAN LLOYD",
+                email = "ryanlloydgenturo@gmail.com",
+                role = "Member",
+                ministryRole = "Member",
+                teamCode = "NGK8VN"
+            )
+        )
+
+        val result = com.example.syncedn.data.database.TeamRepository.ensureTeamLeaderInRoster(
+            "NGK8VN",
+            rosterWithFormerLeaderAsMember,
+            mockPrefs
+        )
+
+        assertEquals(2, result.size)
+        val joshua = result.find { it.email == "joshualagare255@gmail.com" }
+        assertNotNull(joshua)
+        assertEquals("Leader", joshua!!.role)
+        assertEquals("Worship Leader", joshua.ministryRole)
+
+        val ryan = result.find { it.email == "ryanlloydgenturo@gmail.com" }
+        assertNotNull(ryan)
+        assertEquals("Member", ryan!!.role)
+        assertEquals("Member", ryan.ministryRole)
+    }
+
+    @Test
+    fun testOrdinaryMemberDeviceViewsTeamRosterWithRyanAsWorshipLeader() {
+        val memberPrefs = FakePreferences()
+        // The logged-in user on this phone is Angelo (an ordinary member)
+        memberPrefs.edit()
+            .putString("role", "Member")
+            .putString("ministryRole", "Vocalist")
+            .putString("email", "angelo@syncedn.org")
+            .apply()
+
+        val rawRoster = listOf(
+            com.example.syncedn.data.model.TeamMember(
+                uid = "angelo_uid",
+                fullName = "Angelo Daniel Lebuna",
+                username = "Angelo",
+                email = "angelo@syncedn.org",
+                role = "Member",
+                ministryRole = "Vocalist",
+                teamCode = "NGK8VN"
+            ),
+            com.example.syncedn.data.model.TeamMember(
+                uid = "ryan_uid",
+                fullName = "Ryan Lloyd Genturo",
+                username = "Ryan",
+                email = "ryanlloydgenturo@gmail.com",
+                role = "Leader",
+                ministryRole = "Worship Leader",
+                teamCode = "NGK8VN"
+            )
+        )
+
+        val result = com.example.syncedn.data.database.TeamRepository.ensureTeamLeaderInRoster(
+            "NGK8VN",
+            rawRoster,
+            memberPrefs
+        )
+
+        assertEquals(2, result.size)
+        val ryan = result.find { it.email == "ryanlloydgenturo@gmail.com" }
+        assertNotNull(ryan)
+        assertEquals("Leader", ryan!!.role)
+        assertEquals("Worship Leader", ryan.ministryRole)
+    }
+
+    @Test
+    fun testChatMessageReplySerializationAndDefaults() {
+        val msg = com.example.syncedn.data.model.ChatMessage(
+            id = "msg123",
+            teamCode = "NGK8VN",
+            senderUid = "uid1",
+            senderName = "Ryan",
+            senderRole = "Worship Leader",
+            text = "Sounds good!",
+            timestamp = System.currentTimeMillis(),
+            replyToId = "orig456",
+            replyToSender = "Justin Kyle Pendre",
+            replyToText = "Are we practicing tomorrow?"
+        )
+
+        val map = msg.toMap().toMutableMap().apply { put("id", "msg123") }
+        assertEquals("orig456", map["replyToId"])
+        assertEquals("Justin Kyle Pendre", map["replyToSender"])
+        assertEquals("Are we practicing tomorrow?", map["replyToText"])
+
+        val deserialized = com.example.syncedn.data.model.ChatMessage.fromMap(map)
+        assertEquals("msg123", deserialized.id)
+        assertEquals("orig456", deserialized.replyToId)
+        assertEquals("Justin Kyle Pendre", deserialized.replyToSender)
+        assertEquals("Are we practicing tomorrow?", deserialized.replyToText)
+    }
 }

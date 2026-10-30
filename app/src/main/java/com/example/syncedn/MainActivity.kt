@@ -33,16 +33,19 @@ class MainActivity : MemberActivity() {
                 preferences.getString(com.example.syncedn.data.auth.SessionManager.KEY_USER_ID, "").orEmpty()
             }
         val userEmail = preferences.getString("email", "").orEmpty().trim().lowercase()
-        val isLeadUser = userEmail == "ryanlloydgenturo@gmail.com"
         val team = preferences.getString("teamName", "").orEmpty()
         val teamCode = preferences.getString("teamCode", "").orEmpty()
-        val leftTeam = if (isLeadUser) false else preferences.getBoolean("leftTeam", false)
+        val userRole = preferences.getString("role", "Member").orEmpty()
+        val userMinistry = preferences.getString("ministryRole", "").orEmpty()
+        val transferred = preferences.getBoolean("transferred_leadership_$teamCode", false)
+        val designatedLeader = preferences.getString("team_leader_email_$teamCode", "").orEmpty().trim().lowercase()
+        val isLeadUser = (designatedLeader.isNotBlank() && designatedLeader == userEmail) ||
+                         (!transferred && designatedLeader.isBlank() && userEmail == "ryanlloydgenturo@gmail.com" && !userRole.equals("Member", ignoreCase = true) && !userMinistry.equals("Member", ignoreCase = true))
+        val leftTeam = preferences.getBoolean("leftTeam", false)
         val removedTeamCode = preferences.getString("removedTeamCode", "").orEmpty()
-        val removed = if (isLeadUser) false else (preferences.getBoolean("removedByLeader", false) && (removedTeamCode.isBlank() || teamCode.isBlank() || removedTeamCode.equals(teamCode, ignoreCase = true)))
+        val removed = preferences.getBoolean("removedByLeader", false) && (removedTeamCode.isBlank() || teamCode.isBlank() || removedTeamCode.equals(teamCode, ignoreCase = true))
 
         if (savedInstanceState == null && effectiveUid.isNotBlank() && team.isNotBlank() && !leftTeam && !removed) {
-            val userRole = preferences.getString("role", "Member").orEmpty()
-            val userMinistry = preferences.getString("ministryRole", "").orEmpty()
             if (userRole.equals("Leader", ignoreCase = true) || userMinistry.equals("Substitute Leader", ignoreCase = true) || isLeadUser) {
                 startActivity(Intent(this, AdminActivity::class.java).putExtra("startPage", "home"))
                 finish()
@@ -60,17 +63,20 @@ class MainActivity : MemberActivity() {
     override fun navigate(next: String) {
         if (next == "home") {
             val userEmail = preferences.getString("email", "").orEmpty().trim().lowercase()
-            val isLeadUser = userEmail == "ryanlloydgenturo@gmail.com"
             val userTeam = preferences.getString("teamName", "").orEmpty()
             val teamCode = preferences.getString("teamCode", "").orEmpty()
+            val userRole = preferences.getString("role", "Member").orEmpty()
+            val userMinistry = preferences.getString("ministryRole", "").orEmpty()
+            val transferred = preferences.getBoolean("transferred_leadership_$teamCode", false)
+            val designatedLeader = preferences.getString("team_leader_email_$teamCode", "").orEmpty().trim().lowercase()
+            val isLeadUser = (designatedLeader.isNotBlank() && designatedLeader == userEmail) ||
+                             (!transferred && designatedLeader.isBlank() && userEmail == "ryanlloydgenturo@gmail.com" && !userRole.equals("Member", ignoreCase = true) && !userMinistry.equals("Member", ignoreCase = true))
             val removedTeamCode = preferences.getString("removedTeamCode", "").orEmpty()
-            val removed = if (isLeadUser) false else (preferences.getBoolean("removedByLeader", false) && (removedTeamCode.isBlank() || teamCode.isBlank() || removedTeamCode.equals(teamCode, ignoreCase = true)))
+            val removed = preferences.getBoolean("removedByLeader", false) && (removedTeamCode.isBlank() || teamCode.isBlank() || removedTeamCode.equals(teamCode, ignoreCase = true))
             if (userTeam.isBlank() || removed) {
                 super.navigate("teamChoice")
                 return
             }
-            val userRole = preferences.getString("role", "Member").orEmpty()
-            val userMinistry = preferences.getString("ministryRole", "").orEmpty()
             if (userRole.equals("Leader", ignoreCase = true) || userMinistry.equals("Substitute Leader", ignoreCase = true) || isLeadUser) {
                 startActivity(Intent(this, AdminActivity::class.java).putExtra("startPage", "home"))
                 finish()

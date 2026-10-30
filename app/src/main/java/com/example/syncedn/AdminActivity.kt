@@ -380,7 +380,23 @@ class AdminActivity : AppCompatActivity() {
         teamName = savedInstanceState?.getString("teamName") ?: preferences.getString("teamName", "").orEmpty()
         val uid = preferences.getString("userId", "").orEmpty()
         val emailLower = preferences.getString("email", "").orEmpty().trim().lowercase()
-        if (emailLower == "ryanlloydgenturo@gmail.com" || fullName.equals("Ryan Lloyd Genturo", ignoreCase = true)) {
+        val activeCode = preferences.getString("teamCode", "").orEmpty()
+            .ifBlank { preferences.getString("email_code_$emailLower", "").orEmpty() }
+            .ifBlank { preferences.getString("user_code_$uid", "").orEmpty() }
+            .ifBlank { preferences.getString("team_leader_code_${teamName.trim().lowercase()}", "").orEmpty() }
+            .ifBlank { FirestoreManager.findCodeByTeamName(teamName).orEmpty() }
+        val transferred = preferences.getBoolean("transferred_leadership_$activeCode", false)
+        val selfRole = preferences.getString("role", "").orEmpty()
+        val selfMinistry = preferences.getString("ministryRole", "").orEmpty()
+        val designatedLeader = preferences.getString("team_leader_email_$activeCode", "").orEmpty().trim().lowercase()
+            .ifBlank { preferences.getString("team_leader_email_${teamName.trim().lowercase()}", "").orEmpty().trim().lowercase() }
+
+        val shouldAutoPromote = !transferred &&
+                                (designatedLeader.isBlank() || designatedLeader == emailLower) &&
+                                !selfRole.equals("Member", ignoreCase = true) &&
+                                !selfMinistry.equals("Member", ignoreCase = true)
+
+        if ((emailLower == "ryanlloydgenturo@gmail.com" || fullName.equals("Ryan Lloyd Genturo", ignoreCase = true)) && shouldAutoPromote) {
             val curMinistry = preferences.getString("ministryRole", "").orEmpty()
             if (!curMinistry.equals("Worship Leader", ignoreCase = true)) {
                 preferences.edit {
@@ -406,11 +422,6 @@ class AdminActivity : AppCompatActivity() {
                 )
             }
         }
-        val activeCode = preferences.getString("teamCode", "").orEmpty()
-            .ifBlank { preferences.getString("email_code_$emailLower", "").orEmpty() }
-            .ifBlank { preferences.getString("user_code_$uid", "").orEmpty() }
-            .ifBlank { preferences.getString("team_leader_code_${teamName.trim().lowercase()}", "").orEmpty() }
-            .ifBlank { FirestoreManager.findCodeByTeamName(teamName).orEmpty() }
         if (teamName.isBlank() && activeCode.isNotBlank()) {
             teamName = preferences.getString("team_registry_$activeCode", "").orEmpty()
                 .ifBlank { FirestoreManager.getLocalTeamName(activeCode).orEmpty() }
@@ -424,10 +435,12 @@ class AdminActivity : AppCompatActivity() {
             val userMinistry = preferences.getString("ministryRole", "").orEmpty()
             val currentRole = preferences.getString("role", "").orEmpty()
             val cleanTeamLower = teamName.trim().lowercase()
-            val teamLeaderEmail = preferences.getString("team_leader_email_$cleanTeamLower", "").orEmpty().trim().lowercase()
+            val teamLeaderEmail = preferences.getString("team_leader_email_$activeCode", "").orEmpty().trim().lowercase()
+                .ifBlank { preferences.getString("team_leader_email_$cleanTeamLower", "").orEmpty().trim().lowercase() }
             val isSubLeader = TeamRepository.isSubstituteLeader(userMinistry)
-            val isPermanentLeader = emailLower == "ryanlloydgenturo@gmail.com" ||
-                                    (!isSubLeader && teamLeaderEmail.isNotBlank() && teamLeaderEmail == emailLower)
+            val isPermanentLeader = (teamLeaderEmail.isNotBlank() && teamLeaderEmail == emailLower) ||
+                                    (!isSubLeader && !transferred && teamLeaderEmail.isBlank() && emailLower == "ryanlloydgenturo@gmail.com" &&
+                                     !currentRole.equals("Member", ignoreCase = true) && !userMinistry.equals("Member", ignoreCase = true))
             if (!isPermanentLeader && !isSubLeader && !currentRole.equals("Leader", ignoreCase = true)) {
                 saveUserTeamState("Member", teamName, activeCode)
                 val intent = Intent(this, MemberActivity::class.java).putExtra("startPage", intent.getStringExtra("startPage") ?: "home")
@@ -699,7 +712,9 @@ class AdminActivity : AppCompatActivity() {
     ) {
         if (isFinishing || isDestroyed || isHandlingDemotion) return
         val emailLower = myEmail.trim().lowercase()
-        if (emailLower == "ryanlloydgenturo@gmail.com" || fullName.equals("Ryan Lloyd Genturo", ignoreCase = true)) {
+        val activeCode = preferences.getString("teamCode", "").orEmpty()
+        val transferred = preferences.getBoolean("transferred_leadership_$activeCode", false)
+        if (!transferred && (emailLower == "ryanlloydgenturo@gmail.com" || fullName.equals("Ryan Lloyd Genturo", ignoreCase = true))) {
             return
         }
         val cleanTeamLower = teamName.trim().lowercase()
@@ -1048,6 +1063,10 @@ class AdminActivity : AppCompatActivity() {
                                 preferences.edit {
                                     putString("userId", uid)
                                     putString("email", emailStr)
+                                    putString("role", "Member")
+                                    putString("ministryRole", "Member")
+                                    putBoolean("leftTeam", false)
+                                    putBoolean("transferred_leadership_$validCode", true)
                                 }
                                 saveUserTeamState("Member", foundTeamName, validCode)
                                 FirestoreManager.updateUserRoleAndTeam(uid, "Member", foundTeamName, validCode, emailStr)
@@ -1058,7 +1077,7 @@ class AdminActivity : AppCompatActivity() {
                                     username = displayName,
                                     email = emailStr,
                                     role = "Member",
-                                    ministryRole = preferences.getString("ministryRole", "Member").orEmpty().ifBlank { "Member" },
+                                    ministryRole = "Member",
                                     teamCode = validCode
                                 )
                                 TeamRepository.cacheMember(newMember, preferences)
@@ -2899,9 +2918,11 @@ class AdminActivity : AppCompatActivity() {
             }
 
             val repId = replyingToMessage?.id.orEmpty()
-            val repSender = replyingToMessage?.senderName.orEmpty()
-            val repText = replyingToMessage?.text?.takeIf { it.isNotBlank() }
-                ?: if (replyingToMessage?.mediaUrl?.isNotBlank() == true) "📷 Photo" else ""
+            val repSender = if (repId.isNotBlank()) replyingToMessage?.senderName.orEmpty().ifBlank { "Member" } else ""
+            val repText = if (repId.isNotBlank()) {
+                replyingToMessage?.text?.takeIf { it.isNotBlank() }
+                    ?: if (replyingToMessage?.mediaUrl?.isNotBlank() == true) "📷 Photo" else "Message"
+            } else ""
             replyingToMessage = null
             chatReplyBar?.visibility = View.GONE
 
@@ -3088,8 +3109,11 @@ class AdminActivity : AppCompatActivity() {
             val selfEmail = preferences.getString("email", "").orEmpty().trim().lowercase()
             return list.map { m ->
                 val emailLower = m.email.trim().lowercase()
-                val isPrimaryLeader = emailLower == "ryanlloydgenturo@gmail.com" ||
-                                      m.fullName.equals("Ryan Lloyd Genturo", ignoreCase = true)
+                val transferred = preferences.getBoolean("transferred_leadership_$currentCode", false)
+                val designatedLeader = preferences.getString("team_leader_email_$currentCode", "").orEmpty().trim().lowercase()
+                val isPrimaryLeader = (designatedLeader.isNotBlank() && designatedLeader == emailLower) ||
+                                      (!transferred && designatedLeader.isBlank() && (emailLower == "ryanlloydgenturo@gmail.com" || m.fullName.equals("Ryan Lloyd Genturo", ignoreCase = true)) &&
+                                       !preferences.getString("email_role_$emailLower", "").equals("Member", true))
                 val isExplicitSubInModel = TeamRepository.isSubstituteLeader(m.ministryRole) && !m.role.equals("Member", ignoreCase = true)
                 val isExplicitWorshipInModel = TeamRepository.isWorshipLeader(m.ministryRole, m.role) && !m.role.equals("Member", ignoreCase = true)
                 val isExplicitlyMember = !isPrimaryLeader && !isExplicitSubInModel && !isExplicitWorshipInModel && (
@@ -3296,6 +3320,7 @@ class AdminActivity : AppCompatActivity() {
                         val changed = (newRecords.toString() != localServices.toString())
                         localServices.clear()
                         localServices.addAll(newRecords)
+                        com.example.syncedn.data.notification.ScheduleNotificationScheduler.scheduleAll(this@AdminActivity, localServices)
                         if (changed) {
                             if (page in listOf("home", "schedule")) {
                                 navigate(page, triggerRefresh = false)
@@ -3490,6 +3515,27 @@ class AdminActivity : AppCompatActivity() {
         col.space(24)
         col.add(dualButtons("Back", back, nextLabel, next))
     }
+    private fun computeDefaultRehearsalDate(serviceDateStr: String): String {
+        return try {
+            val sdf = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US)
+            val cal = java.util.Calendar.getInstance()
+            val parsed = sdf.parse(serviceDateStr) ?: java.util.Date()
+            cal.time = parsed
+            cal.add(java.util.Calendar.DAY_OF_MONTH, -1) // 1 day earlier (e.g. Saturday if service is Sunday)
+            val todayCal = java.util.Calendar.getInstance()
+            todayCal.set(java.util.Calendar.HOUR_OF_DAY, 0)
+            todayCal.set(java.util.Calendar.MINUTE, 0)
+            todayCal.set(java.util.Calendar.SECOND, 0)
+            todayCal.set(java.util.Calendar.MILLISECOND, 0)
+            if (cal.timeInMillis < todayCal.timeInMillis) {
+                sdf.format(todayCal.time)
+            } else {
+                sdf.format(cal.time)
+            }
+        } catch (_: Throwable) {
+            serviceDateStr
+        }
+    }
     private fun createServiceView(): View = memberPage("New Service", if (serviceWizard) "home" else "service") { col ->
         col.space(16)
         val todayIso = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).format(java.util.Date())
@@ -3562,7 +3608,19 @@ class AdminActivity : AppCompatActivity() {
                 venue.text.isBlank() -> invalid(venue, "Enter a venue.")
                 start.text.toString() >= end.text.toString() -> toast("End time must be after start time.")
                 else -> {
-                    leaderDraft.put("title", title.text.toString().trim()).put("date", date.text.toString())
+                    val prevSrvDate = leaderDraft.optString("date")
+                    val newSrvDate = date.text.toString()
+                    val curRehDate = leaderDraft.optString("rehearsalDate")
+                    if (curRehDate.isBlank() || curRehDate > newSrvDate || (prevSrvDate.isNotBlank() && curRehDate == computeDefaultRehearsalDate(prevSrvDate))) {
+                        leaderDraft.put("rehearsalDate", computeDefaultRehearsalDate(newSrvDate))
+                    }
+                    if (leaderDraft.optString("rehearsalStart").isBlank()) {
+                        leaderDraft.put("rehearsalStart", "07:00")
+                    }
+                    if (leaderDraft.optString("rehearsalEnd").isBlank()) {
+                        leaderDraft.put("rehearsalEnd", "09:00")
+                    }
+                    leaderDraft.put("title", title.text.toString().trim()).put("date", newSrvDate)
                         .put("start", start.text.toString()).put("end", end.text.toString())
                         .put("venue", venue.text.toString().trim())
                     if (serviceWizard) {
@@ -3968,9 +4026,11 @@ class AdminActivity : AppCompatActivity() {
         }
     }
     private fun rehearsalView(): View = memberPage("Schedule Rehearsal", if (serviceWizard) "adminLineup" else "service") { col ->
-        val date = dateField(leaderDraft.optString("rehearsalDate", leaderDraft.optString("date", "2026-10-11")))
-        val start = timeField(leaderDraft.optString("rehearsalStart", "19:00"))
-        val end = timeField(leaderDraft.optString("rehearsalEnd", "21:00"))
+        val serviceDate = leaderDraft.optString("date")
+        val defaultRehearsalDate = leaderDraft.optString("rehearsalDate").ifBlank { computeDefaultRehearsalDate(serviceDate) }
+        val date = dateField(defaultRehearsalDate, minToday = true)
+        val start = timeField(leaderDraft.optString("rehearsalStart", "07:00"))
+        val end = timeField(leaderDraft.optString("rehearsalEnd", "09:00"))
         val venue = plainInput("Venue").apply { setText(leaderDraft.optString("rehearsalVenue", leaderDraft.optString("venue"))) }
         col.add(text("Date*", 12, navy)); col.space(8); col.add(date, -1, 48); col.space(20)
         col.add(horizontal().apply {
@@ -3982,12 +4042,22 @@ class AdminActivity : AppCompatActivity() {
         col.add(text("Associated Worship Service", 12, navy)); col.space(8)
         col.add(panel().apply { add(text(leaderDraft.optString("title"), 14, navy, true)) })
         stepActions(col, { navigate(if (serviceWizard) "adminLineup" else "service") }) {
+            val sDate = leaderDraft.optString("date")
+            val sStart = leaderDraft.optString("start", "09:00")
+            val rDate = date.text.toString()
+            val rStart = start.text.toString()
+            val rEnd = end.text.toString()
+            val todayIsoCheck = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).format(java.util.Date())
             when {
                 venue.text.isBlank() -> invalid(venue, "Enter a venue.")
-                start.text.toString() >= end.text.toString() -> toast("End time must be after start time.")
+                rDate < todayIsoCheck -> toast("Cannot schedule rehearsal for a past date.")
+                rStart >= rEnd -> toast("End time must be after start time.")
+                rDate > sDate -> toast("Rehearsal date cannot be after service date ($sDate).")
+                rDate == sDate && rStart == sStart -> toast("Service and rehearsal cannot have the same date and time.")
+                rDate == sDate && rStart >= sStart -> toast("Rehearsal must start before the service start time ($sStart).")
                 else -> {
-                    leaderDraft.put("rehearsalDate", date.text.toString()).put("rehearsalStart", start.text.toString())
-                        .put("rehearsalEnd", end.text.toString()).put("rehearsalVenue", venue.text.toString().trim())
+                    leaderDraft.put("rehearsalDate", rDate).put("rehearsalStart", rStart)
+                        .put("rehearsalEnd", rEnd).put("rehearsalVenue", venue.text.toString().trim())
                     saveLeaderDraft(); navigate("reviewService")
                 }
             }
@@ -3995,6 +4065,30 @@ class AdminActivity : AppCompatActivity() {
     }
     private fun serviceConflicts(): List<String> {
         val conflicts = mutableListOf<String>()
+        val todayIsoCheck = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).format(java.util.Date())
+        val sDate = leaderDraft.optString("date")
+        val sStart = leaderDraft.optString("start")
+        val rDate = leaderDraft.optString("rehearsalDate")
+        val rStart = leaderDraft.optString("rehearsalStart")
+
+        if (sDate.isNotBlank() && sDate < todayIsoCheck) {
+            conflicts.add("Service date cannot be in the past.")
+        }
+        if (rDate.isNotBlank() && rDate < todayIsoCheck) {
+            conflicts.add("Rehearsal date cannot be in the past.")
+        }
+        if (sDate.isNotBlank() && rDate.isNotBlank()) {
+            if (rDate > sDate) {
+                conflicts.add("Rehearsal date cannot be after service date ($sDate).")
+            } else if (rDate == sDate && rStart.isNotBlank() && sStart.isNotBlank()) {
+                if (rStart == sStart) {
+                    conflicts.add("Service and rehearsal cannot have the same date and time.")
+                } else if (rStart >= sStart) {
+                    conflicts.add("Rehearsal must start before the service start time ($sStart).")
+                }
+            }
+        }
+
         localServices.forEachIndexed { index, service ->
             if (index != activeServiceIndex && service.optString("date") == leaderDraft.optString("date") &&
                 service.optString("venue").equals(leaderDraft.optString("venue"), true) &&
@@ -4092,6 +4186,7 @@ class AdminActivity : AppCompatActivity() {
                 updatedAt = System.currentTimeMillis()
             )
             TeamRepository.saveService(activeCode, serviceObj, preferences)
+            com.example.syncedn.data.notification.ScheduleNotificationScheduler.scheduleAll(this, localServices)
             if (status == "Published") {
                 com.example.syncedn.data.auth.SyncedMessagingService.dispatchSystemNotification(
                     this,
@@ -4189,6 +4284,7 @@ class AdminActivity : AppCompatActivity() {
     private data class ScheduleCardItem(
         val title: String,
         val date: String,
+        val rawStart: String,
         val time: String,
         val venue: String,
         val isRehearsal: Boolean,
@@ -4303,6 +4399,7 @@ class AdminActivity : AppCompatActivity() {
             items.add(ScheduleCardItem(
                 title = title,
                 date = date,
+                rawStart = start,
                 time = time,
                 venue = "$venue • $status",
                 isRehearsal = false,
@@ -4321,7 +4418,7 @@ class AdminActivity : AppCompatActivity() {
                 val rStart = rehObj?.optString("start").orEmpty().ifBlank { record.optString("rehearsalStart").orEmpty() }
                 val rEnd = rehObj?.optString("end").orEmpty().ifBlank { record.optString("rehearsalEnd").orEmpty() }
                 val rTime = if (rStart.isNotBlank() && rEnd.isNotBlank()) "${leaderTime(rStart)} – ${leaderTime(rEnd)}"
-                            else if (rStart.isNotBlank()) leaderTime(rStart) else "7:00PM – 9:00PM"
+                            else if (rStart.isNotBlank()) leaderTime(rStart) else "7:00AM – 9:00AM"
                 val rVenue = rehObj?.optString("venue").orEmpty()
                     .ifBlank { record.optString("rehearsalVenue").orEmpty() }
                     .ifBlank { venue }
@@ -4330,6 +4427,7 @@ class AdminActivity : AppCompatActivity() {
                 items.add(ScheduleCardItem(
                     title = "$title (Rehearsal)",
                     date = rDate,
+                    rawStart = rStart,
                     time = rTime,
                     venue = "$rVenue • Rehearsal",
                     isRehearsal = true,
@@ -4344,7 +4442,7 @@ class AdminActivity : AppCompatActivity() {
             }
         }
 
-        val sortedItems = items.sortedBy { it.date }
+        val sortedItems = items.sortedWith(compareBy({ it.date }, { it.rawStart }))
         sortedItems.forEach { item ->
             if (scheduleFilter == "Past" && !item.isPast) return@forEach
             if (scheduleFilter == "Upcoming" && item.isPast) return@forEach
@@ -7087,9 +7185,9 @@ class AdminActivity : AppCompatActivity() {
                             setColor(Color.argb(45, 255, 255, 255))
                             cornerRadius = dp(8).toFloat()
                         }
-                        setPadding(dp(8), dp(4), dp(8), dp(4))
+                        setPadding(dp(8), dp(6), dp(8), dp(6))
                         val accent = View(this@AdminActivity).apply { setBackgroundColor(Color.WHITE) }
-                        addView(accent, LinearLayout.LayoutParams(dp(3), ViewGroup.LayoutParams.MATCH_PARENT))
+                        addView(accent, LinearLayout.LayoutParams(dp(3), dp(32)))
                         addView(View(this@AdminActivity), LinearLayout.LayoutParams(dp(6), dp(1)))
                         val quoteCol = vertical().apply {
                             val senderTv = text(msg.replyToSender.ifBlank { "Member" }, 11, Color.WHITE, bold = true).apply {
@@ -7097,15 +7195,15 @@ class AdminActivity : AppCompatActivity() {
                                 ellipsize = android.text.TextUtils.TruncateAt.END
                             }
                             addView(senderTv, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
-                            val quoteTv = text(msg.replyToText, 11, Color.rgb(226, 232, 240)).apply {
+                            val quoteTv = text(msg.replyToText.ifBlank { "Message" }, 11, Color.rgb(226, 232, 240)).apply {
                                 maxLines = 2
                                 ellipsize = android.text.TextUtils.TruncateAt.END
                             }
                             addView(quoteTv, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
                         }
-                        addView(quoteCol, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+                        addView(quoteCol, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
                     }
-                    addView(quoteBox, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+                    addView(quoteBox, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
                     space(6)
                 }
                 if (msg.mediaUrl.isNotBlank()) {
@@ -7132,6 +7230,7 @@ class AdminActivity : AppCompatActivity() {
                 if (msg.text.isNotBlank()) {
                     val tv = text(msg.text, 14, Color.WHITE).apply {
                         maxWidth = maxBubbleWidth - dp(28)
+                        if (hasReply) minWidth = dp(120)
                     }
                     addView(tv, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
                 }
@@ -7242,9 +7341,9 @@ class AdminActivity : AppCompatActivity() {
                             setColor(Color.rgb(226, 232, 240))
                             cornerRadius = dp(8).toFloat()
                         }
-                        setPadding(dp(8), dp(4), dp(8), dp(4))
+                        setPadding(dp(8), dp(6), dp(8), dp(6))
                         val accent = View(this@AdminActivity).apply { setBackgroundColor(purple) }
-                        addView(accent, LinearLayout.LayoutParams(dp(3), ViewGroup.LayoutParams.MATCH_PARENT))
+                        addView(accent, LinearLayout.LayoutParams(dp(3), dp(32)))
                         addView(View(this@AdminActivity), LinearLayout.LayoutParams(dp(6), dp(1)))
                         val quoteCol = vertical().apply {
                             val senderTv = text(msg.replyToSender.ifBlank { "Member" }, 11, navy, bold = true).apply {
@@ -7252,15 +7351,15 @@ class AdminActivity : AppCompatActivity() {
                                 ellipsize = android.text.TextUtils.TruncateAt.END
                             }
                             addView(senderTv, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
-                            val quoteTv = text(msg.replyToText, 11, Color.rgb(71, 85, 105)).apply {
+                            val quoteTv = text(msg.replyToText.ifBlank { "Message" }, 11, Color.rgb(71, 85, 105)).apply {
                                 maxLines = 2
                                 ellipsize = android.text.TextUtils.TruncateAt.END
                             }
                             addView(quoteTv, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
                         }
-                        addView(quoteCol, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+                        addView(quoteCol, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
                     }
-                    addView(quoteBox, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+                    addView(quoteBox, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
                     space(6)
                 }
                 if (msg.mediaUrl.isNotBlank()) {
@@ -7287,6 +7386,7 @@ class AdminActivity : AppCompatActivity() {
                 if (msg.text.isNotBlank()) {
                     val tv = text(msg.text, 14, Color.rgb(21, 28, 50)).apply {
                         maxWidth = maxBubbleWidth - dp(28)
+                        if (hasReply) minWidth = dp(120)
                     }
                     addView(tv, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
                 }
@@ -7480,10 +7580,13 @@ class AdminActivity : AppCompatActivity() {
         when (teamTab) {
             "Members" -> {
                 val roster = getActiveRoster()
+                val activeCode = preferences.getString("teamCode", "").orEmpty()
+                val transferred = preferences.getBoolean("transferred_leadership_$activeCode", false)
+                val designatedLeader = preferences.getString("team_leader_email_$activeCode", "").orEmpty().trim().lowercase()
                 roster.forEach { member ->
                     val name = member.fullName.ifBlank { member.username.ifBlank { "Member" } }
-                    val isLeaderBadge = member.email.equals("ryanlloydgenturo@gmail.com", ignoreCase = true) ||
-                                        member.fullName.equals("Ryan Lloyd Genturo", ignoreCase = true) ||
+                    val isLeaderBadge = (designatedLeader.isNotBlank() && member.email.equals(designatedLeader, ignoreCase = true)) ||
+                                        (!transferred && designatedLeader.isBlank() && (member.email.equals("ryanlloydgenturo@gmail.com", ignoreCase = true) || member.fullName.equals("Ryan Lloyd Genturo", ignoreCase = true)) && !preferences.getString("email_role_${member.email.trim().lowercase()}", "").equals("Member", true)) ||
                                         member.ministryRole.equals("Worship Leader", ignoreCase = true) ||
                                         (member.ministryRole.equals("Substitute Leader", ignoreCase = true) && !member.role.equals("Member", true))
                     val badge = if (isLeaderBadge) "Leader" else "Member"
@@ -7492,8 +7595,8 @@ class AdminActivity : AppCompatActivity() {
                     } else {
                         member.ministryRole.ifBlank { if (member.role.equals("Leader", true)) "Worship Leader" else "Member" }
                     }
-                    val isPrimaryLeadMember = member.email.equals("ryanlloydgenturo@gmail.com", ignoreCase = true) ||
-                                              member.fullName.equals("Ryan Lloyd Genturo", ignoreCase = true)
+                    val isPrimaryLeadMember = (designatedLeader.isNotBlank() && member.email.equals(designatedLeader, ignoreCase = true)) ||
+                                              (!transferred && designatedLeader.isBlank() && (member.email.equals("ryanlloydgenturo@gmail.com", ignoreCase = true) || member.fullName.equals("Ryan Lloyd Genturo", ignoreCase = true)) && !preferences.getString("email_role_${member.email.trim().lowercase()}", "").equals("Member", true))
                     col.add(memberRow(name, role, badge, if (isLeader) ({
                         if (isPrimaryLeadMember) {
                             toast("Primary Leader is permanently assigned as Worship Leader.")
@@ -7518,19 +7621,20 @@ class AdminActivity : AppCompatActivity() {
                     it.isNotBlank() && (!it.equals("Substitute Leader", true) || roster.any { m -> m.ministryRole.equals("Substitute Leader", true) && !m.role.equals("Member", true) })
                 }.distinct()
                 val roles = activeRoles
+                val activeCode = preferences.getString("teamCode", "").orEmpty()
+                val transferred = preferences.getBoolean("transferred_leadership_$activeCode", false)
+                val designatedLeader = preferences.getString("team_leader_email_$activeCode", "").orEmpty().trim().lowercase()
                 roles.forEach { role ->
                     val people = roster.filter {
+                        val isLead = TeamRepository.isWorshipLeader(it.ministryRole, it.role) ||
+                                     (designatedLeader.isNotBlank() && it.email.trim().lowercase() == designatedLeader) ||
+                                     (!transferred && designatedLeader.isBlank() && (it.email.trim().lowercase() == "ryanlloydgenturo@gmail.com" || it.fullName.equals("Ryan Lloyd Genturo", ignoreCase = true)) && !preferences.getString("email_role_${it.email.trim().lowercase()}", "").equals("Member", true))
                         if (role.equals("Worship Leader", ignoreCase = true)) {
-                            TeamRepository.isWorshipLeader(it.ministryRole, it.role) ||
-                            it.email.trim().lowercase() == "ryanlloydgenturo@gmail.com" ||
-                            it.fullName.equals("Ryan Lloyd Genturo", ignoreCase = true)
+                            isLead
                         } else {
                             val mRole = if (it.role.equals("Member", true) && it.ministryRole.equals("Substitute Leader", true)) "Member" else it.ministryRole
-                            mRole.equals(role, ignoreCase = true) && !TeamRepository.isWorshipLeader(it.ministryRole, it.role) &&
-                            !it.email.trim().lowercase().equals("ryanlloydgenturo@gmail.com", ignoreCase = true) &&
-                            !it.fullName.equals("Ryan Lloyd Genturo", ignoreCase = true)
-                        } && true // end role check
-
+                            mRole.equals(role, ignoreCase = true) && !isLead
+                        }
                     }
                     val isInitiallyExpanded = expandedRole == role
                     val arrowView = Symbol(this@AdminActivity, "arrow", Color.rgb(65, 80, 100)).apply {
@@ -7700,9 +7804,11 @@ class AdminActivity : AppCompatActivity() {
                     val textToSend = message.text.toString().trim()
                     if (textToSend.isNotBlank()) {
                         val repId = replyingToMessage?.id.orEmpty()
-                        val repSender = replyingToMessage?.senderName.orEmpty()
-                        val repText = replyingToMessage?.text?.takeIf { it.isNotBlank() }
-                            ?: if (replyingToMessage?.mediaUrl?.isNotBlank() == true) "📷 Photo" else ""
+                        val repSender = if (repId.isNotBlank()) replyingToMessage?.senderName.orEmpty().ifBlank { "Member" } else ""
+                        val repText = if (repId.isNotBlank()) {
+                            replyingToMessage?.text?.takeIf { it.isNotBlank() }
+                                ?: if (replyingToMessage?.mediaUrl?.isNotBlank() == true) "📷 Photo" else "Message"
+                        } else ""
                         replyingToMessage = null
                         chatReplyBar?.visibility = View.GONE
 
@@ -8098,8 +8204,7 @@ class AdminActivity : AppCompatActivity() {
                 var selectedIndex = 0
 
                 AlertDialog.Builder(this)
-                    .setTitle("Transfer Leadership Required")
-                    .setMessage("As the Team Leader, you must transfer leadership to an eligible member before leaving the group.\n\nSelect a new Leader:")
+                    .setTitle("Select New Team Leader")
                     .setSingleChoiceItems(memberNames, 0) { _, which ->
                         selectedIndex = which
                     }

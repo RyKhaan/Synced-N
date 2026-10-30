@@ -635,22 +635,60 @@ object TeamRepository {
             return members
         }
 
-        // If Ryan Lloyd Genturo is in the roster but wasn't recognized as Worship Leader, promote him
-        val hasRyan = members.any { m ->
-            !m.removedByLeader && (
-                m.email.trim().lowercase() == defaultLeaderEmail ||
-                m.fullName.equals(defaultLeaderName, ignoreCase = true)
-            )
+        val designatedLeaderEmail = preferences?.getString("team_leader_email_$code", "")?.trim()?.lowercase().orEmpty()
+        val transferred = preferences?.getBoolean("transferred_leadership_$code", false) == true
+
+        if (designatedLeaderEmail.isNotBlank()) {
+            val hasDesignated = members.any { m -> !m.removedByLeader && m.email.trim().lowercase() == designatedLeaderEmail }
+            if (hasDesignated) {
+                return members.map { m ->
+                    if (!m.removedByLeader && m.email.trim().lowercase() == designatedLeaderEmail) {
+                        m.copy(role = "Leader", ministryRole = "Worship Leader")
+                    } else m
+                }
+            }
         }
-        if (hasRyan) {
-            return members.map { m ->
-                if (!m.removedByLeader && (
+
+        // Only promote default leader Ryan if leadership has NOT been transferred away
+        if (!transferred && (designatedLeaderEmail.isBlank() || designatedLeaderEmail == defaultLeaderEmail)) {
+            val hasRyan = members.any { m ->
+                !m.removedByLeader && (
                     m.email.trim().lowercase() == defaultLeaderEmail ||
                     m.fullName.equals(defaultLeaderName, ignoreCase = true)
-                )) {
-                    m.copy(role = "Leader", ministryRole = "Worship Leader")
-                } else m
+                )
             }
+            if (hasRyan) {
+                return members.map { m ->
+                    if (!m.removedByLeader && (
+                        m.email.trim().lowercase() == defaultLeaderEmail ||
+                        m.fullName.equals(defaultLeaderName, ignoreCase = true)
+                    )) {
+                        m.copy(role = "Leader", ministryRole = "Worship Leader")
+                    } else m
+                }
+            }
+        }
+
+        if (transferred && designatedLeaderEmail.isNotBlank()) {
+            val desName = preferences?.getString("team_leader_name_$code", "")?.takeIf { it.isNotBlank() } ?: "Worship Leader"
+            val desUid = preferences?.getString("team_leader_uid_$code", "")?.takeIf { it.isNotBlank() } ?: java.util.UUID.randomUUID().toString()
+            val desPhoto = preferences?.getString("team_leader_photo_$code", "").orEmpty()
+            val synthesizedLeader = TeamMember(
+                uid = desUid,
+                fullName = desName,
+                username = desName.split(" ").firstOrNull() ?: desName,
+                email = designatedLeaderEmail,
+                role = "Leader",
+                ministryRole = "Worship Leader",
+                teamCode = code,
+                photoUri = desPhoto,
+                removedByLeader = false
+            )
+            return listOf(synthesizedLeader) + members
+        }
+
+        if (transferred) {
+            return members
         }
 
         val selfEmail = preferences?.getString("email", "")?.trim()?.lowercase().orEmpty()
@@ -1633,9 +1671,13 @@ object TeamRepository {
                             putString("email_role_$cleanEmail", "Leader")
                             putString("email_ministry_$cleanEmail", "Worship Leader")
                         }
+                        val cleanTeamCode = code.trim().uppercase()
+                        putString("team_leader_email_$cleanTeamCode", cleanEmail)
+                        putBoolean("transferred_leadership_$cleanTeamCode", true)
                         val cleanTeamLower = preferences.getString("teamName", "").orEmpty().trim().lowercase()
                         if (cleanTeamLower.isNotBlank() && cleanEmail.isNotBlank()) {
                             putString("team_leader_email_$cleanTeamLower", cleanEmail)
+                            putBoolean("transferred_leadership_$cleanTeamLower", true)
                         }
                         try {
                             val map = org.json.JSONObject(preferences.getString(com.example.syncedn.data.auth.SessionManager.KEY_MEMBER_ROLES, "{}").orEmpty())
