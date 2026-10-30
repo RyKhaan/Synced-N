@@ -10,7 +10,7 @@ rules_version = '2';
 //   - uid: string (required, 1-128 chars, matches auth.uid on create, immutable) - Firebase Auth UID
 //   - username: string (optional, 0-50 chars) - Display username
 //   - email: string (optional, valid email format, 0-100 chars) - User's email address
-//   - role: string (optional, allowed: "Leader", "Member", "") - Team authorization level
+//   - role: string (optional, allowed: "Leader", "Substitute Leader", "Member", "") - Team authorization level
 //   - teamName: string (optional, 0-100 chars) - Name of the church ministry team
 //   - teamCode: string (optional, 0-20 chars) - 6-character team join code
 //   - resetPassword: string (optional, 0-128 chars) - Synced temporary reset password
@@ -329,7 +329,7 @@ service cloud.firestore {
       data.uid.size() <= 128 &&
       (!('username' in data) || (data.username is string && data.username.size() <= 50)) &&
       (!('email' in data) || (data.email is string && data.email.size() <= 100 && (data.email == '' || isValidEmail(data.email)))) &&
-      (!('role' in data) || (data.role is string && data.role in ['Leader', 'Member', ''])) &&
+      (!('role' in data) || (data.role is string && data.role in ['Leader', 'Substitute Leader', 'Member', ''])) &&
       (!('teamName' in data) || (data.teamName is string && data.teamName.size() <= 100)) &&
       (!('teamCode' in data) || (data.teamCode is string && data.teamCode.size() <= 20)) &&
       (!('resetPassword' in data) || (data.resetPassword is string && data.resetPassword.size() <= 128)) &&

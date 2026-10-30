@@ -699,10 +699,12 @@ class AdminActivity : AppCompatActivity() {
             (myUid.isNotBlank() && m.uid == myUid) ||
             (emailLower.isNotBlank() && m.email.trim().lowercase() == emailLower)
         }
-        if (selfInRoster != null) {
-            if (TeamRepository.isSubstituteLeader(selfInRoster.ministryRole)) return true
-            if (TeamRepository.isWorshipLeader(selfInRoster.ministryRole, selfInRoster.role)) return false
+        val currentRole = selfInRoster?.role.orEmpty().ifBlank {
+            preferences.getString("role", "").orEmpty()
         }
+        if (currentRole.equals("Leader", true)) return false
+        if (currentRole.equals("Substitute Leader", true)) return true
+        if (selfInRoster != null && TeamRepository.isSubstituteLeader(selfInRoster.role, selfInRoster.ministryRole)) return true
         val myMinistry = preferences.getString(SessionManager.KEY_MINISTRY_ROLE, "").orEmpty()
             .ifBlank { preferences.getString("ministryRole", "").orEmpty() }
         if (TeamRepository.isSubstituteLeader(myMinistry)) return true
@@ -5198,7 +5200,14 @@ class AdminActivity : AppCompatActivity() {
             (roleMemberEmail.isNotBlank() && it.email.equals(roleMemberEmail, ignoreCase = true)) ||
             it.fullName == roleMember || it.username == roleMember
         }
-        val currentSavedRole = activeMember?.ministryRole?.takeIf { it.isNotBlank() }
+
+        val currentLeadership = when {
+            activeMember?.role.equals("Substitute Leader", true) -> "Substitute Leader"
+            activeMember?.role.equals("Leader", true) -> "Leader"
+            else -> "Member"
+        }
+
+        val currentSavedMinistry = activeMember?.ministryRole?.takeIf { it.isNotBlank() && !it.equals("Member", true) }
             ?: try {
                 val map = org.json.JSONObject(preferences.getString(SessionManager.KEY_MEMBER_ROLES, "{}").orEmpty())
                 map.optString(roleMemberUid).ifBlank {
@@ -5209,8 +5218,15 @@ class AdminActivity : AppCompatActivity() {
                     }
                 }
             } catch (_: Exception) { "" }
-        val defaultRole = currentSavedRole.ifBlank { leaderRoles.firstOrNull() ?: "Guitarist" }
-        var selectedRole = defaultRole
+
+        val defaultMinistry = if (currentSavedMinistry.isNotBlank() && !currentSavedMinistry.equals("Substitute Leader", true) && !currentSavedMinistry.equals("Member", true)) {
+            currentSavedMinistry
+        } else {
+            "Worship Leader"
+        }
+
+        var selectedLeadership = if (currentLeadership == "Substitute Leader") "Substitute Leader" else "Member"
+        var selectedMinistry = defaultMinistry
 
         val targetPhotoUri = activeMember?.photoUri?.takeIf { it.isNotBlank() }
             ?: (if (roleMember.equals(displayName, ignoreCase = true) || roleMember.equals(fullName, ignoreCase = true)) preferences.getString("photoUri", null) else null)
@@ -5222,27 +5238,82 @@ class AdminActivity : AppCompatActivity() {
                 setPadding(dp(14), 0, 0, 0)
                 add(text(roleMember.ifBlank { "Member" }, 18, Color.WHITE, bold = true))
                 space(3)
-                add(text(currentSavedRole.ifBlank { "Member" }, 13, Color.rgb(203, 213, 225)))
+                val subtitleText = "$currentLeadership • $defaultMinistry"
+                add(text(subtitleText, 13, Color.rgb(203, 213, 225)))
             }
             add(info, 0, -2, 1f)
         }
         col.add(memberHeader)
         col.space(20)
 
-        val rolesContainer = vertical()
-        col.addView(rolesContainer)
-
         val isSubLeader = isCurrentUserSubstituteLeader()
-        val assignableRoles = TeamRepository.filterAssignableRoles(
-            roles = leaderRoles,
-            isEditorSubstituteLeader = isSubLeader,
-            isTargetPrimaryLeader = !isSubLeader
-        )
 
-        fun renderRoles() {
-            rolesContainer.removeAllViews()
-            assignableRoles.forEach { role ->
-                val isSelected = role.equals(selectedRole, ignoreCase = true)
+        // Section 1: Group Leadership Role (Only editable by Primary Leader)
+        if (!isSubLeader) {
+            val leadershipTitle = text("GROUP LEADERSHIP ROLE", 12, Color.rgb(148, 163, 184), bold = true).apply {
+                letterSpacing = 0.08f
+            }
+            col.add(leadershipTitle)
+            col.space(8)
+
+            val leadershipContainer = vertical()
+            col.addView(leadershipContainer)
+
+            fun renderLeadershipRoles() {
+                leadershipContainer.removeAllViews()
+                val leadershipOptions = listOf(
+                    Pair("Member", "Regular ministry member"),
+                    Pair("Substitute Leader", "Can manage schedules and service line-ups")
+                )
+                leadershipOptions.forEach { (leadRole, desc) ->
+                    val isSelected = leadRole.equals(selectedLeadership, ignoreCase = true)
+                    val item = horizontal().apply {
+                        gravity = Gravity.CENTER_VERTICAL
+                        background = if (isSelected) {
+                            bg(Color.rgb(45, 67, 121), 8)
+                        } else {
+                            bg(Color.rgb(217, 217, 217), 8)
+                        }
+                        setPadding(dp(16), dp(10), dp(16), dp(10))
+                        isClickable = true
+                        isFocusable = true
+                        setOnClickListener {
+                            selectedLeadership = leadRole
+                            renderLeadershipRoles()
+                        }
+                        val textCol = vertical().apply {
+                            add(text(leadRole, 14, if (isSelected) Color.WHITE else Color.BLACK, bold = true))
+                            space(2)
+                            add(text(desc, 11, if (isSelected) Color.rgb(203, 213, 225) else Color.rgb(100, 116, 139)))
+                        }
+                        add(textCol, 0, -2, 1f)
+                        val check = text(if (isSelected) "●" else "○", 16, if (isSelected) Color.WHITE else Color.rgb(100, 116, 139), bold = true)
+                        add(check, -2, -2)
+                    }
+                    leadershipContainer.add(item, -1, -2)
+                    leadershipContainer.space(8)
+                }
+            }
+            renderLeadershipRoles()
+            col.space(16)
+        }
+
+        // Section 2: Ministry Position
+        val ministryTitle = text("MINISTRY POSITION", 12, Color.rgb(148, 163, 184), bold = true).apply {
+            letterSpacing = 0.08f
+        }
+        col.add(ministryTitle)
+        col.space(8)
+
+        val ministryContainer = vertical()
+        col.addView(ministryContainer)
+
+        val assignableMinistryRoles = TeamRepository.filterAssignableRoles(leaderRoles)
+
+        fun renderMinistryRoles() {
+            ministryContainer.removeAllViews()
+            assignableMinistryRoles.forEach { role ->
+                val isSelected = role.equals(selectedMinistry, ignoreCase = true)
                 val item = horizontal().apply {
                     gravity = Gravity.CENTER_VERTICAL
                     background = if (isSelected) {
@@ -5254,18 +5325,20 @@ class AdminActivity : AppCompatActivity() {
                     isClickable = true
                     isFocusable = true
                     setOnClickListener {
-                        selectedRole = role
-                        renderRoles()
+                        selectedMinistry = role
+                        renderMinistryRoles()
                     }
                     add(text(role, 14, if (isSelected) Color.WHITE else Color.BLACK, bold = true), 0, -2, 1f)
+                    val check = text(if (isSelected) "●" else "○", 16, if (isSelected) Color.WHITE else Color.rgb(100, 116, 139), bold = true)
+                    add(check, -2, -2)
                 }
-                rolesContainer.add(item, -1, 44)
-                rolesContainer.space(8)
+                ministryContainer.add(item, -1, 44)
+                ministryContainer.space(8)
             }
         }
-        renderRoles()
+        renderMinistryRoles()
 
-        col.space(16)
+        col.space(24)
         val saveBtnRow = horizontal().apply { gravity = Gravity.CENTER }
         val saveBtn = TextView(this).apply {
             text = "Save"
@@ -5277,15 +5350,16 @@ class AdminActivity : AppCompatActivity() {
             isClickable = true
             isFocusable = true
             setOnClickListener {
-                if (selectedRole.isBlank()) {
-                    toast("Choose a role.")
+                if (selectedMinistry.isBlank()) {
+                    toast("Choose a ministry position.")
                     return@setOnClickListener
                 }
 
-                if (isSubLeader && (selectedRole.equals("Substitute Leader", ignoreCase = true) || selectedRole.equals("Worship Leader", ignoreCase = true))) {
+                if (isSubLeader && selectedLeadership == "Substitute Leader") {
                     toast("Substitute Leaders cannot assign another Substitute Leader.")
                     return@setOnClickListener
                 }
+
                 val targetMember = getActiveRoster().find {
                     (roleMemberUid.isNotBlank() && it.uid == roleMemberUid) ||
                     (roleMemberEmail.isNotBlank() && it.email.equals(roleMemberEmail, ignoreCase = true)) ||
@@ -5293,79 +5367,30 @@ class AdminActivity : AppCompatActivity() {
                 }
                 val targetUid = roleMemberUid.ifBlank { targetMember?.uid.orEmpty() }
                 val targetEmail = roleMemberEmail.ifBlank { targetMember?.email.orEmpty() }.trim().lowercase()
+                val targetRole = if (!isSubLeader) selectedLeadership else (targetMember?.role ?: "Member")
 
-                val map = try {
-                    org.json.JSONObject(preferences.getString(SessionManager.KEY_MEMBER_ROLES, "{}").orEmpty())
-                } catch (_: Exception) { org.json.JSONObject() }
-                map.put(roleMember, selectedRole)
-                if (roleMemberUid.isNotBlank()) map.put(roleMemberUid, selectedRole)
-                if (targetUid.isNotBlank()) map.put(targetUid, selectedRole)
-                if (targetEmail.isNotBlank()) map.put(targetEmail, selectedRole)
-                if (targetMember?.fullName.orEmpty().isNotBlank()) map.put(targetMember!!.fullName, selectedRole)
-                if (targetMember?.username.orEmpty().isNotBlank()) map.put(targetMember!!.username, selectedRole)
-
-                val isTargetLeader = selectedRole.equals("Substitute Leader", ignoreCase = true) ||
-                                     selectedRole.equals("Worship Leader", ignoreCase = true)
-                val targetRole = if (isTargetLeader) "Leader" else "Member"
-                val activeTeamCode = activeTeamCode()
-
-                preferences.edit {
-                    putString(SessionManager.KEY_MEMBER_ROLES, map.toString())
-                    if (targetEmail.isNotBlank()) {
-                        putString("email_ministry_$targetEmail", selectedRole)
-                        putString("email_role_$targetEmail", targetRole)
-                        if (activeTeamCode.isNotBlank()) {
-                            putString("email_ministry_${activeTeamCode}_$targetEmail", selectedRole)
-                            putString("email_role_${activeTeamCode}_$targetEmail", targetRole)
-                        }
-                    }
-                    if (targetUid.isNotBlank()) {
-                        putString("user_ministry_$targetUid", selectedRole)
-                        putString("user_role_$targetUid", targetRole)
-                        if (activeTeamCode.isNotBlank()) {
-                            putString("user_ministry_${activeTeamCode}_$targetUid", selectedRole)
-                            putString("user_role_${activeTeamCode}_$targetUid", targetRole)
-                        }
-                    }
-                    if (selectedRole.equals("Worship Leader", ignoreCase = true) && activeTeamCode.isNotBlank()) {
-                        putBoolean("transferred_leadership_$activeTeamCode", false)
-                        putString("team_leader_uid_$activeTeamCode", targetUid)
-                        putString("team_leader_email_$activeTeamCode", targetEmail)
-                        putString("team_leader_name_$activeTeamCode", roleMember)
-                        remove("email_role_${activeTeamCode}_$targetEmail")
-                        remove("user_role_${activeTeamCode}_$targetUid")
-                    } else if (targetRole == "Member" && activeTeamCode.isNotBlank()) {
-                        val teamLeadUid = preferences.getString("team_leader_uid_$activeTeamCode", "").orEmpty().trim()
-                        if (targetUid.isNotBlank() && teamLeadUid == targetUid) {
-                            remove("team_leader_uid_$activeTeamCode")
-                            remove("team_leader_name_$activeTeamCode")
-                        }
-                        val teamLeadEmail = preferences.getString("team_leader_email_$activeTeamCode", "").orEmpty().trim().lowercase()
-                        if (targetEmail.isNotBlank() && teamLeadEmail == targetEmail) {
-                            remove("team_leader_email_$activeTeamCode")
-                        }
-                    }
-                }
-
+                // Update memory
                 teamRoster = teamRoster.map {
                     if ((targetUid.isNotBlank() && it.uid == targetUid) ||
                         (targetEmail.isNotBlank() && it.email.equals(targetEmail, ignoreCase = true)) ||
                         it.fullName == roleMember || it.username == roleMember) {
-                        it.copy(ministryRole = selectedRole, role = targetRole)
+                        it.copy(role = targetRole, ministryRole = selectedMinistry)
                     } else it
                 }
 
-                TeamRepository.updateMemberMinistryRole(
+                TeamRepository.updateMemberRoles(
                     memberUid = targetUid,
-                    newRole = selectedRole,
+                    newLeadershipRole = if (!isSubLeader) selectedLeadership else null,
+                    newMinistryPosition = selectedMinistry,
                     memberName = roleMember,
                     memberEmail = targetEmail,
                     preferences = preferences
                 ) {
                     runOnUiThread { refreshTeamRoster(force = true) }
                 }
+
                 teamTab = "Members"
-                toast("Member role updated to $selectedRole")
+                toast("Updated: $targetRole • $selectedMinistry")
                 navigate("teams")
             }
         }
@@ -5627,15 +5652,26 @@ class AdminActivity : AppCompatActivity() {
         add(info, 0, -2, 1f)
 
         if (badge != null) {
-            val badgeView = text(badge, 11, navy, bold = true, centered = true).apply {
-                if (badge == "Leader" || badge == "Admin") background = bg(Color.rgb(225, 225, 228), 14)
+            val badgeColor = when {
+                badge.equals("Leader", true) -> Color.rgb(180, 83, 9)
+                badge.equals("Substitute Leader", true) -> Color.rgb(37, 99, 235)
+                else -> Color.rgb(100, 116, 139)
+            }
+            val badgeBg = when {
+                badge.equals("Leader", true) -> bg(Color.rgb(254, 243, 199), 12, Color.rgb(245, 158, 11))
+                badge.equals("Substitute Leader", true) -> bg(Color.rgb(239, 246, 255), 12, Color.rgb(191, 219, 254))
+                else -> null
+            }
+            val badgeView = text(badge, 11, badgeColor, bold = true, centered = true).apply {
+                if (badgeBg != null) background = badgeBg
                 if (onRoleClick != null) {
                     isClickable = true
                     isFocusable = true
                     setOnClickListener { onRoleClick() }
                 }
             }
-            add(badgeView, 64, 30)
+            val badgeWidth = if (badge.equals("Substitute Leader", true)) 105 else 64
+            add(badgeView, badgeWidth, 30)
         }
     }
     private fun scheduleView(): View {
@@ -7618,25 +7654,23 @@ class AdminActivity : AppCompatActivity() {
             "Members" -> {
                 val roster = getActiveRoster()
                 val activeCode = preferences.getString("teamCode", "").orEmpty()
-                val transferred = preferences.getBoolean("transferred_leadership_$activeCode", false)
                 val designatedLeaderUid = preferences.getString("team_leader_uid_$activeCode", "").orEmpty().trim()
                 val designatedLeader = preferences.getString("team_leader_email_$activeCode", "").orEmpty().trim().lowercase()
                 roster.forEach { member ->
                     val name = member.fullName.ifBlank { member.username.ifBlank { "Member" } }
-                    val isExplicitMember = member.role.equals("Member", true) ||
-                                           preferences.getString("email_role_${activeCode}_${member.email.trim().lowercase()}", "").equals("Member", true) ||
-                                           preferences.getString("user_role_${activeCode}_${member.uid}", "").equals("Member", true)
-                    val isLeaderBadge = !isExplicitMember && (
-                        member.ministryRole.equals("Worship Leader", ignoreCase = true) ||
-                        (member.ministryRole.equals("Substitute Leader", ignoreCase = true) && !member.role.equals("Member", true)) ||
+                    val badge = when {
+                        member.role.equals("Leader", true) ||
                         (designatedLeaderUid.isNotBlank() && member.uid == designatedLeaderUid) ||
-                        (designatedLeader.isNotBlank() && member.email.equals(designatedLeader, ignoreCase = true))
-                    )
-                    val badge = if (isLeaderBadge) "Leader" else "Member"
-                    val role = if (badge == "Member" && member.ministryRole.equals("Substitute Leader", ignoreCase = true)) {
-                        "Member"
+                        (designatedLeader.isNotBlank() && member.email.equals(designatedLeader, ignoreCase = true)) -> "Leader"
+                        member.role.equals("Substitute Leader", true) || TeamRepository.isSubstituteLeader(member.role, member.ministryRole) -> "Substitute Leader"
+                        else -> "Member"
+                    }
+                    val role = if (member.ministryRole.isNotBlank() && !TeamRepository.isSubstituteLeader(member.ministryRole) && !member.ministryRole.equals("Member", true)) {
+                        member.ministryRole
+                    } else if (badge == "Leader") {
+                        "Worship Leader"
                     } else {
-                        member.ministryRole.ifBlank { if (badge == "Leader") "Worship Leader" else "Member" }
+                        "Member"
                     }
                     val myCurrentUid = preferences.getString(SessionManager.KEY_USER_ID, "").orEmpty()
                     val myCurrentEmail = preferences.getString("email", "").orEmpty().trim().lowercase()
@@ -7651,7 +7685,7 @@ class AdminActivity : AppCompatActivity() {
                             roleMemberEmail = member.email
                             navigate("roleEdit")
                         }
-                    }) else null, member.photoUri))
+                    }) else null, member.photoUri, member.uid))
                     col.space(4)
                 }
             }
@@ -7660,33 +7694,20 @@ class AdminActivity : AppCompatActivity() {
                 val roster = getActiveRoster()
                 val currentUid = preferences.getString(SessionManager.KEY_USER_ID, "").orEmpty()
                 val baseRoles = if (isLeader) leaderRoles else listOf("Worship Leader", "Keyboardist", "Bassist", "Vocalist", "Guitarist")
-                val activeRoles = (listOf("Worship Leader") + baseRoles + roster.map { m ->
-                    if (m.role.equals("Member", true) && m.ministryRole.equals("Substitute Leader", true)) "Member" else m.ministryRole
-                }).filter {
-                    it.isNotBlank() && (!it.equals("Substitute Leader", true) || roster.any { m -> m.ministryRole.equals("Substitute Leader", true) && !m.role.equals("Member", true) })
+                val activeRoles = (listOf("Worship Leader") + baseRoles + roster.map { it.ministryRole }).filter {
+                    it.isNotBlank() && !it.equals("Substitute Leader", true) && !it.equals("Leader", true) && !it.equals("Member", true)
                 }.distinct()
                 val roles = activeRoles
-                val activeCode = preferences.getString("teamCode", "").orEmpty()
-                val transferred = preferences.getBoolean("transferred_leadership_$activeCode", false)
-                val designatedLeaderUid = preferences.getString("team_leader_uid_$activeCode", "").orEmpty().trim()
-                val designatedLeader = preferences.getString("team_leader_email_$activeCode", "").orEmpty().trim().lowercase()
                 roles.forEach { role ->
                     val people = roster.filter {
-                        val isExplicitMember = it.role.equals("Member", true) ||
-                                               preferences.getString("email_role_${activeCode}_${it.email.trim().lowercase()}", "").equals("Member", true) ||
-                                               preferences.getString("user_role_${activeCode}_${it.uid}", "").equals("Member", true)
-                        val isLead = !isExplicitMember && (
-                            it.ministryRole.equals("Worship Leader", ignoreCase = true) ||
-                            (!TeamRepository.isSubstituteLeader(it.ministryRole) &&
-                             ((designatedLeaderUid.isNotBlank() && it.uid == designatedLeaderUid) ||
-                              (designatedLeader.isNotBlank() && it.email.equals(designatedLeader, ignoreCase = true))))
-                        )
-                        if (role.equals("Worship Leader", ignoreCase = true)) {
-                            isLead
+                        val mRole = if (it.ministryRole.isNotBlank() && !TeamRepository.isSubstituteLeader(it.ministryRole) && !it.ministryRole.equals("Member", true)) {
+                            it.ministryRole
+                        } else if (it.role.equals("Leader", true)) {
+                            "Worship Leader"
                         } else {
-                            val mRole = if (it.role.equals("Member", true) && it.ministryRole.equals("Substitute Leader", true)) "Member" else it.ministryRole
-                            mRole.equals(role, ignoreCase = true) && !isLead
+                            "Member"
                         }
+                        mRole.equals(role, ignoreCase = true)
                     }
                     val isInitiallyExpanded = expandedRole == role
                     val arrowView = Symbol(this@AdminActivity, "arrow", Color.rgb(65, 80, 100)).apply {

@@ -23,7 +23,6 @@ data class TeamData(
     companion object {
         val DEFAULT_ROLES = listOf(
             "Worship Leader",
-            "Substitute Leader",
             "Vocalist",
             "Guitarist",
             "Keyboardist",
