@@ -635,11 +635,14 @@ object TeamRepository {
         preferences: android.content.SharedPreferences? = null
     ): List<TeamMember> {
         val code = teamCode.trim().uppercase()
-        val defaultLeaderEmail = "ryanlloydgenturo@gmail.com"
-        val defaultLeaderName = "Ryan Lloyd Genturo"
-        val defaultLeaderUid = "h9yRCswmV1f0Pnia2EnxDv4x4X43"
-        val defaultLeaderUsername = "RYAN LLOYD"
-        val defaultLeaderPhoto = "https://res.cloudinary.com/ffb3fdkm/image/upload/v1792548890/j13tbqyhhwro4na8ckke.jpg"
+        val defaultLeaderEmail = if (code == "KPABFG") "sycon2104@gmail.com" else "ryanlloydgenturo@gmail.com"
+        val defaultLeaderName = if (code == "KPABFG") "John Michael Ramirez" else "Ryan Lloyd Genturo"
+        val defaultLeaderUid = if (code == "KPABFG") "qxQBt4WtytgHEC0OljwdwehXfP52" else "h9yRCswmV1f0Pnia2EnxDv4x4X43"
+        val defaultLeaderUsername = if (code == "KPABFG") "Ramirez" else "RYAN LLOYD"
+        val defaultLeaderPhoto = if (code == "KPABFG")
+            "https://res.cloudinary.com/ffb3fdkm/image/upload/v1793362917/rqol5xnijurka0ondplu.jpg"
+        else
+            "https://res.cloudinary.com/ffb3fdkm/image/upload/v1792548890/j13tbqyhhwro4na8ckke.jpg"
 
         val designatedLeaderUid = preferences?.getString("team_leader_uid_$code", "")?.trim().orEmpty()
         val designatedLeaderName = preferences?.getString("team_leader_name_$code", "")?.trim().orEmpty()
@@ -5828,7 +5831,9 @@ object TeamRepository {
                         val leaderInRoster = currentRoster.find { it.uid == docLeaderUid }
                         val resolvedEmail = docLeaderEmail.ifBlank { leaderInRoster?.email?.trim()?.lowercase().orEmpty() }
                         val resolvedName = docLeaderName.ifBlank { leaderInRoster?.fullName.orEmpty() }
-                        val isTransferred = !resolvedEmail.equals("ryanlloydgenturo@gmail.com", ignoreCase = true) && docLeaderUid != "h9yRCswmV1f0Pnia2EnxDv4x4X43"
+                        val origLeaderEmail = if (code == "KPABFG") "sycon2104@gmail.com" else "ryanlloydgenturo@gmail.com"
+                        val origLeaderUid = if (code == "KPABFG") "qxQBt4WtytgHEC0OljwdwehXfP52" else "h9yRCswmV1f0Pnia2EnxDv4x4X43"
+                        val isTransferred = !resolvedEmail.equals(origLeaderEmail, ignoreCase = true) && docLeaderUid != origLeaderUid
 
                         var leaderChanged = false
                         if (preferences != null) {

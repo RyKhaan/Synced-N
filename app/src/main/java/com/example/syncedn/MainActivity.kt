@@ -39,9 +39,10 @@ class MainActivity : MemberActivity() {
         val userRole = preferences.getString("role", "Member").orEmpty()
         val userMinistry = preferences.getString("ministryRole", "").orEmpty()
         val transferred = preferences.getBoolean("transferred_leadership_$teamCode", false)
+        val designatedLeaderUid = preferences.getString("team_leader_uid_$teamCode", "").orEmpty().trim()
         val designatedLeader = preferences.getString("team_leader_email_$teamCode", "").orEmpty().trim().lowercase()
-        val isLeadUser = (designatedLeader.isNotBlank() && designatedLeader == userEmail) ||
-                         (!transferred && designatedLeader.isBlank() && userEmail == "ryanlloydgenturo@gmail.com" && !userRole.equals("Member", ignoreCase = true) && !userMinistry.equals("Member", ignoreCase = true))
+        val isLeadUser = (designatedLeaderUid.isNotBlank() && designatedLeaderUid == effectiveUid) ||
+                         (designatedLeader.isNotBlank() && designatedLeader == userEmail)
         val leftTeam = preferences.getBoolean("leftTeam", false)
         val removedTeamCode = preferences.getString("removedTeamCode", "").orEmpty()
         val removed = preferences.getBoolean("removedByLeader", false) && (removedTeamCode.isBlank() || teamCode.isBlank() || removedTeamCode.equals(teamCode, ignoreCase = true))
@@ -76,15 +77,20 @@ class MainActivity : MemberActivity() {
 
     override fun navigate(next: String) {
         if (next == "home") {
+            val effectiveUid = com.example.syncedn.data.auth.AuthManager.currentUser?.uid?.takeIf { it.isNotBlank() }
+                ?: preferences.getString("userId", "").orEmpty().ifBlank {
+                    preferences.getString(com.example.syncedn.data.auth.SessionManager.KEY_USER_ID, "").orEmpty()
+                }
             val userEmail = preferences.getString("email", "").orEmpty().trim().lowercase()
             val userTeam = preferences.getString("teamName", "").orEmpty()
             val teamCode = preferences.getString("teamCode", "").orEmpty()
             val userRole = preferences.getString("role", "Member").orEmpty()
             val userMinistry = preferences.getString("ministryRole", "").orEmpty()
             val transferred = preferences.getBoolean("transferred_leadership_$teamCode", false)
+            val designatedLeaderUid = preferences.getString("team_leader_uid_$teamCode", "").orEmpty().trim()
             val designatedLeader = preferences.getString("team_leader_email_$teamCode", "").orEmpty().trim().lowercase()
-            val isLeadUser = (designatedLeader.isNotBlank() && designatedLeader == userEmail) ||
-                             (!transferred && designatedLeader.isBlank() && userEmail == "ryanlloydgenturo@gmail.com" && !userRole.equals("Member", ignoreCase = true) && !userMinistry.equals("Member", ignoreCase = true))
+            val isLeadUser = (designatedLeaderUid.isNotBlank() && designatedLeaderUid == effectiveUid) ||
+                             (designatedLeader.isNotBlank() && designatedLeader == userEmail)
             val removedTeamCode = preferences.getString("removedTeamCode", "").orEmpty()
             val removed = preferences.getBoolean("removedByLeader", false) && (removedTeamCode.isBlank() || teamCode.isBlank() || removedTeamCode.equals(teamCode, ignoreCase = true))
             if (userTeam.isBlank() || removed) {

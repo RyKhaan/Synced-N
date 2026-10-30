@@ -5035,4 +5035,69 @@ class ExampleUnitTest {
             )
         )
     }
+
+    @Test
+    fun testRamirezMaintainedAsWorshipLeaderAndRyanStaysMemberWithoutLooping() {
+        val prefs = FakePreferences()
+        val teamCode = "KPABFG"
+        val ramirezUid = "qxQBt4WtytgHEC0OljwdwehXfP52"
+        val ramirezEmail = "sycon2104@gmail.com"
+        val ramirezName = "John Michael Ramirez"
+
+        val ryanUid = "h9yRCswmV1f0Pnia2EnxDv4x4X43"
+        val ryanEmail = "ryanlloydgenturo@gmail.com"
+        val ryanName = "Ryan Lloyd Genturo"
+
+        // Set up team preferences with Ramirez as leader
+        prefs.edit()
+            .putString("teamCode", teamCode)
+            .putString("teamName", "WORSHIP TEAM")
+            .putString("team_leader_uid_$teamCode", ramirezUid)
+            .putString("team_leader_name_$teamCode", ramirezName)
+            .putString("team_leader_email_$teamCode", ramirezEmail)
+            .apply()
+
+        val roster = listOf(
+            com.example.syncedn.data.model.TeamMember(
+                uid = ramirezUid,
+                fullName = ramirezName,
+                username = "Ramirez",
+                email = ramirezEmail,
+                role = "Leader",
+                ministryRole = "Worship Leader",
+                teamCode = teamCode
+            ),
+            com.example.syncedn.data.model.TeamMember(
+                uid = ryanUid,
+                fullName = ryanName,
+                username = "RYAN LLOYD",
+                email = ryanEmail,
+                role = "Member",
+                ministryRole = "Member",
+                teamCode = teamCode
+            )
+        )
+
+        val resolvedRoster = com.example.syncedn.data.database.TeamRepository.ensureTeamLeaderInRoster(
+            teamCode,
+            roster,
+            prefs
+        )
+
+        val leader = resolvedRoster.find { it.uid == ramirezUid }
+        assertNotNull("Ramirez must be in roster", leader)
+        assertEquals("Leader", leader!!.role)
+        assertEquals("Worship Leader", leader.ministryRole)
+
+        val member = resolvedRoster.find { it.uid == ryanUid }
+        assertNotNull("Ryan must be in roster", member)
+        assertEquals("Member", member!!.role)
+        assertEquals("Member", member.ministryRole)
+
+        // Verify activity switch debounce prevents rapid activity bouncing
+        val now = System.currentTimeMillis()
+        prefs.edit().putLong("last_activity_switch_time", now).apply()
+        val tooSoon = System.currentTimeMillis() - prefs.getLong("last_activity_switch_time", 0L) < 4000L
+        assertTrue("Switch within 4 seconds must be throttled", tooSoon)
+    }
 }

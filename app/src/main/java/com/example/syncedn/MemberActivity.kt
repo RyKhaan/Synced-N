@@ -331,7 +331,7 @@ open class MemberActivity : AppCompatActivity() {
                         }
                         teamRoster = TeamRepository.getCachedRoster(code, preferences)
                         updateRosterViews()
-                        if (nameChanged && page in listOf("teams", "teamDetails", "settings", "notifications")) {
+                        if (nameChanged && page in listOf("home", "teams", "teamDetails", "settings", "notifications")) {
                             navigate(page, triggerRefresh = false)
                         }
                     }
@@ -543,15 +543,20 @@ open class MemberActivity : AppCompatActivity() {
         val isWorshipLeadEligible = !isExplicitMember && (
             remoteMinistryRole.equals("Worship Leader", ignoreCase = true) ||
             (designatedLeaderUid.isNotBlank() && designatedLeaderUid == myUid && TeamRepository.isWorshipLeader(remoteMinistryRole, remoteRole)) ||
-            (!transferred && designatedLeader.isBlank() && designatedLeaderUid.isBlank() && TeamRepository.isWorshipLeader(remoteMinistryRole, remoteRole))
+            (designatedLeader.isNotBlank() && designatedLeader == emailLower && TeamRepository.isWorshipLeader(remoteMinistryRole, remoteRole))
         )
         if (isWorshipLeadEligible) {
+            val lastActivitySwitch = preferences.getLong("last_activity_switch_time", 0L)
+            if (now - lastActivitySwitch < 4000L) {
+                return
+            }
             if (now - lastRoleSwitchTime < 3000L && lastSwitchedRole == "Worship Leader") {
                 return
             }
             lastObservedMinistryRole = "Worship Leader"
-            val isTransferredLeader = !emailLower.equals("ryanlloydgenturo@gmail.com", ignoreCase = true) && myUid != "h9yRCswmV1f0Pnia2EnxDv4x4X43"
+            val isTransferredLeader = (designatedLeaderUid.isNotBlank() && myUid != designatedLeaderUid) || (designatedLeader.isNotBlank() && emailLower != designatedLeader)
             val editor = preferences.edit()
+                .putLong("last_activity_switch_time", now)
                 .putString("role", "Leader")
                 .putString(SessionManager.KEY_ROLE, "Leader")
                 .putString("ministryRole", "Worship Leader")
@@ -702,11 +707,10 @@ open class MemberActivity : AppCompatActivity() {
         ) {
             val myActiveTeamCode = preferences.getString(SessionManager.KEY_TEAM_CODE, "").orEmpty()
                 .ifBlank { preferences.getString("teamCode", "").orEmpty() }
-            val transferred = preferences.getBoolean("transferred_leadership_$myActiveTeamCode", false)
+            val designatedLeaderUid = preferences.getString("team_leader_uid_$myActiveTeamCode", "").orEmpty().trim()
             val designatedLeader = preferences.getString("team_leader_email_$myActiveTeamCode", "").orEmpty().trim().lowercase()
-            val isLeadUser = (designatedLeader.isNotBlank() && designatedLeader == myCurrentEmail) ||
-                             (!transferred && designatedLeader.isBlank() && myCurrentEmail.equals("ryanlloydgenturo@gmail.com", ignoreCase = true) &&
-                              !preferences.getString("role", "").equals("Member", ignoreCase = true))
+            val isLeadUser = (designatedLeaderUid.isNotBlank() && designatedLeaderUid == myCurrentUid) ||
+                             (designatedLeader.isNotBlank() && designatedLeader == myCurrentEmail)
 
             if (!isLeadUser && removedByLeader && myActiveTeamCode.isNotBlank() &&
                 (removedTeamCode.isBlank() || removedTeamCode.equals(myActiveTeamCode, ignoreCase = true)) &&
@@ -846,7 +850,6 @@ open class MemberActivity : AppCompatActivity() {
         val isPrimaryLeader = hasActiveTeam && !isSelfExplicitMember && (
             (teamLeaderUid.isNotBlank() && teamLeaderUid == myCurrentUid) ||
             (teamLeaderUid.isBlank() && teamLeaderEmail.isNotBlank() && teamLeaderEmail == currentEmailOnStart) ||
-            (teamLeaderEmail.isBlank() && teamLeaderUid.isBlank() && !transferred && currentEmailOnStart == "ryanlloydgenturo@gmail.com") ||
             (currentMinistryOnStart.equals("Worship Leader", ignoreCase = true) && (teamLeaderUid.isBlank() || teamLeaderUid == myCurrentUid))
         )
         val isSubLeader = hasActiveTeam && !isSelfExplicitMember && currentMinistryOnStart.equals("Substitute Leader", ignoreCase = true)
@@ -1011,9 +1014,7 @@ open class MemberActivity : AppCompatActivity() {
         val transferred = preferences.getBoolean("transferred_leadership_$teamCode", false)
         val isLeadUser = hasActiveTeam && (
             (teamLeaderUid.isNotBlank() && teamLeaderUid == myUid) ||
-            (teamLeaderUid.isBlank() && teamLeaderEmail.isNotBlank() && teamLeaderEmail == userEmail) ||
-            (!transferred && teamLeaderEmail.isBlank() && teamLeaderUid.isBlank() && userEmail == "ryanlloydgenturo@gmail.com" &&
-             !userRole.equals("Member", ignoreCase = true) && !userMinistry.equals("Member", ignoreCase = true))
+            (teamLeaderUid.isBlank() && teamLeaderEmail.isNotBlank() && teamLeaderEmail == userEmail)
         )
         val myTeam = preferences.getString("teamName", "").orEmpty()
         val removedTeamCode = preferences.getString("removedTeamCode", "").orEmpty()
@@ -1028,7 +1029,6 @@ open class MemberActivity : AppCompatActivity() {
         val isPrimaryLeader = hasActiveTeam && !isSelfExplicitMember && (
             (teamLeaderUid.isNotBlank() && teamLeaderUid == myUid) ||
             (teamLeaderUid.isBlank() && teamLeaderEmail.isNotBlank() && teamLeaderEmail == userEmail) ||
-            (!isSubLeader && !transferred && teamLeaderEmail.isBlank() && teamLeaderUid.isBlank() && userEmail == "ryanlloydgenturo@gmail.com") ||
             (userMinistry.equals("Worship Leader", ignoreCase = true) && (teamLeaderUid.isBlank() || teamLeaderUid == myUid))
         )
         if (effectiveNext in listOf("home", "schedule", "teams", "announcements", "calendar", "songs", "service")) {
@@ -1258,8 +1258,7 @@ open class MemberActivity : AppCompatActivity() {
                                         val transferred = preferences.getBoolean("transferred_leadership_$cleanCode", false)
                                         val isDesignatedTeamLeader = !wasLeftTeam && !transferred && (
                                             (teamLeaderUid.isNotBlank() && uid == teamLeaderUid) ||
-                                            (teamLeaderUid.isBlank() && designatedLeader.isNotBlank() && designatedLeader == emailStr.trim().lowercase()) ||
-                                            (teamLeaderUid.isBlank() && designatedLeader.isBlank() && emailStr.equals("ryanlloydgenturo@gmail.com", ignoreCase = true) && !preferences.getString("role", "").equals("Member", ignoreCase = true))
+                                            (teamLeaderUid.isBlank() && designatedLeader.isNotBlank() && designatedLeader == emailStr.trim().lowercase())
                                         )
                                         val resolvedRole = if (isDesignatedTeamLeader) "Leader" else "Member"
                                         val resolvedMinistry = if (isDesignatedTeamLeader) "Worship Leader" else "Member"
@@ -3409,11 +3408,10 @@ open class MemberActivity : AppCompatActivity() {
                 )
             } ?: list.find {
                 TeamRepository.isWorshipLeader(it.ministryRole, it.role) && !it.role.equals("Member", true)
-            } ?: if (!transferred) {
-                list.find {
-                    !it.role.equals("Member", true) && !TeamRepository.isOrdinaryMemberRole(it.ministryRole, it.role) && !TeamRepository.isSubstituteLeader(it.ministryRole) &&
-                    (it.email.trim().lowercase() == "ryanlloydgenturo@gmail.com" || it.fullName.equals("Ryan Lloyd Genturo", true))
-                }
+            } ?: if (!transferred && designatedLeaderUid.isNotBlank()) {
+                list.find { it.uid == designatedLeaderUid && !it.role.equals("Member", true) }
+            } else if (!transferred && designatedLeader.isNotBlank()) {
+                list.find { it.email.trim().lowercase() == designatedLeader && !it.role.equals("Member", true) }
             } else null
 
             if (leaderInList != null && leaderInList.uid.isNotBlank() && currentCode.isNotBlank()) {
@@ -3433,7 +3431,7 @@ open class MemberActivity : AppCompatActivity() {
                     (m.uid.isNotBlank() && m.uid == leaderInList.uid) ||
                     (emailLower.isNotBlank() && emailLower == leaderInList.email.trim().lowercase()) ||
                     (m.fullName.isNotBlank() && m.fullName.equals(leaderInList.fullName, true))
-                )) || (!transferred && leaderInList == null && (emailLower == "ryanlloydgenturo@gmail.com" || m.fullName.equals("Ryan Lloyd Genturo", true)))
+                ))
 
                 val isExplicitSubInModel = !isPrimaryLeader && TeamRepository.isSubstituteLeader(m.ministryRole) && !m.role.equals("Member", ignoreCase = true)
 
@@ -4804,6 +4802,8 @@ open class MemberActivity : AppCompatActivity() {
                 !isSelf && !isAlreadyAssigned
             }
             val transferred = preferences.getBoolean("transferred_leadership_$activeCode", false)
+            val designatedLeaderUid = preferences.getString("team_leader_uid_$activeCode", "").orEmpty().trim()
+            val designatedLeader = preferences.getString("team_leader_email_$activeCode", "").orEmpty().trim().lowercase()
             val teamAvail = if (serviceDate.isNotBlank()) {
                 TeamRepository.checkTeamAvailabilityForDate(activeCode, serviceDate, preferences)
             } else {
@@ -4815,7 +4815,7 @@ open class MemberActivity : AppCompatActivity() {
 
             for (member in rosterCandidates) {
                 val mName = member.fullName.ifBlank { member.username }
-                val isLeader = member.role.equals("Leader", true) || (!transferred && (member.email.trim().equals("ryanlloydgenturo@gmail.com", true) || mName.contains("Ryan Lloyd", true)) && !member.role.equals("Member", true))
+                val isLeader = member.role.equals("Leader", true) || (!transferred && ((designatedLeaderUid.isNotBlank() && member.uid == designatedLeaderUid) || (designatedLeader.isNotBlank() && member.email.trim().equals(designatedLeader, true))) && !member.role.equals("Member", true))
                 val mRole = if (isLeader) {
                     if (member.ministryRole.isBlank() || member.ministryRole.equals("Member", true)) "Worship Leader" else member.ministryRole
                 } else {
