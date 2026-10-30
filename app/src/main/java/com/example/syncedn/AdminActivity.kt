@@ -3128,20 +3128,32 @@ class AdminActivity : AppCompatActivity() {
             val designatedLeader = preferences.getString("team_leader_email_$currentCode", "").orEmpty().trim().lowercase()
 
             val leaderInList = list.find {
-                (designatedLeaderUid.isNotBlank() && it.uid == designatedLeaderUid) ||
-                (designatedLeader.isNotBlank() && it.email.trim().lowercase() == designatedLeader)
+                !it.role.equals("Member", true) && !TeamRepository.isOrdinaryMemberRole(it.ministryRole, it.role) && (
+                    (designatedLeaderUid.isNotBlank() && it.uid == designatedLeaderUid) ||
+                    (designatedLeader.isNotBlank() && it.email.trim().lowercase() == designatedLeader)
+                )
             } ?: if (!transferred) {
-                list.find { it.email.trim().lowercase() == "ryanlloydgenturo@gmail.com" || it.fullName.equals("Ryan Lloyd Genturo", true) }
-                    ?: list.find { it.ministryRole.equals("Worship Leader", true) || (it.role.equals("Leader", true) && !TeamRepository.isSubstituteLeader(it.ministryRole)) }
+                list.find {
+                    !it.role.equals("Member", true) && !TeamRepository.isOrdinaryMemberRole(it.ministryRole, it.role) &&
+                    (it.email.trim().lowercase() == "ryanlloydgenturo@gmail.com" || it.fullName.equals("Ryan Lloyd Genturo", true))
+                } ?: list.find {
+                    !it.role.equals("Member", true) && !TeamRepository.isOrdinaryMemberRole(it.ministryRole, it.role) &&
+                    (it.ministryRole.equals("Worship Leader", true) || (it.role.equals("Leader", true) && !TeamRepository.isSubstituteLeader(it.ministryRole)))
+                }
             } else {
-                list.find { it.ministryRole.equals("Worship Leader", true) || (it.role.equals("Leader", true) && !TeamRepository.isSubstituteLeader(it.ministryRole)) }
+                list.find {
+                    !it.role.equals("Member", true) && !TeamRepository.isOrdinaryMemberRole(it.ministryRole, it.role) &&
+                    (it.ministryRole.equals("Worship Leader", true) || (it.role.equals("Leader", true) && !TeamRepository.isSubstituteLeader(it.ministryRole)))
+                }
             }
 
-            if (designatedLeaderUid.isBlank() && leaderInList != null && leaderInList.uid.isNotBlank() && currentCode.isNotBlank()) {
-                preferences.edit {
-                    putString("team_leader_uid_$currentCode", leaderInList.uid)
-                    if (leaderInList.email.isNotBlank()) putString("team_leader_email_$currentCode", leaderInList.email.trim().lowercase())
-                    if (leaderInList.fullName.isNotBlank()) putString("team_leader_name_$currentCode", leaderInList.fullName)
+            if (leaderInList != null && leaderInList.uid.isNotBlank() && currentCode.isNotBlank()) {
+                if (designatedLeaderUid != leaderInList.uid) {
+                    preferences.edit {
+                        putString("team_leader_uid_$currentCode", leaderInList.uid)
+                        if (leaderInList.email.isNotBlank()) putString("team_leader_email_$currentCode", leaderInList.email.trim().lowercase())
+                        if (leaderInList.fullName.isNotBlank()) putString("team_leader_name_$currentCode", leaderInList.fullName)
+                    }
                 }
             }
 
@@ -7660,27 +7672,24 @@ class AdminActivity : AppCompatActivity() {
                 val designatedLeader = preferences.getString("team_leader_email_$activeCode", "").orEmpty().trim().lowercase()
                 roster.forEach { member ->
                     val name = member.fullName.ifBlank { member.username.ifBlank { "Member" } }
-                    val isLeader = (designatedLeaderUid.isNotBlank() && member.uid == designatedLeaderUid) ||
-                                   (designatedLeader.isNotBlank() && member.email.trim().lowercase() == designatedLeader) ||
-                                   (!transferred && designatedLeader.isBlank() && designatedLeaderUid.isBlank() && (member.email.trim().lowercase() == "ryanlloydgenturo@gmail.com" || member.fullName.equals("Ryan Lloyd Genturo", true))) ||
-                                   member.ministryRole.equals("Worship Leader", true)
-                    val isSubLeader = !isLeader && member.ministryRole.equals("Substitute Leader", true) && !member.role.equals("Member", true)
+                    val isMemberWorshipLeader = member.role.equals("Leader", true) && !TeamRepository.isSubstituteLeader(member.ministryRole) && member.ministryRole.equals("Worship Leader", true)
+                    val isMemberSubLeader = !isMemberWorshipLeader && (member.role.equals("Substitute Leader", true) || member.ministryRole.equals("Substitute Leader", true)) && !member.role.equals("Member", true)
 
                     val badge = when {
-                        isLeader -> "Leader"
-                        isSubLeader -> "Substitute Leader"
+                        isMemberWorshipLeader -> "Leader"
+                        isMemberSubLeader -> "Substitute Leader"
                         else -> "Member"
                     }
                     val role = when {
-                        isLeader -> "Worship Leader"
-                        isSubLeader -> "Substitute Leader"
+                        isMemberWorshipLeader -> "Worship Leader"
+                        isMemberSubLeader -> "Substitute Leader"
                         else -> member.ministryRole.ifBlank { "Member" }
                     }
                     val myCurrentUid = preferences.getString(SessionManager.KEY_USER_ID, "").orEmpty()
                     val myCurrentEmail = preferences.getString("email", "").orEmpty().trim().lowercase()
                     val isSelfLeaderClick = (member.uid.isNotBlank() && member.uid == myCurrentUid) ||
                                             (member.email.isNotBlank() && member.email.equals(myCurrentEmail, ignoreCase = true))
-                    col.add(memberRow(name, role, badge, if (isLeader) ({
+                    col.add(memberRow(name, role, badge, {
                         if (isSelfLeaderClick && !isCurrentUserSubstituteLeader()) {
                             toast("You are the Team Leader. To transfer leadership, go to View Details.")
                         } else {
@@ -7689,7 +7698,7 @@ class AdminActivity : AppCompatActivity() {
                             roleMemberEmail = member.email
                             navigate("roleEdit")
                         }
-                    }) else null, member.photoUri))
+                    }, member.photoUri))
                     col.space(4)
                 }
             }
@@ -7709,11 +7718,8 @@ class AdminActivity : AppCompatActivity() {
                 val designatedLeader = preferences.getString("team_leader_email_$activeCode", "").orEmpty().trim().lowercase()
                 roles.forEach { role ->
                     val people = roster.filter { member ->
-                        val isLead = (designatedLeaderUid.isNotBlank() && member.uid == designatedLeaderUid) ||
-                                     (designatedLeader.isNotBlank() && member.email.trim().lowercase() == designatedLeader) ||
-                                     (!transferred && designatedLeader.isBlank() && designatedLeaderUid.isBlank() && (member.email.trim().lowercase() == "ryanlloydgenturo@gmail.com" || member.fullName.equals("Ryan Lloyd Genturo", true))) ||
-                                     member.ministryRole.equals("Worship Leader", true)
-                        val isSub = !isLead && member.ministryRole.equals("Substitute Leader", true) && !member.role.equals("Member", true)
+                        val isLead = member.role.equals("Leader", true) && !TeamRepository.isSubstituteLeader(member.ministryRole) && member.ministryRole.equals("Worship Leader", true)
+                        val isSub = !isLead && (member.role.equals("Substitute Leader", true) || member.ministryRole.equals("Substitute Leader", true)) && !member.role.equals("Member", true)
 
                         if (role.equals("Worship Leader", ignoreCase = true)) {
                             isLead

@@ -845,11 +845,13 @@ object TeamRepository {
                 val transferred = preferences?.getBoolean("transferred_leadership_$activeCode", false) == true
 
                 val emailLower = preferredEmail.trim().lowercase()
-                val isExplicitMember1 = (existing.role.equals("Member", true) && m.role.equals("Member", true)) ||
-                                        (isOrdinaryMemberRole(existing.ministryRole, existing.role) && isOrdinaryMemberRole(m.ministryRole, m.role))
-                val isPrimaryLeader = (designatedLeaderUid.isNotBlank() && preferredUid == designatedLeaderUid) ||
-                                      (designatedLeaderEmail.isNotBlank() && emailLower == designatedLeaderEmail) ||
-                                      (!isExplicitMember1 && !transferred && designatedLeaderEmail.isBlank() && designatedLeaderUid.isBlank() && (preferredEmail.trim().equals("ryanlloydgenturo@gmail.com", ignoreCase = true) || preferredFullName.trim().equals("Ryan Lloyd Genturo", ignoreCase = true)))
+                val isExplicitMember1 = existing.role.equals("Member", true) || m.role.equals("Member", true) ||
+                                        isOrdinaryMemberRole(existing.ministryRole, existing.role) || isOrdinaryMemberRole(m.ministryRole, m.role)
+                val isPrimaryLeader = !isExplicitMember1 && (
+                    (designatedLeaderUid.isNotBlank() && preferredUid == designatedLeaderUid) ||
+                    (designatedLeaderEmail.isNotBlank() && emailLower == designatedLeaderEmail) ||
+                    (!transferred && designatedLeaderEmail.isBlank() && designatedLeaderUid.isBlank() && (preferredEmail.trim().equals("ryanlloydgenturo@gmail.com", ignoreCase = true) || preferredFullName.trim().equals("Ryan Lloyd Genturo", ignoreCase = true)))
+                )
 
                 val existingIsRealUid = !existing.uid.startsWith("user_") && existing.uid.isNotBlank()
                 val mIsRealUid = !m.uid.startsWith("user_") && m.uid.isNotBlank()
@@ -976,9 +978,11 @@ object TeamRepository {
 
             val emailLower = mWithPhoto.email.trim().lowercase()
             val isExplicitMember2 = mWithPhoto.role.equals("Member", true) || isOrdinaryMemberRole(mWithPhoto.ministryRole, mWithPhoto.role)
-            val isPrimary = (designatedLeaderUid.isNotBlank() && mWithPhoto.uid == designatedLeaderUid) ||
-                            (designatedLeaderEmail.isNotBlank() && emailLower == designatedLeaderEmail) ||
-                            (!isExplicitMember2 && !transferred && designatedLeaderEmail.isBlank() && designatedLeaderUid.isBlank() && (emailLower == "ryanlloydgenturo@gmail.com" || mWithPhoto.fullName.equals("Ryan Lloyd Genturo", ignoreCase = true)))
+            val isPrimary = !isExplicitMember2 && (
+                (designatedLeaderUid.isNotBlank() && mWithPhoto.uid == designatedLeaderUid) ||
+                (designatedLeaderEmail.isNotBlank() && emailLower == designatedLeaderEmail) ||
+                (!transferred && designatedLeaderEmail.isBlank() && designatedLeaderUid.isBlank() && (emailLower == "ryanlloydgenturo@gmail.com" || mWithPhoto.fullName.equals("Ryan Lloyd Genturo", ignoreCase = true)))
+            )
 
             val isExplicitSubLeader = !isPrimary && isSubstituteLeader(mWithPhoto.ministryRole) && !mWithPhoto.role.equals("Member", ignoreCase = true)
             val isExplicitWorshipLeader = isPrimary || (isWorshipLeader(mWithPhoto.ministryRole, mWithPhoto.role) && !mWithPhoto.role.equals("Member", ignoreCase = true))
@@ -1407,10 +1411,25 @@ object TeamRepository {
                         if (currentSelfUid.isNotBlank() && currentSelfUid != memberUid) {
                             val teamUpdates = mutableMapOf<String, Any>(
                                 "leaderUid" to currentSelfUid,
-                                "leaderEmail" to currentSelfEmail,
                                 "leaderName" to currentSelfName
                             )
+                            if (currentSelfEmail.isNotBlank()) teamUpdates["leaderEmail"] = currentSelfEmail
                             db.collection(TEAMS_COLLECTION).document(activeCode).update(teamUpdates)
+                        }
+                    }
+                    if (memberUid.isNotBlank() && currentSelfUid.isNotBlank() && currentSelfUid != memberUid) {
+                        db.collection(TEAMS_COLLECTION).document(activeCode).get().addOnSuccessListener { tDoc ->
+                            if (tDoc != null && tDoc.exists()) {
+                                val docLeaderUid = tDoc.getString("leaderUid").orEmpty()
+                                if (docLeaderUid == memberUid) {
+                                    val teamUpdates = mutableMapOf<String, Any>(
+                                        "leaderUid" to currentSelfUid,
+                                        "leaderName" to currentSelfName
+                                    )
+                                    if (currentSelfEmail.isNotBlank()) teamUpdates["leaderEmail"] = currentSelfEmail
+                                    db.collection(TEAMS_COLLECTION).document(activeCode).update(teamUpdates)
+                                }
+                            }
                         }
                     }
                 }

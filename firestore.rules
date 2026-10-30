@@ -35,6 +35,7 @@ rules_version = '2';
 //   - teamName: string (required, 1-100 chars) - Ministry team name
 //   - leaderUid: string (required, 1-128 chars, matches creator auth.uid, immutable) - Leader's Firebase Auth UID
 //   - leaderName: string (required, 1-100 chars) - Full name or display name of the team leader
+//   - leaderEmail: string (optional, 0-120 chars) - Email of the team leader
 //   - roles: list (optional, max 50 items) - Customized ministry roles list for the team
 //   - removedMembers: list (optional, max 200 items) - Member IDs or names removed by the leader
 //   - isDeleted: bool (optional) - Soft deletion indicator
@@ -352,7 +353,7 @@ service cloud.firestore {
     // Strict validator for /teams/{teamCode} documents
     function isValidTeam(data, teamCode) {
       return hasOnlyAllowedFields(data, [
-        'teamCode', 'teamName', 'leaderUid', 'leaderName', 'roles', 'removedMembers',
+        'teamCode', 'teamName', 'leaderUid', 'leaderName', 'leaderEmail', 'roles', 'removedMembers',
         'isDeleted', 'deletedAt', 'deletedBy', 'status', 'createdAt'
       ]) &&
       hasRequiredFields(data, ['teamCode', 'teamName', 'leaderUid', 'leaderName']) &&
@@ -368,6 +369,7 @@ service cloud.firestore {
       data.leaderName is string &&
       data.leaderName.size() > 0 &&
       data.leaderName.size() <= 100 &&
+      (!('leaderEmail' in data) || (data.leaderEmail is string && data.leaderEmail.size() <= 120)) &&
       (!('roles' in data) || (data.roles is list && data.roles.size() <= 50)) &&
       (!('removedMembers' in data) || (data.removedMembers is list && data.removedMembers.size() <= 200)) &&
       (!('isDeleted' in data) || data.isDeleted is bool) &&
