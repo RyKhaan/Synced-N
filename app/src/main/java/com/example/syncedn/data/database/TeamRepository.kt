@@ -559,43 +559,40 @@ object TeamRepository {
     }
 
     /**
-     * Returns true ONLY if the member's role or ministryRole is "Substitute Leader".
+     * Returns true ONLY if the member's ministryRole is "Substitute Leader".
      */
-    fun isSubstituteLeader(roleOrMinistry: String): Boolean {
-        return roleOrMinistry.trim().equals("Substitute Leader", ignoreCase = true)
-    }
-
-    fun isSubstituteLeader(role: String, ministryRole: String): Boolean {
-        return role.trim().equals("Substitute Leader", ignoreCase = true) ||
-               ministryRole.trim().equals("Substitute Leader", ignoreCase = true)
+    fun isSubstituteLeader(ministryRole: String): Boolean {
+        return ministryRole.trim().equals("Substitute Leader", ignoreCase = true)
     }
 
     /**
-     * Returns true ONLY if the member's musical ministry assignment is "Worship Leader".
+     * Returns true ONLY if the member is a permanent Worship Leader (never true for a Substitute Leader,
+     * even though Substitute Leaders also have role="Leader" in Firestore).
      */
-    fun isWorshipLeader(ministryRole: String, role: String = ""): Boolean {
-        if (isSubstituteLeader(role, ministryRole)) return false
+    fun isWorshipLeader(ministryRole: String, role: String): Boolean {
+        if (isSubstituteLeader(ministryRole)) return false
         val cleanMinistry = ministryRole.trim()
         if (cleanMinistry.equals("Worship Leader", ignoreCase = true)) return true
         return role.trim().equals("Leader", ignoreCase = true) &&
-            (cleanMinistry.isBlank() || cleanMinistry.equals("Leader", ignoreCase = true))
+            (cleanMinistry.isBlank() || cleanMinistry.equals("Member", ignoreCase = true) || cleanMinistry.equals("Leader", ignoreCase = true))
     }
 
     /**
-     * Returns true if the member holds an ordinary group membership role (not Group Leader, not Substitute Leader).
+     * Returns true if the member holds an ordinary member role (neither Worship Leader nor Substitute Leader).
      */
-    fun isOrdinaryMemberRole(ministryRole: String, role: String = ""): Boolean {
-        return !isSubstituteLeader(role, ministryRole) && !isWorshipLeader(ministryRole, role)
+    fun isOrdinaryMemberRole(ministryRole: String, role: String): Boolean {
+        return !isSubstituteLeader(ministryRole) && !isWorshipLeader(ministryRole, role)
     }
 
     /**
-     * Filters the list of assignable musical ministry roles:
-     * Returns musical positions (e.g. Worship Leader, Vocalist, Guitarist, Bassist, Keyboardist, Drummer, Sound Operator),
-     * while excluding administrative Group Leadership roles ("Substitute Leader", "Leader", "Member").
+     * Filters the list of assignable ministry roles based on who is editing and who is being edited:
+     * - If target is primary leader -> only ["Worship Leader"].
+     * - If editor is Substitute Leader -> removes "Substitute Leader", "Worship Leader", and "Leader".
+     * - If editor is Worship Leader editing a member -> removes "Worship Leader" and "Leader" (keeps "Substitute Leader").
      */
     fun filterAssignableRoles(
         roles: List<String>,
-        isEditorSubstituteLeader: Boolean = false,
+        isEditorSubstituteLeader: Boolean,
         isTargetPrimaryLeader: Boolean = false
     ): List<String> {
         val result = mutableListOf<String>()
@@ -658,13 +655,9 @@ object TeamRepository {
                     val isDes = (designatedLeaderUid.isNotBlank() && m.uid == designatedLeaderUid) ||
                                 (designatedLeaderEmail.isNotBlank() && m.email.trim().lowercase() == designatedLeaderEmail)
                     if (!m.removedByLeader && isDes) {
-                        val cleanMinistry = if (m.ministryRole.isNotBlank() && !m.ministryRole.equals("Member", true) && !m.ministryRole.equals("Leader", true)) {
-                            m.ministryRole
-                        } else "Worship Leader"
-                        m.copy(role = "Leader", ministryRole = cleanMinistry)
+                        m.copy(role = "Leader", ministryRole = "Worship Leader")
                     } else if (transferred && (m.email.trim().lowercase() == defaultLeaderEmail || m.fullName.equals(defaultLeaderName, ignoreCase = true))) {
-                        val formerMinistry = if (m.ministryRole.isNotBlank() && !m.ministryRole.equals("Leader", true)) m.ministryRole else "Worship Leader"
-                        m.copy(role = "Member", ministryRole = formerMinistry)
+                        m.copy(role = "Member", ministryRole = if (m.ministryRole.equals("Worship Leader", true)) "Member" else m.ministryRole)
                     } else m
                 }
             } else {
@@ -672,22 +665,20 @@ object TeamRepository {
                 val desName = designatedLeaderName.ifBlank { "Worship Leader" }
                 val desUid = designatedLeaderUid.ifBlank { java.util.UUID.randomUUID().toString() }
                 val desPhoto = preferences?.getString("team_leader_photo_$code", "").orEmpty()
-                val desMinistry = preferences?.getString("team_leader_ministry_$code", "")?.takeIf { it.isNotBlank() && !it.equals("Member", true) } ?: "Worship Leader"
                 val synthesizedLeader = TeamMember(
                     uid = desUid,
                     fullName = desName,
                     username = desName.split(" ").firstOrNull() ?: desName,
                     email = designatedLeaderEmail,
                     role = "Leader",
-                    ministryRole = desMinistry,
+                    ministryRole = "Worship Leader",
                     teamCode = code,
                     photoUri = desPhoto,
                     removedByLeader = false
                 )
                 return listOf(synthesizedLeader) + members.map { m ->
                     if (transferred && (m.email.trim().lowercase() == defaultLeaderEmail || m.fullName.equals(defaultLeaderName, ignoreCase = true))) {
-                        val formerMinistry = if (m.ministryRole.isNotBlank() && !m.ministryRole.equals("Leader", true)) m.ministryRole else "Worship Leader"
-                        m.copy(role = "Member", ministryRole = formerMinistry)
+                        m.copy(role = "Member", ministryRole = if (m.ministryRole.equals("Worship Leader", true)) "Member" else m.ministryRole)
                     } else m
                 }
             }
@@ -715,10 +706,7 @@ object TeamRepository {
                         m.email.trim().lowercase() == defaultLeaderEmail ||
                         m.fullName.equals(defaultLeaderName, ignoreCase = true)
                     )) {
-                        val ryanMinistry = if (m.ministryRole.isNotBlank() && !m.ministryRole.equals("Member", true) && !m.ministryRole.equals("Leader", true)) {
-                            m.ministryRole
-                        } else "Worship Leader"
-                        m.copy(role = "Leader", ministryRole = ryanMinistry)
+                        m.copy(role = "Leader", ministryRole = "Worship Leader")
                     } else m
                 }
             }
@@ -851,84 +839,98 @@ object TeamRepository {
                 }
                 val preferredUsername = existing.username.ifBlank { m.username }
 
+                val isPrimaryLeader = preferredEmail.trim().equals("ryanlloydgenturo@gmail.com", ignoreCase = true) ||
+                                      preferredFullName.trim().equals("Ryan Lloyd Genturo", ignoreCase = true)
                 val emailLower = preferredEmail.trim().lowercase()
-                val code = preferences?.getString("teamCode", "")?.trim()?.uppercase().orEmpty()
-                val transferred = preferences?.getBoolean("transferred_leadership_$code", false) == true
-                val designatedLeaderUid = preferences?.getString("team_leader_uid_$code", "")?.trim().orEmpty()
-                val designatedLeaderEmail = preferences?.getString("team_leader_email_$code", "")?.trim()?.lowercase().orEmpty()
-
-                val isDesignatedLeader = (designatedLeaderUid.isNotBlank() && preferredUid == designatedLeaderUid) ||
-                                         (designatedLeaderEmail.isNotBlank() && emailLower == designatedLeaderEmail)
-
-                val prefRole = preferences?.let { p ->
-                    if (code.isNotBlank()) {
-                        p.getString("user_role_${code}_$preferredUid", "")?.takeIf { it.isNotBlank() }
-                            ?: p.getString("email_role_${code}_$emailLower", "")?.takeIf { it.isNotBlank() }
-                    } else null
-                } ?: preferences?.let { p ->
-                    p.getString("user_role_$preferredUid", "")?.takeIf { it.isNotBlank() }
-                        ?: p.getString("email_role_$emailLower", "")?.takeIf { it.isNotBlank() }
-                }
 
                 val existingIsRealUid = !existing.uid.startsWith("user_") && existing.uid.isNotBlank()
                 val mIsRealUid = !m.uid.startsWith("user_") && m.uid.isNotBlank()
+                val hasRealUidDisparity = existingIsRealUid != mIsRealUid
                 val realUidDoc = if (existingIsRealUid) existing else if (mIsRealUid) m else null
                 val syntheticDoc = if (!existingIsRealUid) existing else m
 
-                val eitherIsExplicitMember = when {
-                    realUidDoc != null -> realUidDoc.role.equals("Member", true) && !isSubstituteLeader(realUidDoc.role, realUidDoc.ministryRole) && !isWorshipLeader(realUidDoc.ministryRole, realUidDoc.role)
-                    prefRole != null && prefRole.isNotBlank() -> prefRole.equals("Member", true)
-                    else -> existing.role.equals("Member", true) || m.role.equals("Member", true)
-                }
+                // 4. Role & Ministry Role
+                val preferredRole: String
+                val preferredMinistryRole: String
 
-                val isDefaultRyan = (emailLower == "ryanlloydgenturo@gmail.com" || preferredFullName.trim().equals("Ryan Lloyd Genturo", ignoreCase = true))
-
-                val isPrimaryLeader = when {
-                    isDesignatedLeader -> true
-                    transferred -> false
-                    designatedLeaderUid.isNotBlank() || designatedLeaderEmail.isNotBlank() -> false
-                    eitherIsExplicitMember -> false
-                    isDefaultRyan && (existing.role.equals("Leader", true) || m.role.equals("Leader", true) || existing.role.isBlank()) -> true
-                    else -> false
-                }
-
-                val isSubLeader = !isPrimaryLeader && !eitherIsExplicitMember && (
-                    prefRole.equals("Substitute Leader", true) ||
-                    (realUidDoc != null && (realUidDoc.role.equals("Substitute Leader", true) || isSubstituteLeader(realUidDoc.role, realUidDoc.ministryRole))) ||
-                    (existing.role.equals("Substitute Leader", true) || m.role.equals("Substitute Leader", true) || isSubstituteLeader(existing.role, existing.ministryRole) || isSubstituteLeader(m.role, m.ministryRole))
-                )
-
-                // 4. Group Leadership Role
-                val preferredRole = when {
-                    isPrimaryLeader || (realUidDoc?.role?.equals("Leader", true) == true && !eitherIsExplicitMember) -> "Leader"
-                    isSubLeader -> "Substitute Leader"
-                    else -> "Member"
-                }
-
-                // 5. Ministry Position (Musical assignment only, strictly independent from Leadership Role)
-                val prefMinistry = preferences?.let { p ->
-                    if (code.isNotBlank()) {
-                        p.getString("user_ministry_${code}_$preferredUid", "")?.takeIf { it.isNotBlank() && !isSubstituteLeader(it) && !it.equals("Member", true) && !it.equals("Leader", true) }
-                            ?: p.getString("email_ministry_${code}_$emailLower", "")?.takeIf { it.isNotBlank() && !isSubstituteLeader(it) && !it.equals("Member", true) && !it.equals("Leader", true) }
-                    } else null
-                } ?: preferences?.let { p ->
-                    p.getString("user_ministry_$preferredUid", "")?.takeIf { it.isNotBlank() && !isSubstituteLeader(it) && !it.equals("Member", true) && !it.equals("Leader", true) }
-                        ?: p.getString("email_ministry_$emailLower", "")?.takeIf { it.isNotBlank() && !isSubstituteLeader(it) && !it.equals("Member", true) && !it.equals("Leader", true) }
-                }
-
-                val docMinistry = when {
-                    realUidDoc != null && realUidDoc.ministryRole.isNotBlank() && !isSubstituteLeader(realUidDoc.ministryRole) && !realUidDoc.ministryRole.equals("Member", true) && !realUidDoc.ministryRole.equals("Leader", true) -> realUidDoc.ministryRole
-                    existing.ministryRole.isNotBlank() && !isSubstituteLeader(existing.ministryRole) && !existing.ministryRole.equals("Member", true) && !existing.ministryRole.equals("Leader", true) -> existing.ministryRole
-                    m.ministryRole.isNotBlank() && !isSubstituteLeader(m.ministryRole) && !m.ministryRole.equals("Member", true) && !m.ministryRole.equals("Leader", true) -> m.ministryRole
-                    syntheticDoc.ministryRole.isNotBlank() && !isSubstituteLeader(syntheticDoc.ministryRole) && !syntheticDoc.ministryRole.equals("Member", true) && !syntheticDoc.ministryRole.equals("Leader", true) -> syntheticDoc.ministryRole
-                    else -> null
-                }
-
-                val preferredMinistryRole = when {
-                    docMinistry != null -> docMinistry
-                    prefMinistry != null -> prefMinistry
-                    preferredRole == "Leader" -> "Worship Leader"
-                    else -> "Member"
+                if (isPrimaryLeader) {
+                    preferredRole = "Leader"
+                    preferredMinistryRole = "Worship Leader"
+                } else if (hasRealUidDisparity && realUidDoc != null) {
+                    // Real Auth UID doc has higher authority than synthetic user_* doc
+                    when {
+                        isSubstituteLeader(realUidDoc.ministryRole) && !realUidDoc.role.equals("Member", ignoreCase = true) -> {
+                            preferredRole = "Leader"
+                            preferredMinistryRole = "Substitute Leader"
+                        }
+                        isWorshipLeader(realUidDoc.ministryRole, realUidDoc.role) && !realUidDoc.role.equals("Member", ignoreCase = true) -> {
+                            preferredRole = "Leader"
+                            preferredMinistryRole = "Worship Leader"
+                        }
+                        realUidDoc.role.equals("Member", ignoreCase = true) || isOrdinaryMemberRole(realUidDoc.ministryRole, realUidDoc.role) -> {
+                            preferredRole = "Member"
+                            val specificRole = when {
+                                realUidDoc.ministryRole.isNotBlank() && !isSubstituteLeader(realUidDoc.ministryRole) && !isWorshipLeader(realUidDoc.ministryRole, realUidDoc.role) && !realUidDoc.ministryRole.equals("Member", true) -> realUidDoc.ministryRole
+                                syntheticDoc.ministryRole.isNotBlank() && !isSubstituteLeader(syntheticDoc.ministryRole) && !isWorshipLeader(syntheticDoc.ministryRole, syntheticDoc.role) && !syntheticDoc.ministryRole.equals("Member", true) -> syntheticDoc.ministryRole
+                                else -> "Member"
+                            }
+                            preferredMinistryRole = specificRole
+                        }
+                        else -> {
+                            preferredRole = realUidDoc.role.ifBlank { "Member" }
+                            preferredMinistryRole = realUidDoc.ministryRole.ifBlank { "Member" }
+                        }
+                    }
+                } else {
+                    // Both docs have same UID status (both synthetic or both real)
+                    val eitherIsExplicitMember = existing.role.equals("Member", true) || m.role.equals("Member", true)
+                    val subLeaderCandidate = when {
+                        !eitherIsExplicitMember && isSubstituteLeader(m.ministryRole) && !m.role.equals("Member", ignoreCase = true) -> m
+                        !eitherIsExplicitMember && isSubstituteLeader(existing.ministryRole) && !existing.role.equals("Member", ignoreCase = true) -> existing
+                        else -> null
+                    }
+                    val worshipLeaderCandidate = when {
+                        !eitherIsExplicitMember && isWorshipLeader(m.ministryRole, m.role) && !m.role.equals("Member", ignoreCase = true) -> m
+                        !eitherIsExplicitMember && isWorshipLeader(existing.ministryRole, existing.role) && !existing.role.equals("Member", ignoreCase = true) -> existing
+                        else -> null
+                    }
+                    when {
+                        subLeaderCandidate != null -> {
+                            preferredRole = "Leader"
+                            preferredMinistryRole = "Substitute Leader"
+                        }
+                        worshipLeaderCandidate != null -> {
+                            preferredRole = "Leader"
+                            preferredMinistryRole = "Worship Leader"
+                        }
+                        eitherIsExplicitMember -> {
+                            preferredRole = "Member"
+                            val nonSub = when {
+                                existing.ministryRole.isNotBlank() && !isSubstituteLeader(existing.ministryRole) && !isWorshipLeader(existing.ministryRole, existing.role) && !existing.ministryRole.equals("Member", true) -> existing.ministryRole
+                                m.ministryRole.isNotBlank() && !isSubstituteLeader(m.ministryRole) && !isWorshipLeader(m.ministryRole, m.role) && !m.ministryRole.equals("Member", true) -> m.ministryRole
+                                else -> "Member"
+                            }
+                            preferredMinistryRole = nonSub
+                        }
+                        existing.role.equals("Leader", true) || m.role.equals("Leader", true) -> {
+                            preferredRole = "Leader"
+                            val specificRole = when {
+                                existing.ministryRole.isNotBlank() && !existing.ministryRole.equals("Member", true) -> existing.ministryRole
+                                m.ministryRole.isNotBlank() && !m.ministryRole.equals("Member", true) -> m.ministryRole
+                                else -> "Member"
+                            }
+                            preferredMinistryRole = specificRole
+                        }
+                        else -> {
+                            preferredRole = "Member"
+                            val specificRole = when {
+                                existing.ministryRole.isNotBlank() && !existing.ministryRole.equals("Member", true) -> existing.ministryRole
+                                m.ministryRole.isNotBlank() && !m.ministryRole.equals("Member", true) -> m.ministryRole
+                                else -> "Member"
+                            }
+                            preferredMinistryRole = specificRole
+                        }
+                    }
                 }
 
                 // 6. Photo
@@ -959,54 +961,39 @@ object TeamRepository {
                 ?: ""
             val mWithPhoto = if (m.photoUri.isBlank() && fallbackPhoto.isNotBlank()) m.copy(photoUri = fallbackPhoto) else m
 
+            val isPrimary = mWithPhoto.email.trim().equals("ryanlloydgenturo@gmail.com", ignoreCase = true) ||
+                            mWithPhoto.fullName.trim().equals("Ryan Lloyd Genturo", ignoreCase = true)
             val emailLower = mWithPhoto.email.trim().lowercase()
-            val code = preferences?.getString("teamCode", "")?.trim()?.uppercase().orEmpty()
-            val transferred = preferences?.getBoolean("transferred_leadership_$code", false) == true
             val prefRole = preferences?.let { p ->
-                if (code.isNotBlank()) {
-                    p.getString("user_role_${code}_${mWithPhoto.uid}", "")?.takeIf { it.isNotBlank() }
-                        ?: p.getString("email_role_${code}_$emailLower", "")?.takeIf { it.isNotBlank() }
-                } else null
-            } ?: preferences?.let { p ->
                 p.getString("email_role_$emailLower", "")?.takeIf { it.isNotBlank() }
                     ?: (if (mWithPhoto.uid.isNotBlank()) p.getString("user_role_${mWithPhoto.uid}", "")?.takeIf { it.isNotBlank() } else null)
             }
-            val isExplicitMember = when {
-                mWithPhoto.role.equals("Leader", true) -> false
-                mWithPhoto.role.equals("Substitute Leader", true) -> false
-                isSubstituteLeader(mWithPhoto.role, mWithPhoto.ministryRole) -> false
-                isWorshipLeader(mWithPhoto.ministryRole, mWithPhoto.role) -> false
-                mWithPhoto.role.equals("Member", true) -> true
-                prefRole != null && prefRole.isNotBlank() -> prefRole.equals("Member", true)
-                else -> false
+            val isExplicitSubLeader = isSubstituteLeader(mWithPhoto.ministryRole) && !mWithPhoto.role.equals("Member", ignoreCase = true)
+            val isExplicitWorshipLeader = isWorshipLeader(mWithPhoto.ministryRole, mWithPhoto.role) && !mWithPhoto.role.equals("Member", ignoreCase = true)
+            val isDemotedMember = !isPrimary && !isExplicitSubLeader && !isExplicitWorshipLeader && (
+                mWithPhoto.role.equals("Member", true) ||
+                isOrdinaryMemberRole(mWithPhoto.ministryRole, mWithPhoto.role)
+            )
+
+            if (isPrimary) {
+                if (m.role.isBlank()) {
+                    mWithPhoto.copy(role = "Leader", ministryRole = "Worship Leader")
+                } else {
+                    mWithPhoto
+                }
+            } else if (isExplicitSubLeader) {
+                mWithPhoto.copy(role = "Leader", ministryRole = "Substitute Leader")
+            } else if (isExplicitWorshipLeader) {
+                mWithPhoto.copy(
+                    role = "Leader",
+                    ministryRole = "Worship Leader"
+                )
+            } else if (isDemotedMember) {
+                val cleanMinistry = if (isSubstituteLeader(mWithPhoto.ministryRole)) "Member" else mWithPhoto.ministryRole.ifBlank { "Member" }
+                mWithPhoto.copy(role = "Member", ministryRole = cleanMinistry)
+            } else {
+                mWithPhoto.copy(role = "Member", ministryRole = mWithPhoto.ministryRole.ifBlank { "Member" })
             }
-            val isExplicitSubLeader = !isExplicitMember && (mWithPhoto.role.equals("Substitute Leader", ignoreCase = true) || prefRole.equals("Substitute Leader", ignoreCase = true) || isSubstituteLeader(mWithPhoto.role, mWithPhoto.ministryRole))
-            val isExplicitLeader = !isExplicitMember && (mWithPhoto.role.equals("Leader", ignoreCase = true) || prefRole.equals("Leader", ignoreCase = true))
-
-            val isPrimary = !isExplicitMember && !transferred && (
-                mWithPhoto.email.trim().equals("ryanlloydgenturo@gmail.com", ignoreCase = true) ||
-                mWithPhoto.fullName.trim().equals("Ryan Lloyd Genturo", ignoreCase = true)
-            ) && (mWithPhoto.role.equals("Leader", true) || mWithPhoto.role.isBlank())
-
-            val targetLeadershipRole = when {
-                isPrimary || isExplicitLeader -> "Leader"
-                isExplicitSubLeader -> "Substitute Leader"
-                else -> "Member"
-            }
-
-            val prefMinistry = preferences?.let { p ->
-                p.getString("email_ministry_$emailLower", "")?.takeIf { it.isNotBlank() && !isSubstituteLeader(it) && !it.equals("Member", true) && !it.equals("Leader", true) }
-                    ?: (if (mWithPhoto.uid.isNotBlank()) p.getString("user_ministry_${mWithPhoto.uid}", "")?.takeIf { it.isNotBlank() && !isSubstituteLeader(it) && !it.equals("Member", true) && !it.equals("Leader", true) } else null)
-            }
-
-            val targetMinistryRole = when {
-                mWithPhoto.ministryRole.isNotBlank() && !isSubstituteLeader(mWithPhoto.ministryRole) && !mWithPhoto.ministryRole.equals("Member", true) && !mWithPhoto.ministryRole.equals("Leader", true) -> mWithPhoto.ministryRole
-                prefMinistry != null -> prefMinistry
-                targetLeadershipRole == "Leader" -> "Worship Leader"
-                else -> "Member"
-            }
-
-            mWithPhoto.copy(role = targetLeadershipRole, ministryRole = targetMinistryRole)
         }.toMutableList()
 
         sortRoster(result)
@@ -1283,16 +1270,10 @@ object TeamRepository {
      * Matches in-memory and Firestore records by memberUid, memberEmail, and/or memberName (fullName / username).
      * Automatically persists to SharedPreferences if preferences is provided.
      */
-    /**
-     * Updates a member's Group Leadership Role (Leader, Substitute Leader, Member)
-     * and/or Ministry Position (Worship Leader, Bassist, Vocalist, Guitarist, etc.) independently.
-     * Guarantees that neither role type overwrites the other.
-     */
     @Synchronized
-    fun updateMemberRoles(
+    fun updateMemberMinistryRole(
         memberUid: String,
-        newLeadershipRole: String? = null,
-        newMinistryPosition: String? = null,
+        newRole: String,
         memberName: String = "",
         memberEmail: String = "",
         preferences: android.content.SharedPreferences? = null,
@@ -1304,8 +1285,12 @@ object TeamRepository {
         }
 
         val cleanEmail = memberEmail.trim().lowercase()
+        val effectiveNewRole = newRole.trim()
+        val isTargetLeader = effectiveNewRole.equals("Substitute Leader", ignoreCase = true) ||
+                             effectiveNewRole.equals("Worship Leader", ignoreCase = true)
+        val computedRole = if (isTargetLeader) "Leader" else "Member"
 
-        // 1. Update in-memory caches
+        // Update in-memory caches
         for ((codeKey, roster) in cachedRosters) {
             synchronized(roster) {
                 var modified = false
@@ -1314,9 +1299,7 @@ object TeamRepository {
                     if ((memberUid.isNotBlank() && it.uid == memberUid) ||
                         (cleanEmail.isNotBlank() && it.email.equals(cleanEmail, ignoreCase = true)) ||
                         (memberName.isNotBlank() && (it.fullName.equals(memberName, true) || it.username.equals(memberName, true)))) {
-                        val effRole = newLeadershipRole ?: it.role
-                        val effMinistry = newMinistryPosition ?: it.ministryRole
-                        roster[i] = it.copy(role = effRole, ministryRole = effMinistry)
+                        roster[i] = it.copy(ministryRole = effectiveNewRole, role = computedRole)
                         modified = true
                     }
                 }
@@ -1331,7 +1314,6 @@ object TeamRepository {
             }
         }
 
-        // 2. Persist to SharedPreferences
         if (preferences != null) {
             preferences.edit {
                 val currentSelfEmail = preferences.getString("email", "").orEmpty().trim().lowercase()
@@ -1339,109 +1321,114 @@ object TeamRepository {
                 val isTargetSelf = (cleanEmail.isNotBlank() && cleanEmail == currentSelfEmail) ||
                                    (memberUid.isNotBlank() && memberUid == currentSelfUid) ||
                                    (memberName.isNotBlank() && memberName.equals(preferences.getString(com.example.syncedn.data.auth.SessionManager.KEY_FULL_NAME, ""), true))
-                val activeCode = preferences.getString("teamCode", "").orEmpty().trim().uppercase()
 
-                if (newLeadershipRole != null) {
-                    if (cleanEmail.isNotBlank()) {
-                        putString("email_role_$cleanEmail", newLeadershipRole)
-                        if (activeCode.isNotBlank()) putString("email_role_${activeCode}_$cleanEmail", newLeadershipRole)
+                if (cleanEmail.isNotBlank()) {
+                    putString("email_ministry_$cleanEmail", effectiveNewRole)
+                    putString("email_role_$cleanEmail", computedRole)
+                }
+                if (memberUid.isNotBlank()) {
+                    putString("user_ministry_$memberUid", effectiveNewRole)
+                    putString("user_role_$memberUid", computedRole)
+                }
+                if (isTargetSelf) {
+                    putString("role", computedRole)
+                    putString(com.example.syncedn.data.auth.SessionManager.KEY_ROLE, computedRole)
+                    putString("ministryRole", effectiveNewRole)
+                    putString(com.example.syncedn.data.auth.SessionManager.KEY_MINISTRY_ROLE, effectiveNewRole)
+                }
+                try {
+                    val map = org.json.JSONObject(preferences.getString(com.example.syncedn.data.auth.SessionManager.KEY_MEMBER_ROLES, "{}").orEmpty())
+                    if (cleanEmail.isNotBlank()) map.put(cleanEmail, effectiveNewRole)
+                    if (memberUid.isNotBlank()) map.put(memberUid, effectiveNewRole)
+                    if (memberName.isNotBlank()) map.put(memberName, effectiveNewRole)
+                    putString(com.example.syncedn.data.auth.SessionManager.KEY_MEMBER_ROLES, map.toString())
+                } catch (_: Throwable) {}
+                val activeCode = preferences.getString("teamCode", "").orEmpty().trim().uppercase()
+                if (effectiveNewRole.equals("Worship Leader", ignoreCase = true)) {
+                    if (activeCode.isNotBlank()) {
+                        putBoolean("transferred_leadership_$activeCode", false)
+                        if (memberUid.isNotBlank()) putString("team_leader_uid_$activeCode", memberUid)
+                        if (cleanEmail.isNotBlank()) putString("team_leader_email_$activeCode", cleanEmail)
+                        if (memberName.isNotBlank()) putString("team_leader_name_$activeCode", memberName)
+                        remove("email_role_${activeCode}_$cleanEmail")
+                        remove("user_role_${activeCode}_$memberUid")
                     }
-                    if (memberUid.isNotBlank()) {
-                        putString("user_role_$memberUid", newLeadershipRole)
-                        if (activeCode.isNotBlank()) putString("user_role_${activeCode}_$memberUid", newLeadershipRole)
+                } else if (computedRole == "Member") {
+                    val cleanTeamLower = preferences.getString("teamName", "").orEmpty().trim().lowercase()
+                    val savedLeaderEmail = preferences.getString("team_leader_email_$cleanTeamLower", "").orEmpty().trim().lowercase()
+                    if (cleanTeamLower.isNotBlank() && cleanEmail.isNotBlank() && savedLeaderEmail == cleanEmail) {
+                        remove("team_leader_email_$cleanTeamLower")
                     }
-                    if (isTargetSelf) {
-                        putString("role", newLeadershipRole)
-                        putString(com.example.syncedn.data.auth.SessionManager.KEY_ROLE, newLeadershipRole)
-                    }
-                    if (newLeadershipRole == "Leader" || (newMinistryPosition != null && newMinistryPosition.equals("Worship Leader", ignoreCase = true))) {
-                        if (activeCode.isNotBlank()) {
-                            putBoolean("transferred_leadership_$activeCode", false)
-                            if (memberUid.isNotBlank()) putString("team_leader_uid_$activeCode", memberUid)
-                            if (cleanEmail.isNotBlank()) putString("team_leader_email_$activeCode", cleanEmail)
-                            if (memberName.isNotBlank()) putString("team_leader_name_$activeCode", memberName)
+                    if (activeCode.isNotBlank()) {
+                        putString("email_role_${activeCode}_$cleanEmail", "Member")
+                        putString("email_ministry_${activeCode}_$cleanEmail", effectiveNewRole)
+                        putString("user_role_${activeCode}_$memberUid", "Member")
+                        putString("user_ministry_${activeCode}_$memberUid", effectiveNewRole)
+                        val teamLeadEmail = preferences.getString("team_leader_email_$activeCode", "").orEmpty().trim().lowercase()
+                        if (teamLeadEmail == cleanEmail) {
+                            remove("team_leader_email_$activeCode")
                         }
-                    }
-                    if (newLeadershipRole == "Leader" || (newMinistryPosition != null && newMinistryPosition.equals("Worship Leader", ignoreCase = true))) {
-                        if (activeCode.isNotBlank()) {
-                            putBoolean("transferred_leadership_$activeCode", false)
-                            if (memberUid.isNotBlank()) putString("team_leader_uid_$activeCode", memberUid)
-                            if (cleanEmail.isNotBlank()) putString("team_leader_email_$activeCode", cleanEmail)
-                            if (memberName.isNotBlank()) putString("team_leader_name_$activeCode", memberName)
-                        }
-                    }
-                    if (newLeadershipRole == "Member" && activeCode.isNotBlank()) {
                         val teamLeadUid = preferences.getString("team_leader_uid_$activeCode", "").orEmpty().trim()
                         if (memberUid.isNotBlank() && teamLeadUid == memberUid) {
                             remove("team_leader_uid_$activeCode")
                             remove("team_leader_name_$activeCode")
                         }
-                        val teamLeadEmail = preferences.getString("team_leader_email_$activeCode", "").orEmpty().trim().lowercase()
-                        if (cleanEmail.isNotBlank() && teamLeadEmail == cleanEmail) {
-                            remove("team_leader_email_$activeCode")
-                        }
                     }
-                }
-
-                if (newMinistryPosition != null) {
-                    if (cleanEmail.isNotBlank()) {
-                        putString("email_ministry_$cleanEmail", newMinistryPosition)
-                        if (activeCode.isNotBlank()) putString("email_ministry_${activeCode}_$cleanEmail", newMinistryPosition)
-                    }
-                    if (memberUid.isNotBlank()) {
-                        putString("user_ministry_$memberUid", newMinistryPosition)
-                        if (activeCode.isNotBlank()) putString("user_ministry_${activeCode}_$memberUid", newMinistryPosition)
-                    }
-                    if (isTargetSelf) {
-                        putString("ministryRole", newMinistryPosition)
-                        putString(com.example.syncedn.data.auth.SessionManager.KEY_MINISTRY_ROLE, newMinistryPosition)
-                    }
-                    try {
-                        val map = org.json.JSONObject(preferences.getString(com.example.syncedn.data.auth.SessionManager.KEY_MEMBER_ROLES, "{}").orEmpty())
-                        if (cleanEmail.isNotBlank()) map.put(cleanEmail, newMinistryPosition)
-                        if (memberUid.isNotBlank()) map.put(memberUid, newMinistryPosition)
-                        if (memberName.isNotBlank()) map.put(memberName, newMinistryPosition)
-                        putString(com.example.syncedn.data.auth.SessionManager.KEY_MEMBER_ROLES, map.toString())
-                    } catch (_: Throwable) {}
                 }
             }
         }
 
-        // 3. Persist to Cloud Firestore
         try {
-            val baseUpdates = mutableMapOf<String, Any>()
-            if (newLeadershipRole != null) baseUpdates["role"] = newLeadershipRole
-            if (newMinistryPosition != null) baseUpdates["ministryRole"] = newMinistryPosition
-
-            if (baseUpdates.isNotEmpty()) {
-                if (memberUid.isNotBlank()) {
-                    db.collection(USERS_COLLECTION)
-                        .document(memberUid)
-                        .set(baseUpdates, com.google.firebase.firestore.SetOptions.merge())
-                        .addOnSuccessListener { onComplete(Result.success(Unit)) }
-                        .addOnFailureListener {
-                            android.util.Log.w("TeamRepository", "updateMemberRoles doc update failed: ${it.message}")
-                            onComplete(Result.failure(it))
-                        }
-                } else if (cleanEmail.isNotBlank()) {
-                    db.collection(USERS_COLLECTION)
-                        .whereEqualTo("email", cleanEmail)
-                        .get()
-                        .addOnSuccessListener { snap ->
-                            if (snap != null && !snap.isEmpty) {
-                                for (doc in snap.documents) {
-                                    doc.reference.set(baseUpdates, com.google.firebase.firestore.SetOptions.merge())
-                                }
-                            }
-                            onComplete(Result.success(Unit))
-                        }
-                        .addOnFailureListener {
-                            android.util.Log.w("TeamRepository", "updateMemberRoles email query failed: ${it.message}")
-                            onComplete(Result.failure(it))
-                        }
-                } else {
-                    onComplete(Result.success(Unit))
+            val baseUpdates = mapOf<String, Any>(
+                "ministryRole" to effectiveNewRole,
+                "role" to computedRole
+            )
+            if (effectiveNewRole.equals("Worship Leader", ignoreCase = true)) {
+                val activeCode = preferences?.getString("teamCode", "")?.trim()?.uppercase().orEmpty()
+                if (activeCode.isNotBlank()) {
+                    val teamUpdates = mutableMapOf<String, Any>()
+                    if (memberUid.isNotBlank()) teamUpdates["leaderUid"] = memberUid
+                    if (memberName.isNotBlank()) teamUpdates["leaderName"] = memberName
+                    if (cleanEmail.isNotBlank()) teamUpdates["leaderEmail"] = cleanEmail
+                    if (teamUpdates.isNotEmpty()) {
+                        db.collection(TEAMS_COLLECTION).document(activeCode).update(teamUpdates)
+                    }
                 }
+            }
+            if (memberUid.isNotBlank()) {
+                db.collection(USERS_COLLECTION)
+                    .document(memberUid)
+                    .update(baseUpdates + ("uid" to memberUid))
+                    .addOnFailureListener {
+                        android.util.Log.w("TeamRepository", "updateMemberMinistryRole doc update failed: ${it.message}")
+                    }
+            }
+            if (cleanEmail.isNotBlank()) {
+                db.collection(USERS_COLLECTION)
+                    .whereEqualTo("email", cleanEmail)
+                    .get()
+                    .addOnSuccessListener { snap ->
+                        if (snap != null && !snap.isEmpty) {
+                            for (doc in snap.documents) {
+                                doc.reference.update(baseUpdates + ("uid" to doc.id))
+                            }
+                        }
+                        onComplete(Result.success(Unit))
+                    }
+                    .addOnFailureListener {
+                        onComplete(Result.success(Unit))
+                    }
+            } else if (memberName.isNotBlank()) {
+                db.collection(USERS_COLLECTION)
+                    .whereEqualTo("fullName", memberName)
+                    .get()
+                    .addOnSuccessListener { snap ->
+                        for (doc in snap.documents) {
+                            doc.reference.update(baseUpdates + ("uid" to doc.id))
+                        }
+                        onComplete(Result.success(Unit))
+                    }
+                    .addOnFailureListener { onComplete(Result.failure(it)) }
             } else {
                 onComplete(Result.success(Unit))
             }
@@ -1449,72 +1436,6 @@ object TeamRepository {
             onComplete(Result.failure(e))
         }
     }
-
-    /**
-     * Backward-compatible delegation to updateMemberRoles.
-     */
-    @Synchronized
-    fun updateMemberMinistryRole(
-        memberUid: String,
-        newRole: String,
-        memberName: String = "",
-        memberEmail: String = "",
-        preferences: android.content.SharedPreferences? = null,
-        onComplete: (Result<Unit>) -> Unit = {}
-    ) {
-        val trimmed = newRole.trim()
-        when {
-            trimmed.equals("Substitute Leader", ignoreCase = true) -> {
-                updateMemberRoles(
-                    memberUid = memberUid,
-                    newLeadershipRole = "Substitute Leader",
-                    newMinistryPosition = "Substitute Leader",
-                    memberName = memberName,
-                    memberEmail = memberEmail,
-                    preferences = preferences,
-                    onComplete = onComplete
-                )
-            }
-            trimmed.equals("Leader", ignoreCase = true) || trimmed.equals("Worship Leader", ignoreCase = true) -> {
-                updateMemberRoles(
-                    memberUid = memberUid,
-                    newLeadershipRole = "Leader",
-                    newMinistryPosition = "Worship Leader",
-                    memberName = memberName,
-                    memberEmail = memberEmail,
-                    preferences = preferences,
-                    onComplete = onComplete
-                )
-            }
-            trimmed.equals("Member", ignoreCase = true) -> {
-                updateMemberRoles(
-                    memberUid = memberUid,
-                    newLeadershipRole = "Member",
-                    memberName = memberName,
-                    memberEmail = memberEmail,
-                    preferences = preferences,
-                    onComplete = onComplete
-                )
-            }
-            else -> {
-                val cleanEmail = memberEmail.trim().lowercase()
-                val currentLeadershipRole = preferences?.getString("email_role_$cleanEmail", "")?.takeIf { it.isNotBlank() }
-                    ?: preferences?.getString("user_role_$memberUid", "")?.takeIf { it.isNotBlank() }
-                    ?: preferences?.getString("role", "")?.takeIf { it.isNotBlank() }
-                    ?: "Member"
-                updateMemberRoles(
-                    memberUid = memberUid,
-                    newLeadershipRole = currentLeadershipRole,
-                    newMinistryPosition = trimmed,
-                    memberName = memberName,
-                    memberEmail = memberEmail,
-                    preferences = preferences,
-                    onComplete = onComplete
-                )
-            }
-        }
-    }
-
 
     /**
      * Retrieves the list of ministry roles for the team.
@@ -1778,18 +1699,20 @@ object TeamRepository {
             "leaderName" to newLeaderName
         ))
 
-        // 2. Update new leader's user document: set role="Leader" while preserving existing ministryRole
+        // 2. Update new leader's user document (using SetOptions.merge to safely create or merge)
         val newLeaderRef = db.collection(USERS_COLLECTION).document(newLeaderUid)
         batch.set(newLeaderRef, mapOf<String, Any>(
             "uid" to newLeaderUid,
-            "role" to "Leader"
+            "role" to "Leader",
+            "ministryRole" to "Worship Leader"
         ), com.google.firebase.firestore.SetOptions.merge())
 
-        // 3. Update old leader's user document: set role="Member" while preserving existing ministryRole
+        // 3. Update old leader's user document (using SetOptions.merge)
         val oldLeaderRef = db.collection(USERS_COLLECTION).document(currentLeaderUid)
         batch.set(oldLeaderRef, mapOf<String, Any>(
             "uid" to currentLeaderUid,
-            "role" to "Member"
+            "role" to "Member",
+            "ministryRole" to "Member"
         ), com.google.firebase.firestore.SetOptions.merge())
 
         batch.commit()
@@ -1801,11 +1724,11 @@ object TeamRepository {
                     synchronized(roster) {
                         val oldIdx = roster.indexOfFirst { it.uid == currentLeaderUid || (cleanOldEmail.isNotBlank() && it.email.equals(cleanOldEmail, true)) }
                         if (oldIdx >= 0) {
-                            roster[oldIdx] = roster[oldIdx].copy(role = "Member")
+                            roster[oldIdx] = roster[oldIdx].copy(role = "Member", ministryRole = "Member")
                         }
                         val newIdx = roster.indexOfFirst { it.uid == newLeaderUid || (cleanEmail.isNotBlank() && it.email.equals(cleanEmail, true)) }
                         if (newIdx >= 0) {
-                            roster[newIdx] = roster[newIdx].copy(role = "Leader")
+                            roster[newIdx] = roster[newIdx].copy(role = "Leader", ministryRole = "Worship Leader")
                         }
                     }
                 }
@@ -1814,14 +1737,19 @@ object TeamRepository {
                     val editor = preferences.edit()
                     editor.putString("role", "Member")
                     editor.putString(com.example.syncedn.data.auth.SessionManager.KEY_ROLE, "Member")
+                    editor.putString("ministryRole", "Member")
+                    editor.putString(com.example.syncedn.data.auth.SessionManager.KEY_MINISTRY_ROLE, "Member")
                     if (currentLeaderUid.isNotBlank()) {
                         editor.putString("user_role_${cleanTeamCode}_$currentLeaderUid", "Member")
+                        editor.putString("user_ministry_${cleanTeamCode}_$currentLeaderUid", "Member")
                     }
                     if (cleanOldEmail.isNotBlank()) {
                         editor.putString("email_role_${cleanTeamCode}_$cleanOldEmail", "Member")
+                        editor.putString("email_ministry_${cleanTeamCode}_$cleanOldEmail", "Member")
                     }
                     if (newLeaderUid.isNotBlank()) {
                         editor.putString("user_role_${cleanTeamCode}_$newLeaderUid", "Leader")
+                        editor.putString("user_ministry_${cleanTeamCode}_$newLeaderUid", "Worship Leader")
                         editor.putString("team_leader_uid_$cleanTeamCode", newLeaderUid)
                     }
                     if (newLeaderName.isNotBlank()) {
@@ -1829,6 +1757,7 @@ object TeamRepository {
                     }
                     if (cleanEmail.isNotBlank()) {
                         editor.putString("email_role_${cleanTeamCode}_$cleanEmail", "Leader")
+                        editor.putString("email_ministry_${cleanTeamCode}_$cleanEmail", "Worship Leader")
                         editor.putString("team_leader_email_$cleanTeamCode", cleanEmail)
                     }
                     editor.putBoolean("transferred_leadership_$cleanTeamCode", true)

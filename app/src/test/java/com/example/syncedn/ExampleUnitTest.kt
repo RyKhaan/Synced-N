@@ -3915,15 +3915,15 @@ class ExampleUnitTest {
         val deduped1 = repo.deduplicateRoster(listOf(doc1Authentic, doc2SyntheticStale), memberPrefs)
         assertEquals(1, deduped1.size)
         assertEquals("auth_uid_usera", deduped1.first().uid)
-        assertTrue(deduped1.first().role == "Substitute Leader" || deduped1.first().role == "Leader")
-        assertEquals("Bassist", deduped1.first().ministryRole)
+        assertEquals("Leader", deduped1.first().role)
+        assertEquals("Substitute Leader", deduped1.first().ministryRole)
 
         // Test with doc2 first, then doc1 (order from Firestore must not matter!)
         val deduped2 = repo.deduplicateRoster(listOf(doc2SyntheticStale, doc1Authentic), memberPrefs)
         assertEquals(1, deduped2.size)
         assertEquals("auth_uid_usera", deduped2.first().uid)
-        assertTrue(deduped2.first().role == "Substitute Leader" || deduped2.first().role == "Leader")
-        assertEquals("Bassist", deduped2.first().ministryRole)
+        assertEquals("Leader", deduped2.first().role)
+        assertEquals("Substitute Leader", deduped2.first().ministryRole)
 
         // Scenario 2: Leader now demotes User A back to ordinary member ("Keyboardist", role="Member").
         // Authentic Auth doc is updated to "Keyboardist" / "Member".
@@ -4017,8 +4017,7 @@ class ExampleUnitTest {
             preferences = testPrefs
         )
         assertEquals("Substitute Leader", testPrefs.getString("email_ministry_ryanlloydgenturo@gmail.com", ""))
-        val actualSubRole = testPrefs.getString("email_role_ryanlloydgenturo@gmail.com", "")
-        assertTrue(actualSubRole == "Substitute Leader" || actualSubRole == "Leader")
+        assertEquals("Leader", testPrefs.getString("email_role_ryanlloydgenturo@gmail.com", ""))
 
         // 4. Promoting former leader back to Worship Leader:
         repo.updateMemberMinistryRole(
@@ -4664,180 +4663,5 @@ class ExampleUnitTest {
         // Notification must NOT fire when isAlreadyInTeam == true
         val shouldSuppressRejoinNotification = isAlreadyInTeam
         assertTrue(shouldSuppressRejoinNotification)
-    }
-
-    @Test
-    fun testScenarioA_LeadershipTransferPreservesMinistryPositions() {
-        val userA = com.example.syncedn.data.model.TeamMember(
-            uid = "uid-a",
-            username = "UserA",
-            email = "usera@example.com",
-            role = "Leader",
-            ministryRole = "Worship Leader"
-        )
-        val userB = com.example.syncedn.data.model.TeamMember(
-            uid = "uid-b",
-            username = "UserB",
-            email = "userb@example.com",
-            role = "Member",
-            ministryRole = "Bassist"
-        )
-        val roster = mutableListOf(userA, userB)
-
-        // Simulate leadership transfer to User B
-        val oldLeaderIdx = roster.indexOfFirst { it.uid == "uid-a" }
-        roster[oldLeaderIdx] = roster[oldLeaderIdx].copy(role = "Member")
-        val newLeaderIdx = roster.indexOfFirst { it.uid == "uid-b" }
-        roster[newLeaderIdx] = roster[newLeaderIdx].copy(role = "Leader")
-
-        // Assertions: User B is Leader but retains Bassist ministry position
-        assertEquals("Leader", roster[newLeaderIdx].role)
-        assertEquals("Bassist", roster[newLeaderIdx].ministryRole)
-
-        // Assertions: User A is Member and retains Worship Leader ministry position
-        assertEquals("Member", roster[oldLeaderIdx].role)
-        assertEquals("Worship Leader", roster[oldLeaderIdx].ministryRole)
-    }
-
-    @Test
-    fun testScenarioB_FormerLeaderReturnsAndSingleActiveLeader() {
-        val userA = com.example.syncedn.data.model.TeamMember(
-            uid = "uid-a",
-            username = "UserA",
-            email = "usera@example.com",
-            role = "Member",
-            ministryRole = "Vocalist"
-        )
-        val userB = com.example.syncedn.data.model.TeamMember(
-            uid = "uid-b",
-            username = "UserB",
-            email = "userb@example.com",
-            role = "Leader",
-            ministryRole = "Bassist"
-        )
-        val roster = mutableListOf(userA, userB)
-
-        // Verify only 1 active leader exists initially
-        assertEquals(1, roster.count { it.role.equals("Leader", true) })
-
-        // User B transfers leadership back to User A
-        val idxB = roster.indexOfFirst { it.uid == "uid-b" }
-        roster[idxB] = roster[idxB].copy(role = "Member")
-        val idxA = roster.indexOfFirst { it.uid == "uid-a" }
-        roster[idxA] = roster[idxA].copy(role = "Leader")
-
-        // Verify single active leader maintained
-        assertEquals(1, roster.count { it.role.equals("Leader", true) })
-        assertEquals("Leader", roster[idxA].role)
-        assertEquals("Vocalist", roster[idxA].ministryRole)
-        assertEquals("Member", roster[idxB].role)
-        assertEquals("Bassist", roster[idxB].ministryRole)
-    }
-
-    @Test
-    fun testScenarioC_DemoteLeaderAndChangeMinistryPosition() {
-        var member = com.example.syncedn.data.model.TeamMember(
-            uid = "uid-a",
-            username = "UserA",
-            email = "usera@example.com",
-            role = "Leader",
-            ministryRole = "Worship Leader"
-        )
-
-        // Demote to Member and assign Bassist
-        member = member.copy(role = "Member", ministryRole = "Bassist")
-
-        assertEquals("Member", member.role)
-        assertEquals("Bassist", member.ministryRole)
-        assertFalse("Member must not be substitute leader", com.example.syncedn.data.database.TeamRepository.isSubstituteLeader(member.role, member.ministryRole))
-        assertFalse("Member must not be worship leader", com.example.syncedn.data.database.TeamRepository.isWorshipLeader(member.ministryRole, member.role))
-    }
-
-    @Test
-    fun testScenarioD_FormerLeaderLeavesGroup() {
-        val userA = com.example.syncedn.data.model.TeamMember(
-            uid = "uid-a",
-            username = "UserA",
-            email = "usera@example.com",
-            role = "Leader",
-            ministryRole = "Keyboardist"
-        )
-        val userB = com.example.syncedn.data.model.TeamMember(
-            uid = "uid-b",
-            username = "UserB",
-            email = "userb@example.com",
-            role = "Member",
-            ministryRole = "Bassist"
-        )
-        val roster = mutableListOf(userA, userB)
-
-        // Transfer to User B before User A leaves
-        val idxB = roster.indexOfFirst { it.uid == "uid-b" }
-        roster[idxB] = roster[idxB].copy(role = "Leader")
-
-        // User A leaves the group
-        roster.removeIf { it.uid == "uid-a" }
-
-        assertEquals(1, roster.size)
-        assertEquals("uid-b", roster[0].uid)
-        assertEquals("Leader", roster[0].role)
-        assertEquals("Bassist", roster[0].ministryRole)
-    }
-
-    @Test
-    fun testScenarioE_SubstituteLeaderPromotionAndRevocation() {
-        var userC = com.example.syncedn.data.model.TeamMember(
-            uid = "uid-c",
-            username = "UserC",
-            email = "userc@example.com",
-            role = "Member",
-            ministryRole = "Drummer"
-        )
-
-        // Promote to Substitute Leader: group leadership role becomes "Substitute Leader", ministry position stays "Drummer"
-        userC = userC.copy(role = "Substitute Leader")
-        assertEquals("Substitute Leader", userC.role)
-        assertEquals("Drummer", userC.ministryRole)
-        assertTrue(com.example.syncedn.data.database.TeamRepository.isSubstituteLeader(userC.role, userC.ministryRole))
-
-        // Revoke Substitute Leader: group leadership role becomes "Member", ministry position stays "Drummer"
-        userC = userC.copy(role = "Member")
-        assertEquals("Member", userC.role)
-        assertEquals("Drummer", userC.ministryRole)
-        assertFalse(com.example.syncedn.data.database.TeamRepository.isSubstituteLeader(userC.role, userC.ministryRole))
-    }
-
-    @Test
-    fun testRosterTabDecoupling_MembersAndRoleTabs() {
-        val members = listOf(
-            com.example.syncedn.data.model.TeamMember(uid = "1", fullName = "Alice", role = "Leader", ministryRole = "Bassist"),
-            com.example.syncedn.data.model.TeamMember(uid = "2", fullName = "Bob", role = "Substitute Leader", ministryRole = "Drummer"),
-            com.example.syncedn.data.model.TeamMember(uid = "3", fullName = "Charlie", role = "Member", ministryRole = "Worship Leader")
-        )
-
-        // Role tab grouping: strictly by ministryRole
-        val worshipLeaders = members.filter { it.ministryRole.equals("Worship Leader", true) }
-        val bassists = members.filter { it.ministryRole.equals("Bassist", true) }
-        val drummers = members.filter { it.ministryRole.equals("Drummer", true) }
-
-        assertEquals(1, worshipLeaders.size)
-        assertEquals("Charlie", worshipLeaders[0].fullName)
-
-        assertEquals(1, bassists.size)
-        assertEquals("Alice", bassists[0].fullName)
-
-        assertEquals(1, drummers.size)
-        assertEquals("Bob", drummers[0].fullName)
-
-        // Members tab badges: strictly by role
-        fun getBadge(m: com.example.syncedn.data.model.TeamMember): String = when {
-            m.role.equals("Leader", true) -> "Leader"
-            m.role.equals("Substitute Leader", true) -> "Substitute Leader"
-            else -> "Member"
-        }
-
-        assertEquals("Leader", getBadge(members[0]))
-        assertEquals("Substitute Leader", getBadge(members[1]))
-        assertEquals("Member", getBadge(members[2]))
     }
 }
