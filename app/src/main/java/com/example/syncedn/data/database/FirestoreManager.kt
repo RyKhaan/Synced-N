@@ -419,6 +419,7 @@ object FirestoreManager {
         teamName: String,
         teamCode: String = "",
         email: String = "",
+        ministryRole: String? = null,
         onComplete: (Result<Unit>) -> Unit = {}
     ) {
         val effectiveUid = com.example.syncedn.data.auth.AuthManager.currentUser?.uid?.takeIf { it.isNotBlank() }
@@ -432,6 +433,9 @@ object FirestoreManager {
             "removedByLeader" to false,
             "removedTeamCode" to ""
         )
+        if (ministryRole != null) {
+            updates["ministryRole"] = ministryRole
+        }
         if (effectiveUid.isNotBlank()) {
             updates["uid"] = effectiveUid
         }

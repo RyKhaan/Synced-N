@@ -47,7 +47,7 @@ class MainActivity : MemberActivity() {
         val removed = preferences.getBoolean("removedByLeader", false) && (removedTeamCode.isBlank() || teamCode.isBlank() || removedTeamCode.equals(teamCode, ignoreCase = true))
 
         val targetStartPage = requestedStart?.takeIf { it.isNotBlank() && it !in listOf("login", "start", "register") } ?: "home"
-        if (savedInstanceState == null && effectiveUid.isNotBlank() && team.isNotBlank() && !leftTeam && !removed) {
+        if (savedInstanceState == null && effectiveUid.isNotBlank() && team.isNotBlank() && !leftTeam && !removed && targetStartPage !in listOf("teamChoice", "createTeam", "joinTeam")) {
             if (userRole.equals("Leader", ignoreCase = true) || userMinistry.equals("Substitute Leader", ignoreCase = true) || isLeadUser) {
                 startActivity(
                     Intent(this, AdminActivity::class.java)
@@ -68,8 +68,8 @@ class MainActivity : MemberActivity() {
                 finish()
             }
             return
-        } else if (savedInstanceState == null && effectiveUid.isNotBlank() && (team.isBlank() || removed)) {
-            navigate(if (requestedStart == "joinTeam") "joinTeam" else "teamChoice")
+        } else if (savedInstanceState == null && effectiveUid.isNotBlank() && (team.isBlank() || leftTeam || removed || targetStartPage in listOf("teamChoice", "createTeam", "joinTeam"))) {
+            navigate(if (requestedStart in listOf("joinTeam", "createTeam")) requestedStart!! else "teamChoice")
             return
         }
     }

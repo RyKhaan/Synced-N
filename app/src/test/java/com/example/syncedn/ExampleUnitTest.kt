@@ -4775,4 +4775,77 @@ class ExampleUnitTest {
         assertEquals("", updatedReply?.replyToText)
         assertEquals("", updatedReply?.replyToSender)
     }
+
+    @Test
+    fun testWorshipLeaderLeaveAndTransferToSubLeaderSync() {
+        val repo = com.example.syncedn.data.database.TeamRepository
+        val teamCode = "KPABFG"
+        val oldLeaderUid = "h9yRCswmV1f0Pnia2EnxDv4x4X43"
+        val oldLeaderEmail = "ryanlloydgenturo@gmail.com"
+        val promotedSubUid = "HzFIsFkHhcMiDd4wxjVe4IRPyJB2"
+        val promotedSubEmail = "rlgenturo@gmail.com"
+
+        // Simulate stale preferences on a device where team_leader_uid/email still pointed to the outgoing leader
+        val stalePrefs = FakePreferences().apply {
+            edit()
+                .putString("teamCode", teamCode)
+                .putString("teamName", "WORSHIP TEAM")
+                .putString("team_leader_uid_$teamCode", oldLeaderUid)
+                .putString("team_leader_name_$teamCode", "Ryan Lloyd Genturo")
+                .putString("team_leader_email_$teamCode", oldLeaderEmail)
+                .putBoolean("transferred_leadership_$teamCode", false)
+                .apply()
+        }
+
+        // Firestore snapshot after outgoing leader left (9 members remain; RL is now Worship Leader)
+        val firestoreNineMembers = listOf(
+            com.example.syncedn.data.model.TeamMember(
+                uid = promotedSubUid,
+                fullName = "RL",
+                username = "RL",
+                email = promotedSubEmail,
+                role = "Leader",
+                ministryRole = "Worship Leader",
+                teamCode = teamCode
+            ),
+            com.example.syncedn.data.model.TeamMember(
+                uid = "LNXc8A9vWiQitGNMUVcN428D9t72",
+                fullName = "yanyan",
+                username = "yanyan",
+                email = "yanyangenturo@gmail.com",
+                role = "Member",
+                ministryRole = "Substitute Leader",
+                teamCode = teamCode
+            )
+        ) + (1..7).map { idx ->
+            com.example.syncedn.data.model.TeamMember(
+                uid = "member_uid_$idx",
+                fullName = "Member $idx",
+                username = "mem$idx",
+                email = "member$idx@example.com",
+                role = "Member",
+                ministryRole = "Vocalist",
+                teamCode = teamCode
+            )
+        }
+
+        val deduplicated = repo.deduplicateRoster(firestoreNineMembers, stalePrefs)
+        val finalRoster = repo.ensureTeamLeaderInRoster(teamCode, deduplicated, stalePrefs)
+
+        // 1. Roster count must remain strictly 9 (never synthesizing a 10th ghost entry for the old leader who left)
+        assertEquals(9, finalRoster.size)
+        assertNull("Outgoing leader who left must not appear in roster", finalRoster.find { it.uid == oldLeaderUid || it.email == oldLeaderEmail })
+
+        // 2. Promoted Substitute Leader (RL) must be recognized as Worship Leader
+        val rlMember = finalRoster.find { it.uid == promotedSubUid }
+        assertNotNull(rlMember)
+        assertEquals("Leader", rlMember!!.role)
+        assertEquals("Worship Leader", rlMember.ministryRole)
+
+        // 3. Preferences must self-heal to the new Worship Leader (RL)
+        assertEquals(promotedSubUid, stalePrefs.getString("team_leader_uid_$teamCode", ""))
+        assertEquals(promotedSubEmail, stalePrefs.getString("team_leader_email_$teamCode", ""))
+        assertEquals("RL", stalePrefs.getString("team_leader_name_$teamCode", ""))
+        assertTrue(stalePrefs.getBoolean("transferred_leadership_$teamCode", false))
+    }
 }
