@@ -5100,4 +5100,86 @@ class ExampleUnitTest {
         val tooSoon = System.currentTimeMillis() - prefs.getLong("last_activity_switch_time", 0L) < 4000L
         assertTrue("Switch within 4 seconds must be throttled", tooSoon)
     }
+
+    @Test
+    fun testRyanLloydRestoredAsWorshipLeaderAndRamirezDemotedToMemberSyncsRealtime() {
+        val prefs = FakePreferences()
+        val teamCode = "KPABFG"
+        val ramirezUid = "qxQBt4WtytgHEC0OljwdwehXfP52"
+        val ramirezEmail = "sycon2104@gmail.com"
+        val ramirezName = "John Michael Ramirez"
+
+        val ryanUid = "h9yRCswmV1f0Pnia2EnxDv4x4X43"
+        val ryanEmail = "ryanlloydgenturo@gmail.com"
+        val ryanName = "Ryan Lloyd Genturo"
+
+        // Set up team preferences with Ryan Lloyd as the restored Worship Leader
+        prefs.edit()
+            .putString("teamCode", teamCode)
+            .putString("teamName", "WORSHIP TEAM")
+            .putString("team_leader_uid_$teamCode", ryanUid)
+            .putString("team_leader_name_$teamCode", ryanName)
+            .putString("team_leader_email_$teamCode", ryanEmail)
+            .apply()
+
+        // Incoming roster where Ryan Lloyd was previously Member and Ramirez was previously Leader
+        val incomingRoster = listOf(
+            com.example.syncedn.data.model.TeamMember(
+                uid = ramirezUid,
+                fullName = ramirezName,
+                username = "Ramirez",
+                email = ramirezEmail,
+                role = "Member",
+                ministryRole = "Worship Leader",
+                teamCode = teamCode
+            ),
+            com.example.syncedn.data.model.TeamMember(
+                uid = ryanUid,
+                fullName = ryanName,
+                username = "RYAN LLOYD",
+                email = ryanEmail,
+                role = "Member",
+                ministryRole = "Member",
+                teamCode = teamCode
+            )
+        )
+
+        val resolvedRoster = com.example.syncedn.data.database.TeamRepository.ensureTeamLeaderInRoster(
+            teamCode,
+            incomingRoster,
+            prefs
+        )
+
+        val leader = resolvedRoster.find { it.uid == ryanUid }
+        assertNotNull("Ryan Lloyd must be leader in roster", leader)
+        assertEquals("Leader", leader!!.role)
+        assertEquals("Worship Leader", leader.ministryRole)
+
+        val member = resolvedRoster.find { it.uid == ramirezUid }
+        assertNotNull("Ramirez must be member in roster", member)
+        assertEquals("Member", member!!.role)
+        assertEquals("Member", member.ministryRole)
+
+        // Verify default fallback selects Ryan Lloyd when preferences are completely clean
+        val cleanPrefs = FakePreferences()
+        val defaultResolved = com.example.syncedn.data.database.TeamRepository.ensureTeamLeaderInRoster(
+            teamCode,
+            listOf(
+                com.example.syncedn.data.model.TeamMember(
+                    uid = ryanUid,
+                    fullName = ryanName,
+                    username = "RYAN LLOYD",
+                    email = ryanEmail,
+                    role = "Member",
+                    ministryRole = "Member",
+                    teamCode = teamCode
+                )
+            ),
+            cleanPrefs
+        )
+        val defaultLeader = defaultResolved.find { it.uid == ryanUid }
+        assertNotNull("Default fallback must select Ryan Lloyd", defaultLeader)
+        assertEquals("Leader", defaultLeader!!.role)
+        assertEquals("Worship Leader", defaultLeader.ministryRole)
+    }
 }

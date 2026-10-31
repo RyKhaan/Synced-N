@@ -635,14 +635,11 @@ object TeamRepository {
         preferences: android.content.SharedPreferences? = null
     ): List<TeamMember> {
         val code = teamCode.trim().uppercase()
-        val defaultLeaderEmail = if (code == "KPABFG") "sycon2104@gmail.com" else "ryanlloydgenturo@gmail.com"
-        val defaultLeaderName = if (code == "KPABFG") "John Michael Ramirez" else "Ryan Lloyd Genturo"
-        val defaultLeaderUid = if (code == "KPABFG") "qxQBt4WtytgHEC0OljwdwehXfP52" else "h9yRCswmV1f0Pnia2EnxDv4x4X43"
-        val defaultLeaderUsername = if (code == "KPABFG") "Ramirez" else "RYAN LLOYD"
-        val defaultLeaderPhoto = if (code == "KPABFG")
-            "https://res.cloudinary.com/ffb3fdkm/image/upload/v1793362917/rqol5xnijurka0ondplu.jpg"
-        else
-            "https://res.cloudinary.com/ffb3fdkm/image/upload/v1792548890/j13tbqyhhwro4na8ckke.jpg"
+        val defaultLeaderEmail = "ryanlloydgenturo@gmail.com"
+        val defaultLeaderName = "Ryan Lloyd Genturo"
+        val defaultLeaderUid = "h9yRCswmV1f0Pnia2EnxDv4x4X43"
+        val defaultLeaderUsername = "RYAN LLOYD"
+        val defaultLeaderPhoto = "https://res.cloudinary.com/ffb3fdkm/image/upload/v1792548890/j13tbqyhhwro4na8ckke.jpg"
 
         val designatedLeaderUid = preferences?.getString("team_leader_uid_$code", "")?.trim().orEmpty()
         val designatedLeaderName = preferences?.getString("team_leader_name_$code", "")?.trim().orEmpty()
@@ -654,31 +651,26 @@ object TeamRepository {
         if (members.isNotEmpty()) {
             val activeMembers = members.filter { !it.removedByLeader }
 
-            // 1. Designated leader in `members` who holds Worship Leader (or is not demoted / Substitute Leader)
+            // 1. Designated leader in `members`
             val designatedInRoster = activeMembers.find { m ->
                 val matchesDesignated = if (designatedLeaderUid.isNotBlank()) {
                     m.uid == designatedLeaderUid
                 } else if (designatedLeaderEmail.isNotBlank()) {
                     m.email.trim().lowercase() == designatedLeaderEmail
                 } else false
-                matchesDesignated &&
-                    !m.role.equals("Member", ignoreCase = true) &&
-                    !isOrdinaryMemberRole(m.ministryRole, m.role) &&
-                    !isSubstituteLeader(m.ministryRole)
+                matchesDesignated
             }
 
-            // 2. Explicit Worship Leader in `members` (e.g. a Substitute Leader just promoted to Worship Leader in Firestore)
+            // 2. Explicit Worship Leader in `members`
             val explicitWorshipLeader = designatedInRoster ?: activeMembers.find { m ->
-                isWorshipLeader(m.ministryRole, m.role) && !m.role.equals("Member", ignoreCase = true)
+                m.ministryRole.trim().equals("Worship Leader", ignoreCase = true) ||
+                    (isWorshipLeader(m.ministryRole, m.role) && !m.role.equals("Member", ignoreCase = true))
             }
 
             // 3. Fallback to default leader in `members` only if leadership has not been transferred and no designated leader is set
             val activeLeader = explicitWorshipLeader ?: if (!transferred && designatedLeaderUid.isBlank() && designatedLeaderEmail.isBlank()) {
                 activeMembers.find { m ->
-                    (m.email.trim().lowercase() == defaultLeaderEmail || m.fullName.equals(defaultLeaderName, ignoreCase = true)) &&
-                        !m.role.equals("Member", ignoreCase = true) &&
-                        !isOrdinaryMemberRole(m.ministryRole, m.role) &&
-                        !isSubstituteLeader(m.ministryRole)
+                    m.email.trim().lowercase() == defaultLeaderEmail || m.fullName.equals(defaultLeaderName, ignoreCase = true)
                 }
             } else null
 
@@ -5831,8 +5823,8 @@ object TeamRepository {
                         val leaderInRoster = currentRoster.find { it.uid == docLeaderUid }
                         val resolvedEmail = docLeaderEmail.ifBlank { leaderInRoster?.email?.trim()?.lowercase().orEmpty() }
                         val resolvedName = docLeaderName.ifBlank { leaderInRoster?.fullName.orEmpty() }
-                        val origLeaderEmail = if (code == "KPABFG") "sycon2104@gmail.com" else "ryanlloydgenturo@gmail.com"
-                        val origLeaderUid = if (code == "KPABFG") "qxQBt4WtytgHEC0OljwdwehXfP52" else "h9yRCswmV1f0Pnia2EnxDv4x4X43"
+                        val origLeaderEmail = "ryanlloydgenturo@gmail.com"
+                        val origLeaderUid = "h9yRCswmV1f0Pnia2EnxDv4x4X43"
                         val isTransferred = !resolvedEmail.equals(origLeaderEmail, ignoreCase = true) && docLeaderUid != origLeaderUid
 
                         var leaderChanged = false
