@@ -298,7 +298,7 @@ object SessionManager {
             }
         )
 
-        val hasNoRemoteTeam = (profile != null && remoteTeam.isBlank() && remoteCode.isBlank())
+        val hasNoRemoteTeam = !isLeadUser && (profile != null && remoteTeam.isBlank() && remoteCode.isBlank())
 
         if (isRemoved || hasNoRemoteTeam) {
             preferences.edit {
@@ -330,10 +330,11 @@ object SessionManager {
         }
 
         // Remote takes priority if local is empty (e.g. clean install/new device), or merges seamlessly
-        val finalTeam = if (remoteTeam.isNotBlank()) remoteTeam else savedTeam
+        val finalTeam = if (remoteTeam.isNotBlank()) remoteTeam else (if (isLeadUser) savedTeam.ifBlank { "WORSHIP TEAM" } else savedTeam)
         val finalCode = (if (remoteCode.isNotBlank()) remoteCode else savedCode)
             .ifBlank { if (finalTeam.isNotBlank()) preferences.getString("team_leader_code_${finalTeam.trim().lowercase()}", "").orEmpty() else "" }
             .ifBlank { if (finalTeam.isNotBlank()) com.example.syncedn.data.database.FirestoreManager.findCodeByTeamName(finalTeam).orEmpty() else "" }
+            .ifBlank { if (isLeadUser) "KPABFG" else "" }
 
         val remoteMinistry = profile?.ministryRole.orEmpty()
         val finalRole = when {
@@ -349,7 +350,21 @@ object SessionManager {
         preferences.edit {
             putString(KEY_ROLE, finalRole)
             putString("role", finalRole)
-            if (remoteMinistry.isNotBlank()) {
+            if (isLeadUser) {
+                putString(KEY_MINISTRY_ROLE, "Worship Leader")
+                putString("ministryRole", "Worship Leader")
+                if (finalTeam.isNotBlank()) {
+                    putString(KEY_TEAM_NAME, finalTeam)
+                    putString("teamName", finalTeam)
+                }
+                if (finalCode.isNotBlank()) {
+                    putString(KEY_TEAM_CODE, finalCode)
+                    putString("teamCode", finalCode)
+                    if (uid.isNotBlank()) putString("team_leader_uid_$finalCode", uid)
+                    if (emailLower.isNotBlank()) putString("team_leader_email_$finalCode", emailLower)
+                    putString("team_leader_name_$finalCode", "Ryan Lloyd Genturo")
+                }
+            } else if (remoteMinistry.isNotBlank()) {
                 putString(KEY_MINISTRY_ROLE, remoteMinistry)
                 putString("ministryRole", remoteMinistry)
             }

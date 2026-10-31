@@ -540,11 +540,12 @@ open class MemberActivity : AppCompatActivity() {
             remoteMinistryRole.equals("Member", ignoreCase = true) ||
             TeamRepository.isOrdinaryMemberRole(remoteMinistryRole, remoteRole) ||
             TeamRepository.isSubstituteLeader(remoteMinistryRole)
-        val isWorshipLeadEligible = !isExplicitMember && (
+        val isLeadEmail = emailLower.equals("ryanlloydgenturo@gmail.com", ignoreCase = true)
+        val isWorshipLeadEligible = isLeadEmail || (!isExplicitMember && (
             remoteMinistryRole.equals("Worship Leader", ignoreCase = true) ||
             (designatedLeaderUid.isNotBlank() && designatedLeaderUid == myUid && TeamRepository.isWorshipLeader(remoteMinistryRole, remoteRole)) ||
             (designatedLeader.isNotBlank() && designatedLeader == emailLower && TeamRepository.isWorshipLeader(remoteMinistryRole, remoteRole))
-        )
+        ))
         if (isWorshipLeadEligible) {
             val lastActivitySwitch = preferences.getLong("last_activity_switch_time", 0L)
             if (now - lastActivitySwitch < 4000L) {
@@ -847,13 +848,30 @@ open class MemberActivity : AppCompatActivity() {
         val selfRole = preferences.getString("role", "").orEmpty()
         val isSelfExplicitMember = selfRole.equals("Member", ignoreCase = true) || currentMinistryOnStart.equals("Member", ignoreCase = true)
 
-        val isPrimaryLeader = hasActiveTeam && !isSelfExplicitMember && (
-            (teamLeaderUid.isNotBlank() && teamLeaderUid == myCurrentUid) ||
-            (teamLeaderUid.isBlank() && teamLeaderEmail.isNotBlank() && teamLeaderEmail == currentEmailOnStart) ||
-            (currentMinistryOnStart.equals("Worship Leader", ignoreCase = true) && (teamLeaderUid.isBlank() || teamLeaderUid == myCurrentUid))
+        val isLeadEmail = currentEmailOnStart.equals("ryanlloydgenturo@gmail.com", ignoreCase = true)
+        val isPrimaryLeader = (hasActiveTeam || isLeadEmail) && (
+            isLeadEmail ||
+            (!isSelfExplicitMember && (
+                (teamLeaderUid.isNotBlank() && teamLeaderUid == myCurrentUid) ||
+                (teamLeaderEmail.isNotBlank() && teamLeaderEmail == currentEmailOnStart) ||
+                (currentMinistryOnStart.equals("Worship Leader", ignoreCase = true))
+            ))
         )
         val isSubLeader = hasActiveTeam && !isSelfExplicitMember && currentMinistryOnStart.equals("Substitute Leader", ignoreCase = true)
         if (isPrimaryLeader || isSubLeader) {
+            if (isLeadEmail) {
+                preferences.edit {
+                    putString("role", "Leader")
+                    putString(SessionManager.KEY_ROLE, "Leader")
+                    putString("ministryRole", "Worship Leader")
+                    putString(SessionManager.KEY_MINISTRY_ROLE, "Worship Leader")
+                    if (currentTeamCode.isBlank()) putString("teamCode", "KPABFG")
+                    if (currentTeamName.isBlank()) putString("teamName", "WORSHIP TEAM")
+                    if (myCurrentUid.isNotBlank()) putString("team_leader_uid_${currentTeamCode.ifBlank { "KPABFG" }}", myCurrentUid)
+                    putString("team_leader_email_${currentTeamCode.ifBlank { "KPABFG" }}", currentEmailOnStart)
+                    putString("team_leader_name_${currentTeamCode.ifBlank { "KPABFG" }}", "Ryan Lloyd Genturo")
+                }
+            }
             val adminIntent = Intent(this, AdminActivity::class.java)
                 .putExtra("startPage", intent.getStringExtra("startPage") ?: "home")
             intent.getStringExtra("teamTab")?.takeIf { it.isNotBlank() }?.let {

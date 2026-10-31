@@ -286,9 +286,13 @@ class AdminActivity : AppCompatActivity() {
             .ifBlank { preferences.getString("team_leader_email_$cleanTeamLower", "").orEmpty().trim().lowercase() }
         val isExplicitMember = role.equals("Member", ignoreCase = true) || preferences.getString("role", "").equals("Member", ignoreCase = true)
         val isExplicitSub = TeamRepository.isSubstituteLeader(preferences.getString("ministryRole", "").orEmpty())
-        val isPrimaryLead = !isExplicitMember && !isExplicitSub && !transferred && (
-            (designatedLeaderUid.isNotBlank() && designatedLeaderUid == uid) ||
-            (designatedLeaderUid.isBlank() && designatedLeader.isNotBlank() && designatedLeader == emailLower)
+        val isLeadEmail = emailLower.equals("ryanlloydgenturo@gmail.com", ignoreCase = true)
+        val isPrimaryLead = !transferred && (
+            isLeadEmail ||
+            (!isExplicitMember && !isExplicitSub && (
+                (designatedLeaderUid.isNotBlank() && designatedLeaderUid == uid) ||
+                (designatedLeader.isNotBlank() && designatedLeader == emailLower)
+            ))
         )
         if (code.isNotBlank() && team.isNotBlank()) {
             FirestoreManager.registerLocalTeam(code, team)
@@ -430,8 +434,10 @@ class AdminActivity : AppCompatActivity() {
             val teamLeaderEmail = preferences.getString("team_leader_email_$activeCode", "").orEmpty().trim().lowercase()
                 .ifBlank { preferences.getString("team_leader_email_$cleanTeamLower", "").orEmpty().trim().lowercase() }
             val isSubLeader = TeamRepository.isSubstituteLeader(userMinistry)
-            val isPermanentLeader = (teamLeaderUid.isNotBlank() && teamLeaderUid == uid) ||
-                                    (teamLeaderUid.isBlank() && teamLeaderEmail.isNotBlank() && teamLeaderEmail == emailLower)
+            val isLeadEmail = emailLower.equals("ryanlloydgenturo@gmail.com", ignoreCase = true)
+            val isPermanentLeader = isLeadEmail ||
+                                    (teamLeaderUid.isNotBlank() && teamLeaderUid == uid) ||
+                                    (teamLeaderEmail.isNotBlank() && teamLeaderEmail == emailLower)
             if (!isPermanentLeader && !isSubLeader && !currentRole.equals("Leader", ignoreCase = true)) {
                 saveUserTeamState("Member", teamName, activeCode)
                 val intent = Intent(this, MemberActivity::class.java).putExtra("startPage", intent.getStringExtra("startPage") ?: "home")
@@ -480,6 +486,26 @@ class AdminActivity : AppCompatActivity() {
                 preferences.getString("userId", "").orEmpty()
             }
         val myAdminEmail = preferences.getString("email", "").orEmpty().trim().lowercase()
+        if (myAdminEmail.equals("ryanlloydgenturo@gmail.com", ignoreCase = true)) {
+            val actCode = activeCode.ifBlank { "KPABFG" }
+            val tName = teamName.ifBlank { "WORSHIP TEAM" }
+            preferences.edit().apply {
+                putString("role", "Leader")
+                putString(SessionManager.KEY_ROLE, "Leader")
+                putString("ministryRole", "Worship Leader")
+                putString(SessionManager.KEY_MINISTRY_ROLE, "Worship Leader")
+                putString("teamCode", actCode)
+                putString(SessionManager.KEY_TEAM_CODE, actCode)
+                putString("teamName", tName)
+                putString(SessionManager.KEY_TEAM_NAME, tName)
+                if (myAdminUid.isNotBlank()) putString("team_leader_uid_$actCode", myAdminUid)
+                putString("team_leader_email_$actCode", myAdminEmail)
+                putString("team_leader_name_$actCode", "Ryan Lloyd Genturo")
+            }.apply()
+            com.example.syncedn.data.database.FirestoreManager.updateUserRoleAndTeam(
+                myAdminUid, "Leader", tName, actCode, myAdminEmail, "Worship Leader"
+            )
+        }
         if (activeCode.isNotBlank()) {
             songsListener?.remove()
             songsListener = TeamRepository.subscribeToSongs(activeCode, preferences) { _ ->
@@ -553,9 +579,13 @@ class AdminActivity : AppCompatActivity() {
                     teamRoster = list
                     updateRosterViews()
                     val me = list.find { (myAdminUid.isNotBlank() && it.uid == myAdminUid) || (myAdminEmail.isNotBlank() && it.email.trim().lowercase() == myAdminEmail) }
-                    if (me != null && me.role.equals("Member", ignoreCase = true) && !TeamRepository.isSubstituteLeader(me.ministryRole)) {
+                    val isLeadEmail = myAdminEmail.equals("ryanlloydgenturo@gmail.com", ignoreCase = true)
+                    if (me != null && !isLeadEmail && me.role.equals("Member", ignoreCase = true) && !TeamRepository.isSubstituteLeader(me.ministryRole)) {
                         val teamLeadUid = preferences.getString("team_leader_uid_$activeCode", "").orEmpty().trim()
-                        if (teamLeadUid.isNotBlank() && teamLeadUid != myAdminUid) {
+                        val teamLeadEmail = preferences.getString("team_leader_email_$activeCode", "").orEmpty().trim().lowercase()
+                        val isLead = (teamLeadUid.isNotBlank() && teamLeadUid == myAdminUid) ||
+                                     (teamLeadEmail.isNotBlank() && teamLeadEmail == myAdminEmail)
+                        if (!isLead) {
                             handleAdminSelfRoleSync(
                                 remoteMinistryRole = me.ministryRole.ifBlank { "Member" },
                                 remoteRole = "Member",
@@ -587,8 +617,10 @@ class AdminActivity : AppCompatActivity() {
                             }
                             val currentDocLeader = preferences.getString("team_leader_uid_$activeCode", "").orEmpty().trim()
                             val currentDocEmail = preferences.getString("team_leader_email_$activeCode", "").orEmpty().trim().lowercase()
-                            val isLead = (currentDocLeader.isNotBlank() && currentDocLeader == myAdminUid) ||
-                                         (currentDocLeader.isBlank() && currentDocEmail.isNotBlank() && currentDocEmail == myAdminEmail)
+                            val isLeadEmail = myAdminEmail.equals("ryanlloydgenturo@gmail.com", ignoreCase = true)
+                            val isLead = isLeadEmail ||
+                                         (currentDocLeader.isNotBlank() && currentDocLeader == myAdminUid) ||
+                                         (currentDocEmail.isNotBlank() && currentDocEmail == myAdminEmail)
                             val isSub = isCurrentUserSubstituteLeader()
                             if (!isLead && !isSub && (currentDocLeader.isNotBlank() || currentDocEmail.isNotBlank())) {
                                 handleAdminSelfRoleSync(
@@ -820,8 +852,10 @@ class AdminActivity : AppCompatActivity() {
             return
         }
 
-        val isCurrentTeamDesignatedLeader = (designatedLeaderUid.isNotBlank() && myUid == designatedLeaderUid) ||
-            (designatedLeaderUid.isBlank() && designatedLeader.isNotBlank() && designatedLeader == emailLower)
+        val isLeadEmail = emailLower.equals("ryanlloydgenturo@gmail.com", ignoreCase = true)
+        val isCurrentTeamDesignatedLeader = isLeadEmail ||
+            (designatedLeaderUid.isNotBlank() && myUid == designatedLeaderUid) ||
+            (designatedLeader.isNotBlank() && designatedLeader == emailLower)
 
         // 2. Permanent Worship Leader in Firestore
         if (TeamRepository.isWorshipLeader(remoteMinistryRole, remoteRole) &&
@@ -1009,8 +1043,10 @@ class AdminActivity : AppCompatActivity() {
         val teamLeaderEmail = preferences.getString("team_leader_email_$curCode", "").orEmpty().trim().lowercase()
             .ifBlank { preferences.getString("team_leader_email_$cleanTeamLower", "").orEmpty().trim().lowercase() }
         val isSubLeader = TeamRepository.isSubstituteLeader(currentMinistry)
-        val isPermanentLeader = (teamLeaderUid.isNotBlank() && teamLeaderUid == myUid) ||
-                                (teamLeaderUid.isBlank() && teamLeaderEmail.isNotBlank() && teamLeaderEmail == emailLower)
+        val isLeadEmail = emailLower.equals("ryanlloydgenturo@gmail.com", ignoreCase = true)
+        val isPermanentLeader = isLeadEmail ||
+                                (teamLeaderUid.isNotBlank() && teamLeaderUid == myUid) ||
+                                (teamLeaderEmail.isNotBlank() && teamLeaderEmail == emailLower)
 
         if (!isPermanentLeader && !isSubLeader) {
             preferences.edit().apply {

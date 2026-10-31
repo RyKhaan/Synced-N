@@ -1417,14 +1417,22 @@ object TeamRepository {
                         db.collection(TEAMS_COLLECTION).document(activeCode).update(teamUpdates)
                     }
                     val prevLeaderUid = preferences?.getString("team_leader_uid_$activeCode", "").orEmpty().trim()
+                    val targetCleanEmail = cleanEmail.trim().lowercase()
                     if (prevLeaderUid.isNotBlank() && prevLeaderUid != memberUid) {
                         try {
-                            db.collection(USERS_COLLECTION).document(prevLeaderUid).update(
-                                mapOf<String, Any>(
-                                    "role" to "Member",
-                                    "ministryRole" to "Member"
-                                )
-                            )
+                            db.collection(USERS_COLLECTION).document(prevLeaderUid).get().addOnSuccessListener { pDoc ->
+                                if (pDoc != null && pDoc.exists()) {
+                                    val pEmail = pDoc.getString("email").orEmpty().trim().lowercase()
+                                    if (targetCleanEmail.isBlank() || pEmail != targetCleanEmail) {
+                                        pDoc.reference.update(
+                                            mapOf<String, Any>(
+                                                "role" to "Member",
+                                                "ministryRole" to "Member"
+                                            )
+                                        )
+                                    }
+                                }
+                            }
                         } catch (_: Throwable) {}
                     }
                     try {
@@ -1435,7 +1443,8 @@ object TeamRepository {
                             .addOnSuccessListener { snap ->
                                 if (snap != null && !snap.isEmpty) {
                                     for (doc in snap.documents) {
-                                        if (doc.id != memberUid) {
+                                        val dEmail = doc.getString("email").orEmpty().trim().lowercase()
+                                        if (doc.id != memberUid && (targetCleanEmail.isBlank() || dEmail != targetCleanEmail)) {
                                             doc.reference.update(
                                                 mapOf<String, Any>(
                                                     "role" to "Member",

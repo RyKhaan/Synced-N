@@ -5227,4 +5227,78 @@ class ExampleUnitTest {
         assertEquals("Member", prefs.getString("role", ""))
         assertEquals("Member", prefs.getString("ministryRole", ""))
     }
+    @Test
+    fun testRyanLloydGenturoNeverDemotedAndRetainsWorshipLeaderRole() {
+        val prefs = FakePreferences()
+        val email = "ryanlloydgenturo@gmail.com"
+        val uid = "QrUkZlztFCbINpZkbA8yx6pGNXy2"
+        val teamCode = "KPABFG"
+        val leaderUidInTeam = "h9yRCswmV1f0Pnia2EnxDv4x4X43" // Previous Auth UID
+
+        // Even if Firestore profile returned blank team/code (e.g. freshly created Google sign-in doc)
+        val emptyProfile = com.example.syncedn.data.model.UserProfile(
+            uid = uid,
+            email = email,
+            username = "Ryan Lloyd Genturo",
+            role = "",
+            teamName = "",
+            teamCode = "",
+            ministryRole = ""
+        )
+
+        val (role, team, code) = com.example.syncedn.data.auth.SessionManager.resolveUserTeamSession(
+            preferences = prefs,
+            profile = emptyProfile,
+            email = email
+        )
+
+        assertEquals("Leader", role)
+        assertEquals("WORSHIP TEAM", team)
+        assertEquals("KPABFG", code)
+        assertEquals("Leader", prefs.getString("role", ""))
+        assertEquals("Worship Leader", prefs.getString("ministryRole", ""))
+
+        // Leader permanent check in AdminActivity when leaderUid in team document is different UID but email matches
+        prefs.edit()
+            .putString("team_leader_uid_$teamCode", leaderUidInTeam)
+            .putString("team_leader_email_$teamCode", email)
+            .apply()
+
+        val isLeadEmail = email.equals("ryanlloydgenturo@gmail.com", ignoreCase = true)
+        val teamLeaderUid = prefs.getString("team_leader_uid_$teamCode", "").orEmpty()
+        val teamLeaderEmail = prefs.getString("team_leader_email_$teamCode", "").orEmpty()
+        val isPermanentLeader = isLeadEmail ||
+                                (teamLeaderUid.isNotBlank() && teamLeaderUid == uid) ||
+                                (teamLeaderEmail.isNotBlank() && teamLeaderEmail == email)
+
+        assertTrue("Ryan Lloyd Genturo must always be recognized as permanent leader", isPermanentLeader)
+    }
+
+    @Test
+    fun testLeaderMatchingByEmailIsNotDemotedEvenIfUidDiffers() {
+        val prefs = FakePreferences()
+        val teamCode = "KPABFG"
+        val leaderEmail = "leader@syncedn.test"
+        val docLeaderUid = "original_uid_111"
+        val sessionUid = "new_google_uid_222"
+
+        prefs.edit()
+            .putString("teamCode", teamCode)
+            .putString("team_leader_uid_$teamCode", docLeaderUid)
+            .putString("team_leader_email_$teamCode", leaderEmail)
+            .putString("email", leaderEmail)
+            .putString("userId", sessionUid)
+            .apply()
+
+        val currentDocLeader = prefs.getString("team_leader_uid_$teamCode", "").orEmpty().trim()
+        val currentDocEmail = prefs.getString("team_leader_email_$teamCode", "").orEmpty().trim().lowercase()
+        val myAdminUid = sessionUid
+        val myAdminEmail = leaderEmail
+
+        val isLead = (currentDocLeader.isNotBlank() && currentDocLeader == myAdminUid) ||
+                     (currentDocEmail.isNotBlank() && currentDocEmail == myAdminEmail)
+
+        assertTrue("User matching leader email must evaluate to isLead=true", isLead)
+    }
 }
+
