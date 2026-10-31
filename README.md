@@ -231,8 +231,8 @@ Developed as a Capstone Project for **ICCT Colleges - Cainta Main Campus**:
 | Name | Role | Responsibilities |
 | :--- | :--- | :--- |
 | **Ryan Lloyd Genturo** | Project Lead / Full-Stack Developer | System Architecture, Real-Time Sync, Multi-Device Governance |
-| **John Michael Ramirez** | Frontend & UI/UX Developer | Responsive Layouts, Chord Transposer & Musician Experience |
-| **Joshua Lagare** | Backend & DevOps Engineer | Firebase Infrastructure, Firestore Rules, Cloud Messaging |
+| **Mark Sarmiento & Ralph Lauren Gregorio** | Frontend & UI/UX Developer | Responsive Layouts, Chord Transposer & Musician Experience |
+| **Joshua Lagare & John Lloyd Villar** | Backend & DevOps Engineer | Firebase Infrastructure, Firestore Rules, Cloud Messaging |
 
 ---
 
