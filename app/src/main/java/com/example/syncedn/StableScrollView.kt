@@ -36,9 +36,6 @@ internal class StableScrollView(context: Context) : ScrollView(context) {
 
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
         super.onSizeChanged(w, h, oldw, oldh)
-        // The existing page containers allow shadows outside their bounds.
-        // Explicitly clip this viewport so translated list content cannot paint over siblings.
-        clipBounds = Rect(0, 0, w, h)
     }
 
     override fun dispatchTouchEvent(event: MotionEvent): Boolean {

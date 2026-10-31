@@ -3512,7 +3512,9 @@ class AdminActivity : AppCompatActivity() {
                         obj
                     }
                     runOnUiThread {
-                        val changed = (newRecords.toString() != localServices.toString())
+                        val changed = (newRecords.size != localServices.size ||
+                                newRecords.joinToString(",") { it.optString("id") + it.optString("updatedAt") } !=
+                                localServices.joinToString(",") { it.optString("id") + it.optString("updatedAt") })
                         localServices.clear()
                         localServices.addAll(newRecords)
                         com.example.syncedn.data.notification.ScheduleNotificationScheduler.scheduleAll(this@AdminActivity, localServices)

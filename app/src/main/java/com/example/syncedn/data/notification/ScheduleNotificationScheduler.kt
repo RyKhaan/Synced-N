@@ -77,32 +77,53 @@ object ScheduleNotificationScheduler {
         }
     }
 
+    private val schedulerExecutor = java.util.concurrent.Executors.newSingleThreadExecutor()
+    private val scheduledSignatures = java.util.concurrent.ConcurrentHashMap<String, Long>()
+
     /**
      * Schedules alarms for all published services and rehearsals in the given list.
+     * Executes asynchronously on a background executor so AlarmManager IPC binder calls
+     * never block the main Android UI thread.
      */
     fun scheduleAll(context: Context, services: List<JSONObject>) {
-        for (srv in services) {
-            val status = srv.optString("status")
-            if (status != "Published") continue
-            val id = srv.optString("id").ifBlank { "srv_${System.currentTimeMillis()}" }
-            val title = srv.optString("title", "Sunday Worship Service")
-            val date = srv.optString("date")
-            val start = srv.optString("start")
-            val venue = srv.optString("venue", "Main Sanctuary")
+        if (services.isEmpty()) return
+        val appContext = context.applicationContext
+        val snapshot = ArrayList(services)
+        schedulerExecutor.execute {
+            for (srv in snapshot) {
+                val status = srv.optString("status")
+                if (status != "Published") continue
+                val id = srv.optString("id").ifBlank { "srv_${System.currentTimeMillis()}" }
+                val title = srv.optString("title", "Sunday Worship Service")
+                val date = srv.optString("date")
+                val start = srv.optString("start")
+                val venue = srv.optString("venue", "Main Sanctuary")
 
-            if (date.isNotBlank() && start.isNotBlank()) {
-                scheduleEvent(context, id, title, date, start, venue, isRehearsal = false)
-            }
+                val serviceSig = "$id|$date|$start|$venue|service"
+                val lastServiceScheduled = scheduledSignatures[serviceSig] ?: 0L
+                val now = System.currentTimeMillis()
+                if (now - lastServiceScheduled > 60_000L) {
+                    if (date.isNotBlank() && start.isNotBlank()) {
+                        scheduleEvent(appContext, id, title, date, start, venue, isRehearsal = false)
+                    }
+                    scheduledSignatures[serviceSig] = now
+                }
 
-            val rehObj = srv.optJSONObject("rehearsal")
-            val rDate = rehObj?.optString("date").orEmpty().ifBlank { srv.optString("rehearsalDate").orEmpty() }
-            val rStart = rehObj?.optString("start").orEmpty().ifBlank { srv.optString("rehearsalStart").orEmpty() }
-            val rVenue = rehObj?.optString("venue").orEmpty()
-                .ifBlank { srv.optString("rehearsalVenue").orEmpty() }
-                .ifBlank { venue }
+                val rehObj = srv.optJSONObject("rehearsal")
+                val rDate = rehObj?.optString("date").orEmpty().ifBlank { srv.optString("rehearsalDate").orEmpty() }
+                val rStart = rehObj?.optString("start").orEmpty().ifBlank { srv.optString("rehearsalStart").orEmpty() }
+                val rVenue = rehObj?.optString("venue").orEmpty()
+                    .ifBlank { srv.optString("rehearsalVenue").orEmpty() }
+                    .ifBlank { venue }
 
-            if (rDate.isNotBlank() && rStart.isNotBlank()) {
-                scheduleEvent(context, id, title, rDate, rStart, rVenue, isRehearsal = true)
+                val rehSig = "$id|$rDate|$rStart|$rVenue|rehearsal"
+                val lastRehScheduled = scheduledSignatures[rehSig] ?: 0L
+                if (now - lastRehScheduled > 60_000L) {
+                    if (rDate.isNotBlank() && rStart.isNotBlank()) {
+                        scheduleEvent(appContext, id, title, rDate, rStart, rVenue, isRehearsal = true)
+                    }
+                    scheduledSignatures[rehSig] = now
+                }
             }
         }
     }

@@ -344,25 +344,14 @@ object ImageLoader {
             return
         }
 
-        // 2. For circular avatars, synchronous disk check (<1ms) prevents profile avatar flicker
-        if (circular || maxDimension <= 1024) {
-            val diskFile = getCacheFile(imageView.context, cacheKey, circular = circular)
-            val diskBitmap = loadFromDisk(diskFile, maxDimension)
-            if (diskBitmap != null && !diskBitmap.isRecycled) {
-                memoryCache.put(cacheKey, diskBitmap)
-                imageView.setImageBitmap(diskBitmap)
-                return
-            }
-        }
-
-        // 3. Fallback placeholder while fetching
+        // 2. Fallback placeholder while fetching asynchronously
         placeholderResId?.let { imageView.setImageResource(it) }
         imageView.tag = trimmedUri
 
-        // 4. Fetch asynchronously without blocking UI main thread
+        // 3. Fetch asynchronously without blocking UI main thread
         executor.execute {
             val diskFile = getCacheFile(imageView.context, cacheKey, circular)
-            var bitmap: Bitmap? = if (!circular) loadFromDisk(diskFile, maxDimension) else null
+            var bitmap: Bitmap? = loadFromDisk(diskFile, maxDimension)
 
             if (bitmap == null) {
                 bitmap = try {

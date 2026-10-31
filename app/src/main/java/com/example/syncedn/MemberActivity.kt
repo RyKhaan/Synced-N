@@ -2441,33 +2441,46 @@ open class MemberActivity : AppCompatActivity() {
             } else rawDate
         }
     } catch (_: Exception) { rawDate }
-    private fun storedServices(): List<org.json.JSONObject> = try {
-        val currentCode = preferences.getString("teamCode", "").orEmpty()
-            .ifBlank { FirestoreManager.findCodeByTeamName(teamName).orEmpty() }
-            .trim()
-            .uppercase()
-        if (currentCode.isNotBlank()) {
-            val cached = TeamRepository.getCachedServices(currentCode, preferences).filter { it.status == "Published" }
-            cached.map { srv ->
-                val obj = org.json.JSONObject()
-                srv.toMap().forEach { (k, v) ->
-                    if (v is List<*>) {
-                        val arr = org.json.JSONArray()
-                        v.forEach { c -> if (c is Map<*, *>) arr.put(org.json.JSONObject(c)) else arr.put(c) }
-                        obj.put(k, arr)
-                    } else if (v is Map<*, *>) {
-                        obj.put(k, org.json.JSONObject(v))
-                    } else {
-                        obj.put(k, v)
-                    }
-                }
-                obj
-            }
-        } else {
-            val records = org.json.JSONArray(preferences.getString("leaderServices", "[]"))
-            (0 until records.length()).map { records.getJSONObject(it) }.filter { it.optString("status", "Published") == "Published" }
+    private var cachedServicesList: List<org.json.JSONObject>? = null
+    private var lastServicesCacheTimestamp = 0L
+
+    private fun storedServices(): List<org.json.JSONObject> {
+        val now = System.currentTimeMillis()
+        val cached = cachedServicesList
+        if (cached != null && now - lastServicesCacheTimestamp < 2500L) {
+            return cached
         }
-    } catch (_: Exception) { emptyList() }
+        val result = try {
+            val currentCode = preferences.getString("teamCode", "").orEmpty()
+                .ifBlank { FirestoreManager.findCodeByTeamName(teamName).orEmpty() }
+                .trim()
+                .uppercase()
+            if (currentCode.isNotBlank()) {
+                val cachedSrv = TeamRepository.getCachedServices(currentCode, preferences).filter { it.status == "Published" }
+                cachedSrv.map { srv ->
+                    val obj = org.json.JSONObject()
+                    srv.toMap().forEach { (k, v) ->
+                        if (v is List<*>) {
+                            val arr = org.json.JSONArray()
+                            v.forEach { c -> if (c is Map<*, *>) arr.put(org.json.JSONObject(c)) else arr.put(c) }
+                            obj.put(k, arr)
+                        } else if (v is Map<*, *>) {
+                            obj.put(k, org.json.JSONObject(v))
+                        } else {
+                            obj.put(k, v)
+                        }
+                    }
+                    obj
+                }
+            } else {
+                val records = org.json.JSONArray(preferences.getString("leaderServices", "[]"))
+                (0 until records.length()).map { records.getJSONObject(it) }.filter { it.optString("status", "Published") == "Published" }
+            }
+        } catch (_: Exception) { emptyList() }
+        cachedServicesList = result
+        lastServicesCacheTimestamp = now
+        return result
+    }
     private fun formatServiceTime(value: String): String = try {
         val parts=value.split(":");val hour=parts[0].toInt()
         "${if(hour % 12 == 0) 12 else hour % 12}:${parts[1]}${if(hour < 12) "AM" else "PM"}"
@@ -3609,14 +3622,17 @@ open class MemberActivity : AppCompatActivity() {
         isRefreshingServices = true
         lastServicesRefreshTime = now
 
-        val previousStored = storedServices().toString()
+        val previousStored = storedServices()
+        val prevSummary = "${previousStored.size}_" + previousStored.joinToString(",") { it.optString("id") + it.optString("updatedAt") }
 
         TeamRepository.getServices(currentCode, isLeader = false, preferences) { result ->
             isRefreshingServices = false
             result.getOrNull()?.let { list ->
-                com.example.syncedn.data.notification.ScheduleNotificationScheduler.scheduleAll(this, storedServices())
-                val currentStored = storedServices().toString()
-                if (currentStored != previousStored) {
+                cachedServicesList = null
+                val freshStored = storedServices()
+                com.example.syncedn.data.notification.ScheduleNotificationScheduler.scheduleAll(this, freshStored)
+                val currSummary = "${freshStored.size}_" + freshStored.joinToString(",") { it.optString("id") + it.optString("updatedAt") }
+                if (currSummary != prevSummary) {
                     runOnUiThread {
                         if (page == "schedule") {
                             navigate(page, triggerRefresh = false)
