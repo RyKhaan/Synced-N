@@ -1416,6 +1416,37 @@ object TeamRepository {
                     if (teamUpdates.isNotEmpty()) {
                         db.collection(TEAMS_COLLECTION).document(activeCode).update(teamUpdates)
                     }
+                    val prevLeaderUid = preferences?.getString("team_leader_uid_$activeCode", "").orEmpty().trim()
+                    if (prevLeaderUid.isNotBlank() && prevLeaderUid != memberUid) {
+                        try {
+                            db.collection(USERS_COLLECTION).document(prevLeaderUid).update(
+                                mapOf<String, Any>(
+                                    "role" to "Member",
+                                    "ministryRole" to "Member"
+                                )
+                            )
+                        } catch (_: Throwable) {}
+                    }
+                    try {
+                        db.collection(USERS_COLLECTION)
+                            .whereEqualTo("teamCode", activeCode)
+                            .whereEqualTo("ministryRole", "Worship Leader")
+                            .get()
+                            .addOnSuccessListener { snap ->
+                                if (snap != null && !snap.isEmpty) {
+                                    for (doc in snap.documents) {
+                                        if (doc.id != memberUid) {
+                                            doc.reference.update(
+                                                mapOf<String, Any>(
+                                                    "role" to "Member",
+                                                    "ministryRole" to "Member"
+                                                )
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                    } catch (_: Throwable) {}
                 } else {
                     val currentSelfUid = preferences?.getString(com.example.syncedn.data.auth.SessionManager.KEY_USER_ID, "").orEmpty()
                     val currentSelfEmail = preferences?.getString("email", "")?.trim()?.lowercase().orEmpty()

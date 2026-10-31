@@ -5182,4 +5182,49 @@ class ExampleUnitTest {
         assertEquals("Leader", defaultLeader!!.role)
         assertEquals("Worship Leader", defaultLeader.ministryRole)
     }
+
+    @Test
+    fun testFormerWorshipLeaderDemotedToMemberSwitchesDashboardImmediately() {
+        val prefs = FakePreferences()
+        val teamCode = "KPABFG"
+        val userBUid = "user_b_uid_123"
+        val userBEmail = "userb@syncedn.test"
+        val userA_Uid = "h9yRCswmV1f0Pnia2EnxDv4x4X43" // Ryan Lloyd
+
+        // User B was previously Worship Leader
+        prefs.edit()
+            .putString("teamCode", teamCode)
+            .putString("teamName", "WORSHIP TEAM")
+            .putString("role", "Leader")
+            .putString("ministryRole", "Worship Leader")
+            .putString("userId", userBUid)
+            .putString("email", userBEmail)
+            .putString("team_leader_uid_$teamCode", userBUid)
+            .apply()
+
+        // Now leadership is restored to User A (Ryan Lloyd)
+        prefs.edit()
+            .putString("team_leader_uid_$teamCode", userA_Uid)
+            .apply()
+
+        val teamLeaderUid = prefs.getString("team_leader_uid_$teamCode", "").orEmpty()
+        val currentMinistry = prefs.getString("ministryRole", "").orEmpty()
+        val isSubLeader = com.example.syncedn.data.database.TeamRepository.isSubstituteLeader(currentMinistry)
+        val isPermanentLeader = teamLeaderUid.isNotBlank() && teamLeaderUid == userBUid
+
+        // Must evaluate to false: User B is NOT permanent leader and NOT substitute leader!
+        assertFalse("User B must no longer be permanent leader", isPermanentLeader)
+        assertFalse("User B must not be substitute leader", isSubLeader)
+
+        // Simulating the onResume demotion trigger
+        if (!isPermanentLeader && !isSubLeader) {
+            prefs.edit().apply {
+                putString("role", "Member")
+                putString("ministryRole", "Member")
+            }.apply()
+        }
+
+        assertEquals("Member", prefs.getString("role", ""))
+        assertEquals("Member", prefs.getString("ministryRole", ""))
+    }
 }

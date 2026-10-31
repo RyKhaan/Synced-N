@@ -474,6 +474,12 @@ class AdminActivity : AppCompatActivity() {
             }
         }
         initializeLeaderDemo()
+
+        val myAdminUid = com.example.syncedn.data.auth.AuthManager.currentUser?.uid?.takeIf { it.isNotBlank() }
+            ?: preferences.getString(SessionManager.KEY_USER_ID, "").orEmpty().ifBlank {
+                preferences.getString("userId", "").orEmpty()
+            }
+        val myAdminEmail = preferences.getString("email", "").orEmpty().trim().lowercase()
         if (activeCode.isNotBlank()) {
             songsListener?.remove()
             songsListener = TeamRepository.subscribeToSongs(activeCode, preferences) { _ ->
@@ -546,6 +552,18 @@ class AdminActivity : AppCompatActivity() {
                 runOnUiThread {
                     teamRoster = list
                     updateRosterViews()
+                    val me = list.find { (myAdminUid.isNotBlank() && it.uid == myAdminUid) || (myAdminEmail.isNotBlank() && it.email.trim().lowercase() == myAdminEmail) }
+                    if (me != null && me.role.equals("Member", ignoreCase = true) && !TeamRepository.isSubstituteLeader(me.ministryRole)) {
+                        val teamLeadUid = preferences.getString("team_leader_uid_$activeCode", "").orEmpty().trim()
+                        if (teamLeadUid.isNotBlank() && teamLeadUid != myAdminUid) {
+                            handleAdminSelfRoleSync(
+                                remoteMinistryRole = me.ministryRole.ifBlank { "Member" },
+                                remoteRole = "Member",
+                                myUid = myAdminUid,
+                                myEmail = myAdminEmail
+                            )
+                        }
+                    }
                 }
             }
             teamDocListener?.remove()
@@ -567,6 +585,19 @@ class AdminActivity : AppCompatActivity() {
                             if (nameChanged && page in listOf("teams", "settings", "notifications")) {
                                 navigate(page, triggerRefresh = false)
                             }
+                            val currentDocLeader = preferences.getString("team_leader_uid_$activeCode", "").orEmpty().trim()
+                            val currentDocEmail = preferences.getString("team_leader_email_$activeCode", "").orEmpty().trim().lowercase()
+                            val isLead = (currentDocLeader.isNotBlank() && currentDocLeader == myAdminUid) ||
+                                         (currentDocLeader.isBlank() && currentDocEmail.isNotBlank() && currentDocEmail == myAdminEmail)
+                            val isSub = isCurrentUserSubstituteLeader()
+                            if (!isLead && !isSub && (currentDocLeader.isNotBlank() || currentDocEmail.isNotBlank())) {
+                                handleAdminSelfRoleSync(
+                                    remoteMinistryRole = "Member",
+                                    remoteRole = "Member",
+                                    myUid = myAdminUid,
+                                    myEmail = myAdminEmail
+                                )
+                            }
                         }
                     }
                 },
@@ -578,11 +609,6 @@ class AdminActivity : AppCompatActivity() {
             )
         }
 
-        val myAdminUid = com.example.syncedn.data.auth.AuthManager.currentUser?.uid?.takeIf { it.isNotBlank() }
-            ?: preferences.getString(SessionManager.KEY_USER_ID, "").orEmpty().ifBlank {
-                preferences.getString("userId", "").orEmpty()
-            }
-        val myAdminEmail = preferences.getString("email", "").orEmpty().trim().lowercase()
         if (true) {
             if (myAdminUid.isNotBlank()) {
                 userMembershipListener?.remove()
@@ -794,8 +820,13 @@ class AdminActivity : AppCompatActivity() {
             return
         }
 
+        val isCurrentTeamDesignatedLeader = (designatedLeaderUid.isNotBlank() && myUid == designatedLeaderUid) ||
+            (designatedLeaderUid.isBlank() && designatedLeader.isNotBlank() && designatedLeader == emailLower)
+
         // 2. Permanent Worship Leader in Firestore
-        if (TeamRepository.isWorshipLeader(remoteMinistryRole, remoteRole)) {
+        if (TeamRepository.isWorshipLeader(remoteMinistryRole, remoteRole) &&
+            (isCurrentTeamDesignatedLeader || (designatedLeaderUid.isBlank() && designatedLeader.isBlank()))
+        ) {
             val wasNotWorshipLeader = !currentMinistry.equals("Worship Leader", ignoreCase = true)
             if (now - lastRoleSwitchTime < 3000L && lastSwitchedRole == "Worship Leader" && !wasNotWorshipLeader) {
                 return
@@ -981,7 +1012,15 @@ class AdminActivity : AppCompatActivity() {
         val isPermanentLeader = (teamLeaderUid.isNotBlank() && teamLeaderUid == myUid) ||
                                 (teamLeaderUid.isBlank() && teamLeaderEmail.isNotBlank() && teamLeaderEmail == emailLower)
 
-        if (!isPermanentLeader && !isSubLeader && !currentRole.equals("Leader", ignoreCase = true)) {
+        if (!isPermanentLeader && !isSubLeader) {
+            preferences.edit().apply {
+                putString("role", "Member")
+                putString(SessionManager.KEY_ROLE, "Member")
+                if (currentMinistry.equals("Worship Leader", ignoreCase = true) || currentMinistry.equals("Substitute Leader", ignoreCase = true)) {
+                    putString("ministryRole", "Member")
+                    putString(SessionManager.KEY_MINISTRY_ROLE, "Member")
+                }
+            }.apply()
             val intent = Intent(this, MemberActivity::class.java)
                 .putExtra("startPage", "home")
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_CLEAR_TASK)
