@@ -1144,8 +1144,7 @@ object TeamRepository {
                                 if (docLeaderName.isNotBlank()) putString("team_leader_name_$code", docLeaderName)
                                 if (docLeaderEmail.isNotBlank()) {
                                     putString("team_leader_email_$code", docLeaderEmail)
-                                    val isTransferred = !docLeaderEmail.equals("ryanlloydgenturo@gmail.com", ignoreCase = true) && docLeaderUid != "h9yRCswmV1f0Pnia2EnxDv4x4X43"
-                                    putBoolean("transferred_leadership_$code", isTransferred)
+                                    // Dynamic leader sync
                                 }
                             }.apply()
                         }
@@ -1200,12 +1199,10 @@ object TeamRepository {
                                 val leaderInRaw = rawMembers.find { it.uid == docLeaderUid }
                                 val resolvedLeaderEmail = leaderInRaw?.email?.trim()?.lowercase()?.ifBlank { docLeaderEmail } ?: docLeaderEmail
                                 val resolvedLeaderName = leaderInRaw?.fullName?.ifBlank { docLeaderName } ?: docLeaderName
-                                val isTransferred = !resolvedLeaderEmail.equals("ryanlloydgenturo@gmail.com", ignoreCase = true) && docLeaderUid != "h9yRCswmV1f0Pnia2EnxDv4x4X43"
                                 preferences.edit().apply {
                                     putString("team_leader_uid_$code", docLeaderUid)
                                     if (resolvedLeaderName.isNotBlank()) putString("team_leader_name_$code", resolvedLeaderName)
                                     if (resolvedLeaderEmail.isNotBlank()) putString("team_leader_email_$code", resolvedLeaderEmail)
-                                    putBoolean("transferred_leadership_$code", isTransferred)
                                 }.apply()
                             }
                             // Canonical deduplication so multiple documents for the same member are cleanly merged
@@ -5863,10 +5860,6 @@ object TeamRepository {
                         val leaderInRoster = currentRoster.find { it.uid == docLeaderUid }
                         val resolvedEmail = docLeaderEmail.ifBlank { leaderInRoster?.email?.trim()?.lowercase().orEmpty() }
                         val resolvedName = docLeaderName.ifBlank { leaderInRoster?.fullName.orEmpty() }
-                        val origLeaderEmail = "ryanlloydgenturo@gmail.com"
-                        val origLeaderUid = "h9yRCswmV1f0Pnia2EnxDv4x4X43"
-                        val isTransferred = !resolvedEmail.equals(origLeaderEmail, ignoreCase = true) && docLeaderUid != origLeaderUid
-
                         var leaderChanged = false
                         if (preferences != null) {
                             val prevLeaderUid = preferences.getString("team_leader_uid_$code", "").orEmpty().trim()
@@ -5876,7 +5869,6 @@ object TeamRepository {
                                 putString("team_leader_uid_$code", docLeaderUid)
                                 if (resolvedName.isNotBlank()) putString("team_leader_name_$code", resolvedName)
                                 if (resolvedEmail.isNotBlank()) putString("team_leader_email_$code", resolvedEmail)
-                                putBoolean("transferred_leadership_$code", isTransferred)
                             }.apply()
                         }
                         if (currentRoster.isNotEmpty()) {

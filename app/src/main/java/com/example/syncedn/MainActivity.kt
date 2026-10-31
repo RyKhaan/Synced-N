@@ -41,15 +41,16 @@ class MainActivity : MemberActivity() {
         val transferred = preferences.getBoolean("transferred_leadership_$teamCode", false)
         val designatedLeaderUid = preferences.getString("team_leader_uid_$teamCode", "").orEmpty().trim()
         val designatedLeader = preferences.getString("team_leader_email_$teamCode", "").orEmpty().trim().lowercase()
-        val isLeadUser = userEmail == "ryanlloydgenturo@gmail.com" ||
-                         (designatedLeaderUid.isNotBlank() && designatedLeaderUid == effectiveUid) ||
-                         (designatedLeader.isNotBlank() && designatedLeader == userEmail)
+        val isLeadUser = !transferred && (
+            (designatedLeaderUid.isNotBlank() && designatedLeaderUid == effectiveUid) ||
+            (designatedLeader.isNotBlank() && designatedLeader == userEmail)
+        )
         val leftTeam = preferences.getBoolean("leftTeam", false)
         val removedTeamCode = preferences.getString("removedTeamCode", "").orEmpty()
         val removed = preferences.getBoolean("removedByLeader", false) && (removedTeamCode.isBlank() || teamCode.isBlank() || removedTeamCode.equals(teamCode, ignoreCase = true))
 
         val targetStartPage = requestedStart?.takeIf { it.isNotBlank() && it !in listOf("login", "start", "register") } ?: "home"
-        if (savedInstanceState == null && effectiveUid.isNotBlank() && (team.isNotBlank() || isLeadUser) && !leftTeam && !removed && targetStartPage !in listOf("teamChoice", "createTeam", "joinTeam")) {
+        if (savedInstanceState == null && effectiveUid.isNotBlank() && team.isNotBlank() && !leftTeam && !removed && targetStartPage !in listOf("teamChoice", "createTeam", "joinTeam")) {
             if (userRole.equals("Leader", ignoreCase = true) || userMinistry.equals("Substitute Leader", ignoreCase = true) || isLeadUser) {
                 startActivity(
                     Intent(this, AdminActivity::class.java)
@@ -90,12 +91,14 @@ class MainActivity : MemberActivity() {
             val transferred = preferences.getBoolean("transferred_leadership_$teamCode", false)
             val designatedLeaderUid = preferences.getString("team_leader_uid_$teamCode", "").orEmpty().trim()
             val designatedLeader = preferences.getString("team_leader_email_$teamCode", "").orEmpty().trim().lowercase()
-            val isLeadUser = userEmail == "ryanlloydgenturo@gmail.com" ||
-                             (designatedLeaderUid.isNotBlank() && designatedLeaderUid == effectiveUid) ||
-                             (designatedLeader.isNotBlank() && designatedLeader == userEmail)
+            val isLeadUser = !transferred && (
+                (designatedLeaderUid.isNotBlank() && designatedLeaderUid == effectiveUid) ||
+                (designatedLeader.isNotBlank() && designatedLeader == userEmail)
+            )
             val removedTeamCode = preferences.getString("removedTeamCode", "").orEmpty()
             val removed = preferences.getBoolean("removedByLeader", false) && (removedTeamCode.isBlank() || teamCode.isBlank() || removedTeamCode.equals(teamCode, ignoreCase = true))
-            if ((userTeam.isBlank() && !isLeadUser) || removed) {
+            val leftTeam = preferences.getBoolean("leftTeam", false)
+            if (userTeam.isBlank() || removed || leftTeam) {
                 super.navigate("teamChoice")
                 return
             }

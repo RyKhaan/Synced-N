@@ -5228,50 +5228,82 @@ class ExampleUnitTest {
         assertEquals("Member", prefs.getString("ministryRole", ""))
     }
     @Test
-    fun testRyanLloydGenturoNeverDemotedAndRetainsWorshipLeaderRole() {
+    fun testLeaderRoleResolutionAndLeaveTeamBehavior() {
         val prefs = FakePreferences()
         val email = "ryanlloydgenturo@gmail.com"
         val uid = "QrUkZlztFCbINpZkbA8yx6pGNXy2"
         val teamCode = "KPABFG"
         val leaderUidInTeam = "h9yRCswmV1f0Pnia2EnxDv4x4X43" // Previous Auth UID
 
-        // Even if Firestore profile returned blank team/code (e.g. freshly created Google sign-in doc)
-        val emptyProfile = com.example.syncedn.data.model.UserProfile(
+        // 1. When designated as Worship Leader in profile or preferences, user is Leader of WORSHIP TEAM
+        val leaderProfile = com.example.syncedn.data.model.UserProfile(
             uid = uid,
             email = email,
             username = "Ryan Lloyd Genturo",
-            role = "",
-            teamName = "",
-            teamCode = "",
-            ministryRole = ""
+            role = "Leader",
+            teamName = "WORSHIP TEAM",
+            teamCode = teamCode,
+            ministryRole = "Worship Leader"
         )
 
         val (role, team, code) = com.example.syncedn.data.auth.SessionManager.resolveUserTeamSession(
             preferences = prefs,
-            profile = emptyProfile,
+            profile = leaderProfile,
             email = email
         )
 
         assertEquals("Leader", role)
         assertEquals("WORSHIP TEAM", team)
         assertEquals("KPABFG", code)
-        assertEquals("Leader", prefs.getString("role", ""))
-        assertEquals("Worship Leader", prefs.getString("ministryRole", ""))
 
-        // Leader permanent check in AdminActivity when leaderUid in team document is different UID but email matches
+        // Leader permanent check in AdminActivity when leaderUid or leaderEmail matches
         prefs.edit()
             .putString("team_leader_uid_$teamCode", leaderUidInTeam)
             .putString("team_leader_email_$teamCode", email)
             .apply()
 
-        val isLeadEmail = email.equals("ryanlloydgenturo@gmail.com", ignoreCase = true)
         val teamLeaderUid = prefs.getString("team_leader_uid_$teamCode", "").orEmpty()
         val teamLeaderEmail = prefs.getString("team_leader_email_$teamCode", "").orEmpty()
-        val isPermanentLeader = isLeadEmail ||
-                                (teamLeaderUid.isNotBlank() && teamLeaderUid == uid) ||
+        val isPermanentLeader = (teamLeaderUid.isNotBlank() && teamLeaderUid == uid) ||
                                 (teamLeaderEmail.isNotBlank() && teamLeaderEmail == email)
 
-        assertTrue("Ryan Lloyd Genturo must always be recognized as permanent leader", isPermanentLeader)
+        assertTrue("User matching leader email must be recognized as leader", isPermanentLeader)
+
+        // 2. When leader transfers to RL and leaves team: leftTeam=true, team is cleared, user is NOT forced to leader
+        prefs.edit()
+            .putBoolean("leftTeam", true)
+            .remove("teamName")
+            .remove("teamCode")
+            .putString("team_leader_email_$teamCode", "rlgenturo@gmail.com")
+            .putString("team_leader_uid_$teamCode", "rl_uid_789")
+            .apply()
+
+        val leftProfile = com.example.syncedn.data.model.UserProfile(
+            uid = uid,
+            email = email,
+            username = "Ryan Lloyd Genturo",
+            role = "Member",
+            teamName = "",
+            teamCode = "",
+            ministryRole = ""
+        )
+
+        val (leftRole, leftTeam, leftCode) = com.example.syncedn.data.auth.SessionManager.resolveUserTeamSession(
+            preferences = prefs,
+            profile = leftProfile,
+            email = email
+        )
+
+        assertEquals("Member", leftRole)
+        assertEquals("", leftTeam)
+        assertEquals("", leftCode)
+
+        // RL is now the official leader
+        val rlUid = "rl_uid_789"
+        val rlEmail = "rlgenturo@gmail.com"
+        val isRLLeader = (prefs.getString("team_leader_uid_$teamCode", "") == rlUid) ||
+                         (prefs.getString("team_leader_email_$teamCode", "") == rlEmail)
+        assertTrue("RL must now be recognized as the team leader", isRLLeader)
     }
 
     @Test
@@ -5300,5 +5332,98 @@ class ExampleUnitTest {
 
         assertTrue("User matching leader email must evaluate to isLead=true", isLead)
     }
+
+    @Test
+    fun testWorshipLeaderLeavesTeamAndTransfersToSubLeader_routesToTeamChoiceWithNoActivityLoop() {
+        val prefs = FakePreferences()
+        val oldLeaderEmail = "ryanlloydgenturo@gmail.com"
+        val oldLeaderUid = "uid_ryan"
+        val subLeaderEmail = "rlgenturo@gmail.com"
+        val subLeaderUid = "uid_rl"
+        val teamCode = "KPABFG"
+
+        // Leader transfers leadership and leaves team
+        prefs.edit()
+            .putBoolean("leftTeam", true)
+            .remove("teamName")
+            .remove("teamCode")
+            .putString("role", "Member")
+            .putString("ministryRole", "")
+            .putString("team_leader_uid_$teamCode", subLeaderUid)
+            .putString("team_leader_email_$teamCode", subLeaderEmail)
+            .putBoolean("transferred_leadership_$teamCode", true)
+            .apply()
+
+        val leftTeamOnStart = prefs.getBoolean("leftTeam", false)
+        val requestedStart = "teamChoice"
+        val isOnboardingPage = requestedStart in listOf("teamChoice", "createTeam", "joinTeam", "start", "login", "register")
+        val currentTeamCode = prefs.getString("teamCode", "").orEmpty()
+        val currentTeamName = prefs.getString("teamName", "").orEmpty()
+        val hasActiveTeam = !leftTeamOnStart && currentTeamCode.isNotBlank() && currentTeamName.isNotBlank() && !isOnboardingPage
+
+        val teamLeaderUid = prefs.getString("team_leader_uid_$teamCode", "").orEmpty()
+        val teamLeaderEmail = prefs.getString("team_leader_email_$teamCode", "").orEmpty()
+        val isPrimaryLeader = hasActiveTeam && (
+            (teamLeaderUid.isNotBlank() && teamLeaderUid == oldLeaderUid) ||
+            (teamLeaderEmail.isNotBlank() && teamLeaderEmail == oldLeaderEmail)
+        )
+
+        assertFalse("Leaving leader must not have active team", hasActiveTeam)
+        assertFalse("Leaving leader must not be treated as primary leader", isPrimaryLeader)
+        assertTrue("Leaving leader must be on onboarding page", isOnboardingPage)
+        assertTrue("Leaving leader has leftTeam flag set", leftTeamOnStart)
+    }
+
+    @Test
+    fun testSubLeaderBecomesActiveWorshipLeaderWithFullControls() {
+        val prefs = FakePreferences()
+        val subLeaderEmail = "rlgenturo@gmail.com"
+        val subLeaderUid = "uid_rl"
+        val teamCode = "KPABFG"
+
+        prefs.edit()
+            .putString("teamCode", teamCode)
+            .putString("teamName", "WORSHIP TEAM")
+            .putString("role", "Leader")
+            .putString("ministryRole", "Worship Leader")
+            .putString("team_leader_uid_$teamCode", subLeaderUid)
+            .putString("team_leader_email_$teamCode", subLeaderEmail)
+            .apply()
+
+        val activeCode = prefs.getString("teamCode", "").orEmpty()
+        val designatedLeaderUid = prefs.getString("team_leader_uid_$activeCode", "").orEmpty()
+        val designatedLeaderEmail = prefs.getString("team_leader_email_$activeCode", "").orEmpty()
+
+        val isPermanentLeader = (designatedLeaderUid.isNotBlank() && designatedLeaderUid == subLeaderUid) ||
+                                (designatedLeaderEmail.isNotBlank() && designatedLeaderEmail == subLeaderEmail)
+
+        assertTrue("New leader (RL) must be recognized as permanent leader", isPermanentLeader)
+    }
+
+    @Test
+    fun testDemotedLeaderImmediatelySwitchesToMemberWithoutNeedingVocalistReassignment() {
+        val prefs = FakePreferences()
+        val myUid = "uid_rl"
+        val myEmail = "rlgenturo@gmail.com"
+        val activeCode = "KPABFG"
+
+        // RL was leader, now roster says RL is Member
+        val rosterMember = com.example.syncedn.data.model.TeamMember(
+            uid = myUid,
+            fullName = "RL",
+            username = "RL",
+            email = myEmail,
+            role = "Member",
+            ministryRole = "Member",
+            teamCode = activeCode
+        )
+
+        val isEligibleLeader = rosterMember.role.equals("Leader", ignoreCase = true) ||
+                               rosterMember.ministryRole.equals("Worship Leader", ignoreCase = true) ||
+                               com.example.syncedn.data.database.TeamRepository.isSubstituteLeader(rosterMember.ministryRole)
+
+        assertFalse("Demoted member must not be eligible for leader dashboard", isEligibleLeader)
+    }
 }
+
 

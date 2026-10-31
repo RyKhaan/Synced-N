@@ -175,7 +175,7 @@ object SessionManager {
             putString(KEY_LANGUAGE, language)
             putString(KEY_MINISTRY_ROLE, ministryRole)
             if (profile?.role?.isNotBlank() == true) {
-                val computedRole = if (emailLower == "ryanlloydgenturo@gmail.com") "Leader" else profile.role
+                val computedRole = profile.role
                 putString(KEY_ROLE, computedRole)
                 putString("role", computedRole)
                 if (effectiveUid.isNotBlank()) putString("user_role_$effectiveUid", computedRole)
@@ -280,13 +280,12 @@ object SessionManager {
             .ifBlank { if (uid.isNotBlank()) preferences.getString("user_code_$uid", "").orEmpty() else "" }
             .ifBlank { preferences.getString(KEY_TEAM_CODE, "").orEmpty() }
 
-        val isLeadUser = emailLower == "ryanlloydgenturo@gmail.com"
         val remoteRole = profile?.role.orEmpty()
         val remoteTeam = profile?.teamName.orEmpty()
         val remoteCode = profile?.teamCode.orEmpty()
+        val isLeftTeam = preferences.getBoolean("leftTeam", false)
 
-        val isRemoved = !isLeadUser && (
-            (profile?.removedByLeader == true) ||
+        val isRemoved = (profile?.removedByLeader == true) ||
             preferences.getBoolean("removedByLeader", false) ||
             preferences.getBoolean("email_removed_by_leader_$emailLower", false) ||
             (uid.isNotBlank() && preferences.getBoolean("user_removed_by_leader_$uid", false)) ||
@@ -296,11 +295,10 @@ object SessionManager {
             preferences.getStringSet("removedMembers", emptySet()).orEmpty().let { set ->
                 set.any { it.equals(emailLower, true) || (uid.isNotBlank() && it.equals(uid, true)) }
             }
-        )
 
-        val hasNoRemoteTeam = !isLeadUser && (profile != null && remoteTeam.isBlank() && remoteCode.isBlank())
+        val hasNoRemoteTeam = (profile != null && remoteTeam.isBlank() && remoteCode.isBlank())
 
-        if (isRemoved || hasNoRemoteTeam) {
+        if (isRemoved || hasNoRemoteTeam || isLeftTeam) {
             preferences.edit {
                 remove(KEY_TEAM_NAME)
                 remove(KEY_TEAM_CODE)
@@ -325,20 +323,18 @@ object SessionManager {
                     }
                 }
             }
-            val finalRole = if (isLeadUser) "Leader" else "Member"
+            val finalRole = "Member"
             return Triple(finalRole, "", "")
         }
 
         // Remote takes priority if local is empty (e.g. clean install/new device), or merges seamlessly
-        val finalTeam = if (remoteTeam.isNotBlank()) remoteTeam else (if (isLeadUser) savedTeam.ifBlank { "WORSHIP TEAM" } else savedTeam)
+        val finalTeam = if (remoteTeam.isNotBlank()) remoteTeam else savedTeam
         val finalCode = (if (remoteCode.isNotBlank()) remoteCode else savedCode)
             .ifBlank { if (finalTeam.isNotBlank()) preferences.getString("team_leader_code_${finalTeam.trim().lowercase()}", "").orEmpty() else "" }
             .ifBlank { if (finalTeam.isNotBlank()) com.example.syncedn.data.database.FirestoreManager.findCodeByTeamName(finalTeam).orEmpty() else "" }
-            .ifBlank { if (isLeadUser) "KPABFG" else "" }
 
         val remoteMinistry = profile?.ministryRole.orEmpty()
         val finalRole = when {
-            isLeadUser -> "Leader"
             remoteMinistry.isNotBlank() && com.example.syncedn.data.database.TeamRepository.isOrdinaryMemberRole(remoteMinistry, remoteRole) -> "Member"
             com.example.syncedn.data.database.TeamRepository.isSubstituteLeader(remoteMinistry) && !remoteRole.equals("Member", ignoreCase = true) -> "Leader"
             remoteRole.isNotBlank() -> remoteRole
@@ -350,21 +346,7 @@ object SessionManager {
         preferences.edit {
             putString(KEY_ROLE, finalRole)
             putString("role", finalRole)
-            if (isLeadUser) {
-                putString(KEY_MINISTRY_ROLE, "Worship Leader")
-                putString("ministryRole", "Worship Leader")
-                if (finalTeam.isNotBlank()) {
-                    putString(KEY_TEAM_NAME, finalTeam)
-                    putString("teamName", finalTeam)
-                }
-                if (finalCode.isNotBlank()) {
-                    putString(KEY_TEAM_CODE, finalCode)
-                    putString("teamCode", finalCode)
-                    if (uid.isNotBlank()) putString("team_leader_uid_$finalCode", uid)
-                    if (emailLower.isNotBlank()) putString("team_leader_email_$finalCode", emailLower)
-                    putString("team_leader_name_$finalCode", "Ryan Lloyd Genturo")
-                }
-            } else if (remoteMinistry.isNotBlank()) {
+            if (remoteMinistry.isNotBlank()) {
                 putString(KEY_MINISTRY_ROLE, remoteMinistry)
                 putString("ministryRole", remoteMinistry)
             }
@@ -386,13 +368,7 @@ object SessionManager {
             }
         }
 
-        if (isLeadUser) {
-            preferences.edit {
-                putString("email_role_$emailLower", "Leader")
-                if (uid.isNotBlank()) putString("user_role_$uid", "Leader")
-                putString(KEY_ROLE, "Leader")
-            }
-        }
+        // No hardcoded role override
 
         if (finalCode.isNotBlank() && finalTeam.isNotBlank()) {
             preferences.edit {
