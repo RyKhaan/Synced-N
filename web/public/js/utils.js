@@ -1,4 +1,4 @@
-import { CLOUDINARY_CONFIG, TEAM_CODE_CHARS } from "./config.js";
+import { CLOUDINARY_CONFIG, TEAM_CODE_CHARS, CHROMATIC_ROOTS, DEFAULT_SEED_SONGS } from "./config.js";
 
 const DISPOSABLE_DOMAINS = new Set([
   "tempmail.com", "temp-mail.org", "mailinator.com", "10minutemail.com",
@@ -206,7 +206,7 @@ export async function uploadImageToCloudinary(file, maxDimension = 900, quality 
   return data.secure_url;
 }
 
-// YouTube helpers matching SongData.kt
+// YouTube & Song Cover helpers matching SongData.kt and MemberActivity.kt
 export function extractYoutubeVideoId(url) {
   if (!url) return null;
   const clean = String(url).trim();
@@ -221,7 +221,32 @@ export function getYoutubeThumbnailUrl(url) {
   return id ? `https://img.youtube.com/vi/${id}/hqdefault.jpg` : null;
 }
 
-// Musical Chord Transposition Engine
+export function resolveSongCoverUrl(song) {
+  if (!song) return null;
+  if (song.coverImageUrl && String(song.coverImageUrl).trim()) {
+    return String(song.coverImageUrl).trim();
+  }
+  if (song.imageUrl && String(song.imageUrl).trim()) {
+    return String(song.imageUrl).trim();
+  }
+  const ytThumb = getYoutubeThumbnailUrl(song.referenceUrl);
+  if (ytThumb) return ytThumb;
+
+  // Fallback: match against known worship seed catalog by title (matching MemberActivity.kt songCover)
+  const cleanTitle = String(song.title || "").trim().toLowerCase();
+  if (cleanTitle) {
+    const seedMatch = DEFAULT_SEED_SONGS.find((s) => s.title.toLowerCase() === cleanTitle);
+    if (seedMatch && seedMatch.referenceUrl) {
+      const seedThumb = getYoutubeThumbnailUrl(seedMatch.referenceUrl);
+      if (seedThumb) return seedThumb;
+    }
+  }
+  return null;
+}
+
+// ============================================================================
+// Musical Chord Transposition Engine (100% aligned with ChordSheet.java)
+// ============================================================================
 const CHROMATIC_SHARP = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
 const CHROMATIC_FLAT = ["C", "Db", "D", "Eb", "E", "F", "Gb", "G", "Ab", "A", "Bb", "B"];
 const NOTE_INDEX = {
@@ -239,52 +264,107 @@ const NOTE_INDEX = {
   B: 11, Cb: 11
 };
 
-export function getSemitoneDiff(fromKey = "C", toKey = "C") {
-  const cleanRoot = (k) => {
-    const m = String(k || "C").trim().match(/^([A-G][#b]?)/i);
-    if (!m) return "C";
-    return m[1][0].toUpperCase() + (m[1][1] || "");
-  };
-  const i1 = NOTE_INDEX[cleanRoot(fromKey)] ?? 0;
-  const i2 = NOTE_INDEX[cleanRoot(toKey)] ?? 0;
-  return (i2 - i1 + 12) % 12;
+export function normalizeNoteAccidental(note = "") {
+  return String(note).replace(/♯/g, "#").replace(/♭/g, "b");
 }
 
-export function transposeSingleNote(note, semitones, useFlats = false) {
+export function getNotePitch(note = "C") {
+  const clean = normalizeNoteAccidental(String(note || "C").trim());
+  const m = clean.match(/^([A-Ga-g])([#b]?)/);
+  if (!m) return 0;
+  const root = m[1].toUpperCase() + (m[2] || "");
+  return NOTE_INDEX[root] ?? 0;
+}
+
+export function isMinorKey(key = "C") {
+  const clean = String(key || "C").trim();
+  return (/m$/i.test(clean) && !/maj$/i.test(clean)) || /minor$/i.test(clean);
+}
+
+export function shouldUseFlatsForKey(key = "C") {
+  const clean = normalizeNoteAccidental(String(key || "C").trim());
+  if (clean.includes("b")) return true;
+  if (clean.includes("#")) return false;
+  const upper = clean.toUpperCase();
+  return ["F", "DM", "GM", "CM", "FM", "BB", "EB", "AB", "DB", "GB", "BBM", "EBM"].includes(upper);
+}
+
+export function getSemitoneDiff(fromKey = "C", toKey = "C") {
+  const i1 = getNotePitch(fromKey);
+  const i2 = getNotePitch(toKey);
+  return ((i2 - i1) % 12 + 12) % 12;
+}
+
+export function transposeSingleNote(note, semitones, useFlats = null) {
   if (!note) return note;
-  const formatted = note[0].toUpperCase() + (note.slice(1) || "");
-  const idx = NOTE_INDEX[formatted];
+  const clean = normalizeNoteAccidental(String(note).trim());
+  const match = clean.match(/^([A-Ga-g][#b]?)(.*)$/);
+  if (!match) return note;
+  const rootPart = match[1][0].toUpperCase() + (match[1].slice(1) || "");
+  const suffix = match[2] || "";
+  const idx = NOTE_INDEX[rootPart];
   if (idx === undefined) return note;
   const nextIdx = ((idx + semitones) % 12 + 12) % 12;
-  return (useFlats ? CHROMATIC_FLAT : CHROMATIC_SHARP)[nextIdx];
+  const preferFlats = useFlats !== null ? useFlats : (CHROMATIC_ROOTS[nextIdx].includes("b") || CHROMATIC_ROOTS[nextIdx] === "F");
+  const nextRoot = (preferFlats ? CHROMATIC_FLAT : CHROMATIC_SHARP)[nextIdx];
+  return `${nextRoot}${suffix}`;
+}
+
+export function getTargetKeyLabel(originalKey = "C", semitones = 0, useFlatsOverride = null) {
+  const minor = isMinorKey(originalKey);
+  const basePitch = getNotePitch(originalKey);
+  const targetPitch = ((basePitch + semitones) % 12 + 12) % 12;
+  let rootName;
+  if (useFlatsOverride === true) {
+    rootName = CHROMATIC_FLAT[targetPitch];
+  } else if (useFlatsOverride === false) {
+    rootName = CHROMATIC_SHARP[targetPitch];
+  } else {
+    rootName = CHROMATIC_ROOTS[targetPitch];
+  }
+  return `${rootName}${minor ? "m" : ""}`;
+}
+
+const CHORD_TOKEN_REGEX = /^([A-G][#b♯♭]?)((?:(?:maj|min|dim|aug|sus|add|omit|no|alt|m|M)|[0-9#b♯♭(),°ø+\-])*)(?:\/([A-G][#b♯♭]?))?$/;
+
+export function isChordToken(tok) {
+  if (!tok) return false;
+  const clean = String(tok).trim();
+  if (clean === "N.C.") return true;
+  return CHORD_TOKEN_REGEX.test(clean);
 }
 
 export function transposeChordToken(chord, semitones, useFlats = false) {
-  if (!semitones) return chord;
-  return String(chord).replace(/^([A-G][#b]?)(.*?)(\/([A-G][#b]?))?$/, (_, root, quality, slashFull, bass) => {
-    const newRoot = transposeSingleNote(root, semitones, useFlats);
-    const newBass = bass ? "/" + transposeSingleNote(bass, semitones, useFlats) : "";
-    return `${newRoot}${quality || ""}${newBass}`;
-  });
-}
-
-function isChordToken(tok) {
-  return /^[A-G][#b]?(?:m|maj|min|dim|aug|sus|add|\d|[+\-()])*(?:\/[A-G][#b]?)?$/.test(tok);
+  if (!chord) return chord;
+  const clean = normalizeNoteAccidental(String(chord).trim());
+  if (clean === "N.C.") return clean;
+  const m = clean.match(/^([A-G][#b]?)((?:(?:maj|min|dim|aug|sus|add|omit|no|alt|m|M)|[0-9#b(),°ø+\-])*)(?:\/([A-G][#b]?))?$/);
+  if (!m) return chord;
+  const [, root, quality, bass] = m;
+  const scale = useFlats ? CHROMATIC_FLAT : CHROMATIC_SHARP;
+  const rootPitch = ((getNotePitch(root) + semitones) % 12 + 12) % 12;
+  const newRoot = scale[rootPitch];
+  let newBass = "";
+  if (bass) {
+    const bassPitch = ((getNotePitch(bass) + semitones) % 12 + 12) % 12;
+    newBass = "/" + scale[bassPitch];
+  }
+  return `${newRoot}${quality || ""}${newBass}`;
 }
 
 function isLikelyChordLine(line) {
   const trimmed = line.trim();
   if (!trimmed || trimmed.startsWith("[") || trimmed.startsWith("{")) return false;
-  const tokens = trimmed.split(/\s+/).filter((t) => t !== "|" && t !== "-" && t !== "/");
+  const tokens = trimmed.split(/\s+/).filter((t) => !/^[|:%\-/]+$/.test(t));
   if (!tokens.length) return false;
   const chordCount = tokens.filter(isChordToken).length;
   return chordCount > 0 && chordCount / tokens.length >= 0.65;
 }
 
-export function renderFormattedChordSheet(rawSheet = "", rawLyrics = "", semitones = 0, lyricsOnly = false) {
+export function renderFormattedChordSheet(rawSheet = "", rawLyrics = "", semitones = 0, lyricsOnly = false, useFlats = false) {
   const source = (rawSheet && rawSheet.trim()) ? rawSheet : (rawLyrics || "");
   if (!source.trim()) {
-    return `<div class="text-slate-400 italic py-6 text-center">No chord sheet or lyrics added for this song yet.</div>`;
+    return `<div class="text-slate-400 italic py-8 text-center">No chord sheet or lyrics added for this song yet.</div>`;
   }
 
   const lines = source.replace(/\r\n/g, "\n").split("\n");
@@ -293,25 +373,35 @@ export function renderFormattedChordSheet(rawSheet = "", rawLyrics = "", semiton
   for (const line of lines) {
     const trimmed = line.trim();
 
-    // Check section header e.g. [Verse 1], [Chorus], {soc}, Verse 1:
-    if (/^\[(?:Verse|Chorus|Pre-Chorus|Bridge|Intro|Outro|Instrumental|Interlude|Tag|Ending|Refrain|Hook|Solo)[^\]]*\]$/i.test(trimmed) ||
-        /^(?:Verse|Chorus|Pre-Chorus|Bridge|Intro|Outro|Instrumental|Interlude|Tag|Refrain)(?:\s+\d+)?\s*:?$/i.test(trimmed)) {
-      const label = trimmed.replace(/^\[|\]$/g, "");
-      out.push(`<div><span class="section-header-line">${escapeHtml(label)}</span></div>`);
+    // Section header e.g. [Verse 1], [Chorus], [Bridge], Verse 1:
+    if (/^\[(?:Verse|Chorus|Pre-Chorus|Prechorus|Bridge|Intro|Outro|Instrumental|Interlude|Tag|Ending|Refrain|Hook|Solo|Vamp|Coda)[^\]]*\]$/i.test(trimmed) ||
+        /^(?:Verse|Chorus|Pre-Chorus|Prechorus|Bridge|Intro|Outro|Instrumental|Interlude|Tag|Refrain|Vamp|Coda)(?:\s+\d+)?\s*:?$/i.test(trimmed)) {
+      const label = trimmed.replace(/^\[|\]$|:$/g, "");
+      out.push(`<div class="section-header-wrapper"><span class="section-header-line">${escapeHtml(label)}</span></div>`);
       continue;
     }
 
     // Inline [Chord] notation (ChordPro style)
-    if (/\[([A-G][#b]?[^\]]*)\]/.test(line)) {
+    if (/\[([^\]]+)\]/.test(line)) {
       if (lyricsOnly) {
-        const stripped = line.replace(/\[([^\]]+)\]/g, "").replace(/\s{2,}/g, " ").trim();
-        if (stripped) out.push(`<div>${escapeHtml(stripped)}</div>`);
+        const stripped = line.replace(/\[([^\]]+)\]/g, (_, token) => {
+          return isChordToken(token) ? "" : `[${token}]`;
+        }).replace(/\s{2,}/g, " ").trim();
+        if (stripped) out.push(`<div class="lyric-line">${escapeHtml(stripped)}</div>`);
       } else {
-        const htmlLine = escapeHtml(line).replace(/\[([A-G][#b]?[^\]]*)\]/g, (_, ch) => {
-          const transposed = transposeChordToken(ch, semitones);
-          return `<span class="chord-token">${escapeHtml(transposed)}</span>`;
+        // Split line around [Chord] brackets safely
+        const parts = line.split(/(\[[^\]]+\])/g);
+        const htmlParts = parts.map((part) => {
+          if (part.startsWith("[") && part.endsWith("]")) {
+            const inner = part.slice(1, -1).trim();
+            if (isChordToken(inner)) {
+              const transposed = transposeChordToken(inner, semitones, useFlats);
+              return `<span class="chord-token">${escapeHtml(transposed)}</span>`;
+            }
+          }
+          return escapeHtml(part);
         });
-        out.push(`<div>${htmlLine}</div>`);
+        out.push(`<div class="lyric-chord-line">${htmlParts.join("")}</div>`);
       }
       continue;
     }
@@ -319,37 +409,124 @@ export function renderFormattedChordSheet(rawSheet = "", rawLyrics = "", semiton
     // Chord-over-lyric line
     if (isLikelyChordLine(line)) {
       if (lyricsOnly) continue;
-      const transposedLine = line.replace(/([A-G][#b]?(?:m|maj|min|dim|aug|sus|add|\d|[+\-()])*(?:\/[A-G][#b]?)?)/g, (tok) => {
-        return isChordToken(tok) ? transposeChordToken(tok, semitones) : tok;
+      const transposedLine = line.replace(/\S+/g, (tok) => {
+        return isChordToken(tok) ? transposeChordToken(tok, semitones, useFlats) : tok;
       });
       out.push(`<div class="chord-line">${escapeHtml(transposedLine)}</div>`);
       continue;
     }
 
-    out.push(`<div>${escapeHtml(line) || "&nbsp;"}</div>`);
+    out.push(`<div class="lyric-line">${escapeHtml(line) || "&nbsp;"}</div>`);
   }
 
   return out.join("");
 }
 
-// WebAudio Metronome Engine
+// ============================================================================
+// High-Precision Decimal BPM Metronome Engine
+// Formula: Beat Interval (milliseconds) = 60,000 / BPM
+// ============================================================================
+
+export function formatBpmDisplay(bpm) {
+  const num = Number(bpm);
+  if (!Number.isFinite(num)) return "74";
+  // Preserve exact entered decimals up to 2-3 places without floating point noise
+  const rounded = Math.round(num * 1000) / 1000;
+  return String(rounded);
+}
+
+export function validateBpmValue(rawInput) {
+  const str = String(rawInput ?? "").trim();
+  if (!str) {
+    return { valid: false, bpm: 74, value: 74, display: "", intervalMs: 60000 / 74, error: "Enter a BPM value between 30 and 240." };
+  }
+  // Must be a valid positive number (integer or decimal with up to 3 decimal digits)
+  if (!/^\d+(?:\.\d{1,3})?$/.test(str)) {
+    return { valid: false, bpm: 74, value: 74, display: str, intervalMs: 60000 / 74, error: "Enter a valid number (e.g. 72, 72.5, 100.25)." };
+  }
+  const parsed = parseFloat(str);
+  if (!Number.isFinite(parsed) || parsed < 30 || parsed > 240) {
+    return { valid: false, bpm: parsed || 74, value: parsed || 74, display: str, intervalMs: 60000 / 74, error: "BPM must be between 30 and 240." };
+  }
+  const intervalMs = 60000 / parsed;
+  return {
+    valid: true,
+    bpm: parsed,
+    value: parsed,
+    display: formatBpmDisplay(parsed),
+    intervalMs,
+    error: null
+  };
+}
+
 export class MetronomeEngine {
   constructor(onBeatCallback) {
     this.audioCtx = null;
     this.isPlaying = false;
     this.bpm = 74;
+    this.meter = 4; // Beats per bar (1 to 12, matching MetronomeView.kt)
     this.beatIndex = 0;
     this.timerId = null;
+    this.nextBeatTimeMs = 0;
+    this.tapTimes = [];
     this.onBeatCallback = onBeatCallback;
   }
 
-  setBpm(bpm) {
-    const parsed = parseInt(bpm, 10);
-    this.bpm = Math.min(240, Math.max(30, isNaN(parsed) ? 74 : parsed));
-    if (this.isPlaying) {
-      this.stop();
-      this.start();
+  getBeatIntervalMs() {
+    return 60000 / this.bpm;
+  }
+
+  setBpm(bpmInput) {
+    const check = validateBpmValue(bpmInput);
+    if (check.valid) {
+      this.bpm = check.bpm;
+    } else {
+      const fallback = parseFloat(bpmInput);
+      if (Number.isFinite(fallback)) {
+        this.bpm = Math.min(240, Math.max(30, Math.round(fallback * 1000) / 1000));
+      } else {
+        this.bpm = 74;
+      }
     }
+    if (this.isPlaying) {
+      // Seamless tempo update without losing play state
+      if (this.timerId) {
+        clearTimeout(this.timerId);
+        this.timerId = null;
+      }
+      this.nextBeatTimeMs = performance.now() + this.getBeatIntervalMs();
+      this.scheduleNextTick();
+    }
+    return this.bpm;
+  }
+
+  setMeter(meterInput) {
+    const parsed = parseInt(meterInput, 10);
+    this.meter = Math.min(12, Math.max(1, isNaN(parsed) ? 4 : parsed));
+    this.beatIndex = 0;
+    return this.meter;
+  }
+
+  tapTempo() {
+    const now = performance.now();
+    if (this.tapTimes.length > 0 && now - this.tapTimes[this.tapTimes.length - 1] > 2200) {
+      this.tapTimes = [];
+    }
+    this.tapTimes.push(now);
+    while (this.tapTimes.length > 6) {
+      this.tapTimes.shift();
+    }
+    if (this.tapTimes.length >= 2) {
+      const avgIntervalMs = (now - this.tapTimes[0]) / (this.tapTimes.length - 1);
+      if (avgIntervalMs > 0) {
+        // Round tap tempo to nearest 0.5 BPM for clean usability
+        const rawBpm = 60000 / avgIntervalMs;
+        const clamped = Math.min(240, Math.max(30, Math.round(rawBpm * 2) / 2));
+        this.setBpm(clamped);
+        return clamped;
+      }
+    }
+    return null;
   }
 
   playClick(isAccent) {
@@ -365,7 +542,7 @@ export class MetronomeEngine {
       const gain = this.audioCtx.createGain();
       osc.type = "triangle";
       osc.frequency.setValueAtTime(isAccent ? 1046.5 : 784.0, this.audioCtx.currentTime);
-      gain.gain.setValueAtTime(0.35, this.audioCtx.currentTime);
+      gain.gain.setValueAtTime(0.38, this.audioCtx.currentTime);
       gain.gain.exponentialRampToValueAtTime(0.001, this.audioCtx.currentTime + 0.065);
       osc.connect(gain);
       gain.connect(this.audioCtx.destination);
@@ -376,29 +553,56 @@ export class MetronomeEngine {
     }
   }
 
+  scheduleNextTick() {
+    if (!this.isPlaying) return;
+    const now = performance.now();
+    const delay = Math.max(0, this.nextBeatTimeMs - now);
+
+    this.timerId = setTimeout(() => {
+      if (!this.isPlaying) return;
+      const beatInBar = (this.beatIndex % this.meter) + 1;
+      const isAccent = beatInBar === 1;
+      this.playClick(isAccent);
+      if (this.onBeatCallback) {
+        this.onBeatCallback(beatInBar, isAccent, this.bpm, this.meter);
+      }
+      this.beatIndex++;
+      const intervalMs = this.getBeatIntervalMs(); // Exact 60000 / this.bpm
+      this.nextBeatTimeMs += intervalMs;
+      // Guard against background tab lag
+      const currentNow = performance.now();
+      if (this.nextBeatTimeMs < currentNow - intervalMs) {
+        this.nextBeatTimeMs = currentNow + intervalMs;
+      }
+      this.scheduleNextTick();
+    }, delay);
+  }
+
   start() {
     if (this.isPlaying) return;
     this.isPlaying = true;
     this.beatIndex = 0;
-    const tick = () => {
-      if (!this.isPlaying) return;
-      const isAccent = this.beatIndex % 4 === 0;
-      this.playClick(isAccent);
-      if (this.onBeatCallback) this.onBeatCallback((this.beatIndex % 4) + 1, isAccent);
-      this.beatIndex++;
-    };
-    tick();
-    const intervalMs = Math.round(60000 / this.bpm);
-    this.timerId = setInterval(tick, intervalMs);
+
+    // Play Beat 1 immediately
+    const isAccent = true;
+    this.playClick(isAccent);
+    if (this.onBeatCallback) {
+      this.onBeatCallback(1, isAccent, this.bpm, this.meter);
+    }
+    this.beatIndex = 1;
+    this.nextBeatTimeMs = performance.now() + this.getBeatIntervalMs();
+    this.scheduleNextTick();
   }
 
   stop() {
     this.isPlaying = false;
     if (this.timerId) {
-      clearInterval(this.timerId);
+      clearTimeout(this.timerId);
       this.timerId = null;
     }
-    if (this.onBeatCallback) this.onBeatCallback(0, false);
+    if (this.onBeatCallback) {
+      this.onBeatCallback(0, false, this.bpm, this.meter);
+    }
   }
 
   toggle() {

@@ -7,7 +7,8 @@ import {
   signOut,
   GoogleAuthProvider,
   signInWithPopup,
-  sendPasswordResetEmail
+  sendPasswordResetEmail,
+  updatePassword
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
 import {
   getFirestore,
@@ -22,7 +23,13 @@ import {
   onSnapshot
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 
-import { FIREBASE_CONFIG, DEFAULT_MINISTRY_ROLES, MUSICAL_KEYS } from "./config.js";
+import {
+  FIREBASE_CONFIG,
+  DEFAULT_MINISTRY_ROLES,
+  MUSICAL_KEYS,
+  CHROMATIC_ROOTS,
+  DEFAULT_SEED_SONGS
+} from "./config.js";
 import {
   escapeHtml,
   generateTeamCode,
@@ -34,13 +41,21 @@ import {
   hasLeaderPrivileges,
   uploadImageToCloudinary,
   extractYoutubeVideoId,
-  transposeSingleNote,
+  getNotePitch,
+  isMinorKey,
+  shouldUseFlatsForKey,
+  getTargetKeyLabel,
   renderFormattedChordSheet,
+  formatBpmDisplay,
+  validateBpmValue,
   MetronomeEngine
 } from "./utils.js";
 import {
   getAvatarHtml,
+  getSongCoverHtml,
+  renderPasswordInputHtml,
   renderHomeView,
+  renderCalendarView,
   renderScheduleView,
   renderSongsView,
   renderRosterView,
@@ -54,15 +69,24 @@ const auth = getAuth(firebaseApp);
 const db = getFirestore(firebaseApp);
 const googleProvider = new GoogleAuthProvider();
 
+const nowInit = new Date();
+const todayIsoInit = `${nowInit.getFullYear()}-${String(nowInit.getMonth() + 1).padStart(2, "0")}-${String(nowInit.getDate()).padStart(2, "0")}`;
+
 // Central Reactive State
 const state = {
   authLoading: true,
   authUser: null,
   currentUser: null,
   currentTeam: null,
-  activeTab: "home", // home | schedule | songs | roster | chat | profile
+  activeTab: "home", // home | calendar | schedule | songs | roster | chat | profile
   authMode: "login", // login | register | reset
   songSearchQuery: "",
+  songKeyFilter: "",
+  calendar: {
+    year: nowInit.getFullYear(),
+    month: nowInit.getMonth(),
+    selectedDate: todayIsoInit
+  },
   teamMembers: [],
   services: [],
   songs: [],
@@ -75,6 +99,7 @@ const state = {
   stageModal: {
     songId: null,
     semitones: 0,
+    useFlatsOverride: null,
     lyricsOnly: false,
     fontSize: 15,
     autoScrollSpeed: 0,
@@ -82,6 +107,7 @@ const state = {
   }
 };
 
+let lastRenderedViewKey = "";
 let unsubUserDoc = null;
 let unsubTeamDoc = null;
 let unsubMembers = null;
@@ -215,15 +241,39 @@ async function saveCleanTeamDoc(teamCode, updates = {}) {
   return cleanPayload;
 }
 
-const metronome = new MetronomeEngine((beat, isAccent) => {
+// Metronome Instance with Visual Beat Indicator Support
+const metronome = new MetronomeEngine((beat, isAccent, _currentBpm, totalBeats) => {
   const indicator = document.getElementById("metronome-beat-dot");
-  if (!indicator) return;
-  if (beat === 0) {
-    indicator.className = "w-2.5 h-2.5 rounded-full bg-slate-300 transition-all";
-  } else if (isAccent) {
-    indicator.className = "w-2.5 h-2.5 rounded-full bg-amber-500 scale-125 transition-all";
-  } else {
-    indicator.className = "w-2.5 h-2.5 rounded-full bg-indigo-600 scale-110 transition-all";
+  const statusEl = document.getElementById("stage-metronome-status");
+  const playBtn = document.getElementById("stage-metronome-play-btn");
+
+  if (indicator) {
+    if (beat === 0) {
+      indicator.className = "w-3 h-3 rounded-full bg-slate-300 transition-transform duration-75";
+    } else if (isAccent) {
+      indicator.className = "w-3 h-3 rounded-full bg-[#D946EF] scale-125 shadow-xs transition-transform duration-75";
+    } else {
+      indicator.className = "w-3 h-3 rounded-full bg-[#500568] scale-110 transition-transform duration-75";
+    }
+  }
+
+  if (statusEl) {
+    if (beat === 0) {
+      const intervalMs = (60000 / metronome.bpm).toFixed(1);
+      statusEl.textContent = `Ready · ${formatBpmDisplay(metronome.bpm)} BPM (${intervalMs} ms/beat)`;
+    } else {
+      statusEl.textContent = `Beat ${beat} of ${totalBeats} · ${formatBpmDisplay(metronome.bpm)} BPM`;
+    }
+  }
+
+  if (playBtn) {
+    if (metronome.isPlaying) {
+      playBtn.className = "btn btn-danger btn-sm font-semibold min-w-[84px]";
+      playBtn.innerHTML = `<i class="fa-solid fa-stop text-[10px]"></i> Stop`;
+    } else {
+      playBtn.className = "btn btn-primary btn-sm font-semibold min-w-[84px]";
+      playBtn.innerHTML = `<i class="fa-solid fa-play text-[10px]"></i> Start`;
+    }
   }
 });
 
@@ -236,17 +286,17 @@ export function showToast(message, type = "info") {
     success: "border-l-4 border-l-emerald-600",
     error: "border-l-4 border-l-rose-600",
     warning: "border-l-4 border-l-amber-500",
-    info: "border-l-4 border-l-indigo-600"
+    info: "border-l-4 border-l-[#500568]"
   };
   const iconMap = {
     success: "fa-circle-check text-emerald-600",
     error: "fa-circle-exclamation text-rose-600",
     warning: "fa-triangle-exclamation text-amber-500",
-    info: "fa-circle-info text-indigo-600"
+    info: "fa-circle-info text-[#500568]"
   };
 
   const toast = document.createElement("div");
-  toast.className = `pointer-events-auto flex items-center gap-3 px-4 py-3 rounded-md bg-white border border-slate-200 ${borderMap[type] || borderMap.info} text-slate-800 shadow-md text-xs font-medium animate-fade-in`;
+  toast.className = `pointer-events-auto flex items-center gap-3 px-4 py-3 rounded-xl bg-white border border-slate-200 ${borderMap[type] || borderMap.info} text-slate-800 shadow-lg text-xs font-semibold animate-fade-in`;
   toast.innerHTML = `
     <i class="fa-solid ${iconMap[type] || iconMap.info} text-sm shrink-0"></i>
     <span class="flex-1 leading-snug">${escapeHtml(message)}</span>
@@ -267,7 +317,7 @@ function openModal(htmlContent, maxWidthClass = "max-w-lg") {
   modalRoot.classList.remove("hidden");
   modalRoot.classList.add("flex");
   modalRoot.innerHTML = `
-    <div class="modal-card w-full ${maxWidthClass} rounded-lg p-6 text-slate-900 animate-fade-in my-auto max-h-[92vh] overflow-y-auto" onclick="event.stopPropagation()">
+    <div class="modal-card w-full ${maxWidthClass} rounded-2xl p-5 sm:p-6 text-slate-900 animate-scale-in my-auto max-h-[92vh] overflow-y-auto" onclick="event.stopPropagation()">
       ${htmlContent}
     </div>
   `;
@@ -279,6 +329,7 @@ function closeModal() {
     clearInterval(state.stageModal.scrollTimer);
     state.stageModal.scrollTimer = null;
   }
+  state.stageModal.songId = null;
   metronome.stop();
   const modalRoot = document.getElementById("modal-root");
   if (!modalRoot) return;
@@ -476,14 +527,17 @@ onAuthStateChanged(auth, async (fbUser) => {
   });
 });
 
-// Render Root Application
+// Render Root Application (Preserving Focus & Scroll Position Without Flicker)
 function renderApp() {
   const appEl = document.getElementById("app");
   if (!appEl) return;
 
-  // Preserve active input focus for song search or chat input
-  const activeId = document.activeElement?.id;
-  const selectionStart = document.activeElement?.selectionStart;
+  // Preserve active input focus, value, and cursor selection across reactive updates
+  const activeEl = document.activeElement;
+  const activeId = activeEl?.id || "";
+  const selectionStart = typeof activeEl?.selectionStart === "number" ? activeEl.selectionStart : null;
+  const selectionEnd = typeof activeEl?.selectionEnd === "number" ? activeEl.selectionEnd : null;
+  const prevScrollY = window.scrollY;
 
   if (state.authLoading) {
     appEl.innerHTML = renderLoadingState();
@@ -491,27 +545,50 @@ function renderApp() {
   }
 
   if (!state.authUser || !state.currentUser) {
-    appEl.innerHTML = renderAuthView();
+    const viewKey = `auth:${state.authMode}`;
+    const animate = lastRenderedViewKey !== viewKey;
+    lastRenderedViewKey = viewKey;
+    appEl.innerHTML = renderAuthView(animate);
+    restoreFocus(activeId, selectionStart, selectionEnd);
     return;
   }
 
   if (!state.currentUser.teamCode || state.currentUser.removedByLeader) {
-    appEl.innerHTML = renderTeamSetupView();
+    const viewKey = "setup";
+    const animate = lastRenderedViewKey !== viewKey;
+    lastRenderedViewKey = viewKey;
+    appEl.innerHTML = renderTeamSetupView(animate);
+    restoreFocus(activeId, selectionStart, selectionEnd);
     return;
   }
 
-  appEl.innerHTML = renderDashboardShell();
+  const viewKey = `tab:${state.activeTab}`;
+  const animate = lastRenderedViewKey !== viewKey;
+  lastRenderedViewKey = viewKey;
+  appEl.innerHTML = renderDashboardShell(animate);
 
-  if (activeId) {
-    const restored = document.getElementById(activeId);
-    if (restored) {
-      restored.focus();
-      if (typeof selectionStart === "number" && restored.setSelectionRange) {
-        try {
-          restored.setSelectionRange(selectionStart, selectionStart);
-        } catch {
-          // ignore
-        }
+  // Prevent unnecessary fade animation re-triggering when already on the same tab
+  if (!animate) {
+    const mainInner = appEl.querySelector("main > div > .animate-fade-in");
+    if (mainInner) {
+      mainInner.classList.remove("animate-fade-in");
+    }
+    window.scrollTo(0, prevScrollY);
+  }
+
+  restoreFocus(activeId, selectionStart, selectionEnd);
+}
+
+function restoreFocus(activeId, selectionStart, selectionEnd) {
+  if (!activeId) return;
+  const restored = document.getElementById(activeId);
+  if (restored) {
+    restored.focus();
+    if (selectionStart !== null && restored.setSelectionRange) {
+      try {
+        restored.setSelectionRange(selectionStart, selectionEnd ?? selectionStart);
+      } catch {
+        // Ignore on input types that don't support setSelectionRange
       }
     }
   }
@@ -519,43 +596,45 @@ function renderApp() {
 
 function renderLoadingState() {
   return `
-    <div class="min-h-screen flex flex-col items-center justify-center p-6 text-center bg-[#F8FAFC]">
-      <div class="w-12 h-12 rounded-lg bg-white border border-slate-200 shadow-xs flex items-center justify-center mb-4">
-        <img src="/assets/logo.png" alt="Synced N" class="w-8 h-8 object-contain" />
+    <div class="min-h-screen flex flex-col items-center justify-center p-6 text-center bg-[#F7F7FA]">
+      <div class="w-14 h-14 rounded-2xl bg-[#10113F] border border-white/10 shadow-md flex items-center justify-center mb-4">
+        <img src="/assets/synced_n_logo_sharp.png" onerror="this.src='/assets/logo.png'" alt="Synced N" class="w-9 h-9 object-contain" />
       </div>
-      <div class="flex items-center gap-2.5 text-slate-700 font-medium text-sm">
-        <i class="fa-solid fa-circle-notch fa-spin text-indigo-600 text-xs"></i>
-        <span>Synchronizing ministry workspace...</span>
+      <div class="flex items-center gap-2.5 text-[#10113F] font-semibold text-sm">
+        <i class="fa-solid fa-circle-notch fa-spin text-[#500568] text-xs"></i>
+        <span>Synchronizing Synced N workspace...</span>
       </div>
     </div>
   `;
 }
 
-// Authentication Screen (Login / Register / Password Reset)
-function renderAuthView() {
+// Authentication Screen (Login / Register / Password Reset) matching Mobile Brand Palette
+function renderAuthView(animate = true) {
   const mode = state.authMode;
   return `
-    <div class="min-h-screen flex flex-col justify-center items-center p-4 sm:p-6 bg-[#F8FAFC]">
-      <div class="w-full max-w-md space-y-6 animate-fade-in">
-        <!-- Brand Header -->
-        <div class="text-center space-y-2">
-          <div class="inline-flex items-center justify-center w-12 h-12 rounded-lg bg-white border border-slate-200 shadow-xs">
-            <img src="/assets/logo.png" alt="Synced N" class="w-8 h-8 object-contain" />
+    <div class="min-h-screen flex flex-col justify-center items-center p-4 sm:p-6 bg-[#F7F7FA]">
+      <div class="w-full max-w-md space-y-5 ${animate ? "animate-fade-in" : ""}">
+        <!-- Mobile-Matched Brand Banner -->
+        <div class="hero-banner-card p-6 text-center text-white">
+          <div class="relative z-10 space-y-2">
+            <div class="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-white/12 border border-white/20 backdrop-blur-xs shadow-sm">
+              <img src="/assets/synced_n_logo_sharp.png" onerror="this.src='/assets/logo.png'" alt="Synced N" class="w-10 h-10 object-contain" />
+            </div>
+            <h1 class="text-2xl font-extrabold tracking-tight text-white">Synced N</h1>
+            <p class="text-xs text-white/80">Church Music Ministry Schedule, Calendar &amp; Chord Studio</p>
           </div>
-          <h1 class="text-2xl font-semibold text-slate-900 tracking-tight">Synced N</h1>
-          <p class="text-xs text-slate-500">Church Music Ministry Schedule & Lineup Management</p>
         </div>
 
         <!-- Auth Card -->
         <div class="surface-card p-6 sm:p-7 space-y-5">
           <!-- Mode Switcher -->
-          <div class="grid grid-cols-2 p-1 bg-slate-100 rounded-md border border-slate-200 text-xs font-semibold">
-            <button onclick="window.appActions.setAuthMode('login')"
-              class="py-1.5 rounded transition ${mode === "login" ? "bg-white text-slate-900 shadow-2xs" : "text-slate-600 hover:text-slate-900"}">
+          <div class="grid grid-cols-2 p-1 bg-[#F5F5F8] rounded-xl border border-slate-200/90 text-xs font-bold">
+            <button type="button" onclick="window.appActions.setAuthMode('login')"
+              class="py-2 rounded-lg transition ${mode === "login" ? "bg-[#500568] text-white shadow-xs" : "text-slate-600 hover:text-[#10113F]"}">
               Sign In
             </button>
-            <button onclick="window.appActions.setAuthMode('register')"
-              class="py-1.5 rounded transition ${mode === "register" ? "bg-white text-slate-900 shadow-2xs" : "text-slate-600 hover:text-slate-900"}">
+            <button type="button" onclick="window.appActions.setAuthMode('register')"
+              class="py-2 rounded-lg transition ${mode === "register" ? "bg-[#500568] text-white shadow-xs" : "text-slate-600 hover:text-[#10113F]"}">
               Create Account
             </button>
           </div>
@@ -563,17 +642,22 @@ function renderAuthView() {
           ${mode === "login" ? `
             <form onsubmit="window.appActions.handleLogin(event)" class="space-y-4">
               <div>
-                <label class="form-label">Email Address</label>
-                <input id="login-email" type="email" required placeholder="you@church.org" class="form-input" />
+                <label class="form-label" for="login-email">Email Address</label>
+                <input id="login-email" type="email" required autocomplete="email" placeholder="you@church.org" class="form-input" />
               </div>
               <div>
                 <div class="flex items-center justify-between mb-1">
-                  <label class="form-label mb-0">Password</label>
-                  <button type="button" onclick="window.appActions.setAuthMode('reset')" class="text-xs font-medium text-indigo-700 hover:underline">
+                  <label class="form-label mb-0" for="login-password">Password</label>
+                  <button type="button" onclick="window.appActions.setAuthMode('reset')" class="text-xs font-semibold text-[#500568] hover:underline">
                     Forgot password?
                   </button>
                 </div>
-                <input id="login-password" type="password" required placeholder="••••••••" class="form-input" />
+                ${renderPasswordInputHtml({
+                  id: "login-password",
+                  placeholder: "Enter your password",
+                  autocomplete: "current-password",
+                  required: true
+                })}
               </div>
               <button id="auth-submit-btn" type="submit" class="w-full btn btn-primary py-2.5">
                 Sign In to Workspace
@@ -582,23 +666,28 @@ function renderAuthView() {
           ` : mode === "register" ? `
             <form onsubmit="window.appActions.handleRegister(event)" class="space-y-4">
               <div>
-                <label class="form-label">Full Name</label>
-                <input id="reg-name" type="text" required maxlength="60" placeholder="e.g. Joshua Lagare" class="form-input" />
+                <label class="form-label" for="reg-name">Full Name</label>
+                <input id="reg-name" type="text" required maxlength="60" autocomplete="name" placeholder="e.g. Joshua Lagare" class="form-input" />
               </div>
               <div>
-                <label class="form-label">Email Address</label>
-                <input id="reg-email" type="email" required maxlength="60" placeholder="you@church.org" class="form-input" />
+                <label class="form-label" for="reg-email">Email Address</label>
+                <input id="reg-email" type="email" required maxlength="60" autocomplete="email" placeholder="you@church.org" class="form-input" />
               </div>
               <div>
-                <label class="form-label">Primary Ministry Role</label>
+                <label class="form-label" for="reg-role">Primary Ministry Role</label>
                 <select id="reg-role" class="form-select">
                   ${DEFAULT_MINISTRY_ROLES.map((r) => `<option value="${escapeHtml(r)}">${escapeHtml(r)}</option>`).join("")}
                 </select>
               </div>
               <div>
-                <label class="form-label">Password</label>
-                <input id="reg-password" type="password" required placeholder="8+ chars, upper, lower, number, symbol" class="form-input" />
-                <p class="text-[11px] text-slate-500 mt-1">Must include at least 8 characters, uppercase, lowercase, number, and symbol.</p>
+                <label class="form-label" for="reg-password">Password</label>
+                ${renderPasswordInputHtml({
+                  id: "reg-password",
+                  placeholder: "8+ chars, upper, lower, number, symbol",
+                  autocomplete: "new-password",
+                  required: true
+                })}
+                <p class="text-[11px] text-slate-500 mt-1.5">Must include at least 8 characters, uppercase, lowercase, number, and symbol.</p>
               </div>
               <button id="auth-submit-btn" type="submit" class="w-full btn btn-primary py-2.5">
                 Create Ministry Account
@@ -608,8 +697,8 @@ function renderAuthView() {
             <form onsubmit="window.appActions.handlePasswordReset(event)" class="space-y-4">
               <p class="text-xs text-slate-600 leading-relaxed">Enter your registered email address and we will send a password reset link.</p>
               <div>
-                <label class="form-label">Email Address</label>
-                <input id="reset-email" type="email" required placeholder="you@church.org" class="form-input" />
+                <label class="form-label" for="reset-email">Email Address</label>
+                <input id="reset-email" type="email" required autocomplete="email" placeholder="you@church.org" class="form-input" />
               </div>
               <button id="auth-submit-btn" type="submit" class="w-full btn btn-primary py-2.5">
                 Send Password Reset Link
@@ -622,12 +711,12 @@ function renderAuthView() {
 
           <div class="relative flex py-1 items-center">
             <div class="flex-grow border-t border-slate-200"></div>
-            <span class="flex-shrink mx-3 text-[11px] uppercase tracking-wider text-slate-400 font-medium">or continue with</span>
+            <span class="flex-shrink mx-3 text-[11px] uppercase tracking-wider text-slate-400 font-bold">or continue with</span>
             <div class="flex-grow border-t border-slate-200"></div>
           </div>
 
-          <button onclick="window.appActions.handleGoogleSignIn()" class="w-full btn btn-secondary py-2.5">
-            <i class="fa-brands fa-google text-slate-700"></i>
+          <button type="button" onclick="window.appActions.handleGoogleSignIn()" class="w-full btn btn-secondary py-2.5">
+            <i class="fa-brands fa-google text-[#500568]"></i>
             <span>Continue with Google</span>
           </button>
         </div>
@@ -637,25 +726,25 @@ function renderAuthView() {
 }
 
 // Team Setup View (Join with 6-character code or Create a new Worship Team)
-function renderTeamSetupView() {
+function renderTeamSetupView(animate = true) {
   const user = state.currentUser;
   const displayName = user?.fullName || user?.name || "Member";
 
   return `
-    <div class="min-h-screen flex flex-col justify-center items-center p-4 sm:p-6 bg-[#F8FAFC]">
-      <div class="w-full max-w-3xl space-y-6 animate-fade-in">
+    <div class="min-h-screen flex flex-col justify-center items-center p-4 sm:p-6 bg-[#F7F7FA]">
+      <div class="w-full max-w-3xl space-y-6 ${animate ? "animate-fade-in" : ""}">
         <!-- Top Bar -->
-        <div class="surface-card p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-          <div class="flex items-center gap-3.5">
-            <div class="w-10 h-10 rounded-md bg-slate-100 border border-slate-200 flex items-center justify-center shrink-0">
-              <img src="/assets/logo.png" alt="Synced N" class="w-6 h-6 object-contain" />
+        <div class="hero-banner-card p-5 sm:p-6 flex flex-col sm:flex-row sm:items-center justify-between gap-4 text-white">
+          <div class="relative z-10 flex items-center gap-3.5">
+            <div class="w-12 h-12 rounded-xl bg-white/15 border border-white/20 flex items-center justify-center shrink-0">
+              <img src="/assets/synced_n_logo_sharp.png" onerror="this.src='/assets/logo.png'" alt="Synced N" class="w-8 h-8 object-contain" />
             </div>
             <div>
-              <h1 class="text-lg font-semibold text-slate-900">Welcome, ${escapeHtml(displayName)}</h1>
-              <p class="text-xs text-slate-500">Connect to your church worship ministry workspace to access schedules and song lineups.</p>
+              <h1 class="text-lg font-extrabold text-white">Welcome, ${escapeHtml(displayName)}</h1>
+              <p class="text-xs text-white/80">Connect to your church worship ministry workspace to access schedules, calendar, and song lineups.</p>
             </div>
           </div>
-          <button onclick="window.appActions.signOutUser()" class="btn btn-secondary btn-sm self-start sm:self-auto">
+          <button onclick="window.appActions.signOutUser()" class="relative z-10 btn btn-sm bg-white/15 hover:bg-white/25 text-white border border-white/25 self-start sm:self-auto">
             <i class="fa-solid fa-right-from-bracket text-xs"></i> Sign Out
           </button>
         </div>
@@ -663,7 +752,7 @@ function renderTeamSetupView() {
         ${user?.removedByLeader && user?.removedTeamCode ? `
           <div class="surface-card border-amber-200 bg-amber-50/70 p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <div class="text-xs text-amber-900">
-              <strong>Notice:</strong> You were previously removed from team <span class="font-mono font-semibold">${escapeHtml(user.removedTeamCode)}</span>. You can send a rejoin request to the Worship Leader or join/create another team below.
+              <strong>Notice:</strong> You were previously removed from team <span class="font-mono font-bold">${escapeHtml(user.removedTeamCode)}</span>. You can send a rejoin request to the Worship Leader or join/create another team below.
             </div>
             <button onclick="window.appActions.submitRejoinRequest('${escapeHtml(user.removedTeamCode)}')" class="btn btn-primary btn-sm shrink-0">
               Request to Rejoin ${escapeHtml(user.removedTeamCode)}
@@ -677,21 +766,21 @@ function renderTeamSetupView() {
           <div class="surface-card p-6 flex flex-col justify-between space-y-5">
             <div class="space-y-2">
               <span class="badge badge-indigo">Join Existing Ministry</span>
-              <h2 class="text-base font-semibold text-slate-900">Enter Team Invite Code</h2>
+              <h2 class="text-base font-bold text-[#10113F]">Enter Team Invite Code</h2>
               <p class="text-xs text-slate-500 leading-relaxed">
-                Ask your Worship Leader for your church's 6-character invite code to sync with the team schedule and song library.
+                Ask your Worship Leader for your church's 6-character invite code to sync with the team schedule, calendar, and song library.
               </p>
             </div>
             <form onsubmit="window.appActions.handleJoinTeam(event)" class="space-y-3">
               <div>
-                <label class="form-label">6-Character Invite Code</label>
+                <label class="form-label" for="join-team-code">6-Character Invite Code</label>
                 <input
                   id="join-team-code"
                   type="text"
                   required
                   maxlength="6"
                   placeholder="ABC123"
-                  class="form-input uppercase tracking-widest font-mono text-center text-base font-semibold"
+                  class="form-input uppercase tracking-widest font-mono text-center text-base font-bold"
                 />
               </div>
               <button id="join-team-btn" type="submit" class="w-full btn btn-indigo py-2.5">
@@ -704,14 +793,14 @@ function renderTeamSetupView() {
           <div class="surface-card p-6 flex flex-col justify-between space-y-5">
             <div class="space-y-2">
               <span class="badge badge-neutral">For Worship Leaders</span>
-              <h2 class="text-base font-semibold text-slate-900">Create a New Team Workspace</h2>
+              <h2 class="text-base font-bold text-[#10113F]">Create a New Team Workspace</h2>
               <p class="text-xs text-slate-500 leading-relaxed">
                 Start a new workspace for your church music ministry and generate an invite code for your musicians and vocalists.
               </p>
             </div>
             <form onsubmit="window.appActions.handleCreateTeam(event)" class="space-y-3">
               <div>
-                <label class="form-label">Ministry / Team Name</label>
+                <label class="form-label" for="create-team-name">Ministry / Team Name</label>
                 <input
                   id="create-team-name"
                   type="text"
@@ -745,16 +834,18 @@ function renderDashboardShell() {
   const userDisplayName = currentUser?.fullName || currentUser?.name || "Member";
 
   const navItems = [
-    { id: "home", label: "Dashboard", icon: "fa-solid fa-table-columns" },
-    { id: "schedule", label: "Schedule & Lineups", icon: "fa-regular fa-calendar-check", badge: pendingActionCount || 0 },
-    { id: "songs", label: "Song Library", icon: "fa-solid fa-music" },
-    { id: "roster", label: "Team Roster", icon: "fa-solid fa-users" },
-    { id: "chat", label: "Team Chat", icon: "fa-regular fa-comments" },
-    { id: "profile", label: "Account Profile", icon: "fa-regular fa-user" }
+    { id: "home", label: "Home", fullLabel: "Dashboard", icon: "fa-solid fa-house" },
+    { id: "calendar", label: "Calendar", fullLabel: "Ministry Calendar", icon: "fa-solid fa-calendar-days" },
+    { id: "schedule", label: "Schedule", fullLabel: "Schedule & Lineups", icon: "fa-regular fa-calendar-check", badge: pendingActionCount || 0 },
+    { id: "songs", label: "Songs", fullLabel: "Song Library", icon: "fa-solid fa-music" },
+    { id: "roster", label: "Roster", fullLabel: "Team Roster", icon: "fa-solid fa-users" },
+    { id: "chat", label: "Chat", fullLabel: "Team Chat", icon: "fa-regular fa-comments" },
+    { id: "profile", label: "Profile", fullLabel: "Account Profile", icon: "fa-regular fa-user" }
   ];
 
   let mainViewHtml = "";
   if (activeTab === "home") mainViewHtml = renderHomeView(state);
+  else if (activeTab === "calendar") mainViewHtml = renderCalendarView(state);
   else if (activeTab === "schedule") mainViewHtml = renderScheduleView(state);
   else if (activeTab === "songs") mainViewHtml = renderSongsView(state);
   else if (activeTab === "roster") mainViewHtml = renderRosterView(state);
@@ -762,42 +853,44 @@ function renderDashboardShell() {
   else if (activeTab === "profile") mainViewHtml = renderProfileView(state);
 
   return `
-    <div class="min-h-screen flex flex-col md:flex-row bg-[#F8FAFC]">
+    <div class="min-h-screen flex flex-col md:flex-row bg-[#F7F7FA]">
       <!-- Desktop Fixed Sidebar -->
-      <aside class="hidden md:flex md:w-60 md:flex-col md:fixed md:inset-y-0 bg-white border-r border-slate-200 z-30">
-        <!-- Brand Header -->
-        <div class="h-14 px-4 flex items-center justify-between border-b border-slate-200">
-          <div class="flex items-center gap-2.5 min-w-0">
-            <img src="/assets/logo.png" alt="Synced N" class="w-7 h-7 rounded object-contain shrink-0" />
+      <aside class="hidden md:flex md:w-64 md:flex-col md:fixed md:inset-y-0 bg-white border-r border-slate-200/90 z-30">
+        <!-- Brand Header (Synced N Navy / Purple Identity) -->
+        <div class="h-16 px-4 flex items-center justify-between border-b border-slate-200/80 bg-[#10113F] text-white">
+          <div class="flex items-center gap-3 min-w-0">
+            <div class="w-9 h-9 rounded-lg bg-white/12 border border-white/15 flex items-center justify-center shrink-0">
+              <img src="/assets/synced_n_logo_sharp.png" onerror="this.src='/assets/logo.png'" alt="Synced N" class="w-6 h-6 object-contain" />
+            </div>
             <div class="truncate">
-              <div class="text-sm font-semibold text-slate-900 leading-none">Synced N</div>
-              <div class="text-[11px] text-slate-500 truncate mt-0.5">${escapeHtml(teamDisplayName)}</div>
+              <div class="text-sm font-extrabold text-white leading-none tracking-tight">Synced N</div>
+              <div class="text-[11px] text-white/75 truncate mt-1">${escapeHtml(teamDisplayName)}</div>
             </div>
           </div>
         </div>
 
         <!-- Navigation Links -->
-        <nav class="flex-1 px-3 py-4 space-y-1 overflow-y-auto">
-          <div class="px-2.5 pb-1.5 text-[10px] font-semibold uppercase tracking-wider text-slate-400">
-            Navigation
+        <nav class="flex-1 px-3 py-4 space-y-1 overflow-y-auto" aria-label="Main Navigation">
+          <div class="px-2.5 pb-1.5 text-[10px] font-bold uppercase tracking-wider text-slate-400">
+            Ministry Workspace
           </div>
           ${navItems.map((item) => {
             const active = activeTab === item.id;
             return `
               <button
                 onclick="window.appActions.switchTab('${item.id}')"
-                class="w-full flex items-center justify-between px-2.5 py-2 rounded-md text-xs font-medium transition ${
+                class="w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-xs font-semibold transition ${
                   active
-                    ? "bg-slate-900 text-white"
-                    : "text-slate-600 hover:bg-slate-100 hover:text-slate-900"
+                    ? "bg-[#500568] text-white shadow-xs"
+                    : "text-slate-600 hover:bg-[#F5F5F8] hover:text-[#10113F]"
                 }"
               >
-                <div class="flex items-center gap-2.5">
-                  <i class="${item.icon} w-4 text-center ${active ? "text-white" : "text-slate-400"}"></i>
-                  <span>${escapeHtml(item.label)}</span>
+                <div class="flex items-center gap-3">
+                  <i class="${item.icon} w-4 text-center text-sm ${active ? "text-white" : "text-[#500568]/75"}"></i>
+                  <span>${escapeHtml(item.fullLabel)}</span>
                 </div>
                 ${item.badge ? `
-                  <span class="px-1.5 py-0.2 rounded text-[10px] font-semibold ${active ? "bg-amber-400 text-slate-950" : "bg-amber-100 text-amber-800"}">
+                  <span class="px-1.5 py-0.5 rounded-full text-[10px] font-bold ${active ? "bg-amber-400 text-slate-950" : "bg-amber-100 text-amber-800"}">
                     ${item.badge}
                   </span>
                 ` : ""}
@@ -807,23 +900,23 @@ function renderDashboardShell() {
         </nav>
 
         <!-- Sidebar Footer: Invite Code + User Summary -->
-        <div class="p-3 border-t border-slate-200 space-y-2.5 bg-slate-50/60">
-          <div class="flex items-center justify-between px-2 py-1.5 bg-white border border-slate-200 rounded-md">
+        <div class="p-3.5 border-t border-slate-200/90 space-y-3 bg-[#F5F5F8]/70">
+          <div class="flex items-center justify-between px-3 py-2 bg-white border border-slate-200/90 rounded-xl shadow-2xs">
             <div>
-              <div class="text-[10px] uppercase tracking-wider text-slate-400 font-semibold">Team Code</div>
-              <div class="font-mono text-xs font-semibold text-slate-800 tracking-widest">${escapeHtml(teamCode)}</div>
+              <div class="text-[10px] uppercase tracking-wider text-slate-400 font-bold">Team Code</div>
+              <div class="font-mono text-xs font-extrabold text-[#500568] tracking-widest">${escapeHtml(teamCode)}</div>
             </div>
-            <button onclick="window.appActions.copyTeamCode()" class="btn btn-ghost btn-sm text-xs" title="Copy Invite Code">
+            <button onclick="window.appActions.copyTeamCode()" class="btn btn-ghost btn-sm text-xs text-[#500568]" title="Copy Invite Code">
               <i class="fa-regular fa-copy"></i>
             </button>
           </div>
 
           <div class="flex items-center justify-between gap-2 px-1">
-            <button onclick="window.appActions.switchTab('profile')" class="flex items-center gap-2.5 min-w-0 text-left flex-1 hover:opacity-80 transition">
-              ${getAvatarHtml(currentUser, "w-8 h-8", "text-xs")}
+            <button onclick="window.appActions.switchTab('profile')" class="flex items-center gap-2.5 min-w-0 text-left flex-1 hover:opacity-85 transition">
+              ${getAvatarHtml(currentUser, "w-9 h-9", "text-xs")}
               <div class="min-w-0 flex-1">
-                <div class="text-xs font-semibold text-slate-900 truncate">${escapeHtml(userDisplayName)}</div>
-                <div class="text-[11px] text-slate-500 truncate">${escapeHtml(currentUser.ministryRole || "Member")}</div>
+                <div class="text-xs font-bold text-[#10113F] truncate">${escapeHtml(userDisplayName)}</div>
+                <div class="text-[11px] text-[#500568] font-medium truncate">${escapeHtml(currentUser.ministryRole || "Member")}</div>
               </div>
             </button>
             <button onclick="window.appActions.signOutUser()" class="btn btn-ghost btn-sm text-slate-500 hover:text-rose-600" title="Sign Out">
@@ -834,41 +927,49 @@ function renderDashboardShell() {
       </aside>
 
       <!-- Mobile Top Bar -->
-      <header class="md:hidden sticky top-0 z-30 h-14 bg-white border-b border-slate-200 px-4 flex items-center justify-between">
+      <header class="md:hidden sticky top-0 z-30 h-14 bg-[#10113F] text-white border-b border-white/10 px-4 flex items-center justify-between shadow-xs">
         <div class="flex items-center gap-2.5 min-w-0">
-          <img src="/assets/logo.png" alt="Synced N" class="w-7 h-7 rounded object-contain shrink-0" />
+          <div class="w-8 h-8 rounded-lg bg-white/12 border border-white/15 flex items-center justify-center shrink-0">
+            <img src="/assets/synced_n_logo_sharp.png" onerror="this.src='/assets/logo.png'" alt="Synced N" class="w-5 h-5 object-contain" />
+          </div>
           <div class="truncate">
-            <div class="text-sm font-semibold text-slate-900 leading-none truncate">${escapeHtml(teamDisplayName)}</div>
-            <div class="text-[10px] text-slate-500 font-mono">Code: ${escapeHtml(teamCode)}</div>
+            <div class="text-sm font-extrabold text-white leading-none truncate">${escapeHtml(teamDisplayName)}</div>
+            <div class="text-[10px] text-[#F5D0FE] font-mono mt-0.5">Code: ${escapeHtml(teamCode)}</div>
           </div>
         </div>
         <div class="flex items-center gap-2">
-          <button onclick="window.appActions.switchTab('profile')" class="p-0.5 rounded-full">
+          <button onclick="window.appActions.copyTeamCode()" class="px-2 py-1 rounded-md bg-white/10 text-[10px] font-mono text-white/90 hover:bg-white/20" title="Copy Team Code">
+            <i class="fa-regular fa-copy"></i>
+          </button>
+          <button onclick="window.appActions.switchTab('profile')" class="p-0.5 rounded-full ring-2 ring-[#F5D0FE]/40">
             ${getAvatarHtml(currentUser, "w-7 h-7", "text-[10px]")}
           </button>
         </div>
       </header>
 
       <!-- Main Workspace Container -->
-      <main class="flex-1 md:pl-60 pb-20 md:pb-10">
-        <div class="max-w-6xl mx-auto p-4 sm:p-6 lg:p-8">
+      <main class="flex-1 md:pl-64 pb-20 md:pb-10">
+        <div class="max-w-6xl mx-auto p-3.5 sm:p-6 lg:p-8">
           ${mainViewHtml}
         </div>
       </main>
 
       <!-- Mobile Bottom Navigation -->
-      <nav class="md:hidden fixed bottom-0 inset-x-0 z-30 bg-white border-t border-slate-200 grid grid-cols-6 py-1 px-1">
+      <nav class="md:hidden fixed bottom-0 inset-x-0 z-30 bg-white/95 backdrop-blur-md border-t border-slate-200/90 grid grid-cols-7 py-1 px-0.5 shadow-lg" aria-label="Mobile Navigation">
         ${navItems.map((item) => {
           const active = activeTab === item.id;
           return `
             <button
               onclick="window.appActions.switchTab('${item.id}')"
-              class="flex flex-col items-center justify-center py-1.5 rounded text-[10px] font-medium transition ${
-                active ? "text-indigo-700 font-semibold" : "text-slate-500"
+              class="relative flex flex-col items-center justify-center py-1.5 rounded-lg text-[10px] font-medium transition ${
+                active ? "text-[#500568] font-bold bg-[#F5D0FE]/40" : "text-slate-500 hover:text-[#10113F]"
               }"
             >
               <i class="${item.icon} text-xs mb-0.5"></i>
-              <span class="truncate max-w-[54px]">${escapeHtml(item.label.split(" ")[0])}</span>
+              <span class="truncate max-w-[46px] leading-tight">${escapeHtml(item.label)}</span>
+              ${item.badge ? `
+                <span class="absolute top-1 right-1.5 w-2 h-2 rounded-full bg-amber-500"></span>
+              ` : ""}
             </button>
           `;
         }).join("")}
@@ -892,6 +993,40 @@ window.appActions = {
     state.activeTab = tabId;
     renderApp();
     window.scrollTo({ top: 0, behavior: "smooth" });
+  },
+
+  // --- Password Visibility Toggle (Show/Hide Password Without Resetting Input) ---
+  togglePasswordVisibility(inputId, btnEl) {
+    const input = document.getElementById(inputId);
+    if (!input) return;
+
+    const currentVal = input.value;
+    const selStart = input.selectionStart;
+    const selEnd = input.selectionEnd;
+    const willReveal = input.type === "password";
+
+    input.type = willReveal ? "text" : "password";
+    // Ensure value is never modified or cleared
+    if (input.value !== currentVal) {
+      input.value = currentVal;
+    }
+
+    const button = btnEl || input.parentElement?.querySelector(".password-toggle-btn");
+    if (button) {
+      button.setAttribute("aria-pressed", willReveal ? "true" : "false");
+      button.setAttribute("aria-label", willReveal ? "Hide password" : "Show password");
+      button.setAttribute("title", willReveal ? "Hide password" : "Show password");
+      button.innerHTML = `<i class="fa-regular ${willReveal ? "fa-eye-slash" : "fa-eye"} text-xs pointer-events-none"></i>`;
+    }
+
+    try {
+      input.focus({ preventScroll: true });
+      if (typeof selStart === "number" && input.setSelectionRange) {
+        input.setSelectionRange(selStart, selEnd ?? selStart);
+      }
+    } catch {
+      // Ignore selection restoration errors
+    }
   },
 
   // --- Authentication Handlers ---
@@ -1013,6 +1148,41 @@ window.appActions = {
     }
   },
 
+  async handleChangePassword(e) {
+    e.preventDefault();
+    const newPassword = document.getElementById("profile-new-password")?.value || "";
+    const confirmPassword = document.getElementById("profile-confirm-password")?.value || "";
+
+    if (newPassword !== confirmPassword) {
+      return showToast("Passwords do not match.", "error");
+    }
+
+    const pwdEval = evaluatePassword(newPassword);
+    if (!pwdEval.isStrong) {
+      return showToast(pwdEval.errorMessage, "error");
+    }
+
+    try {
+      const hashedPassword = await hashPasswordPbkdf2(newPassword);
+      if (auth.currentUser) {
+        try {
+          await updatePassword(auth.currentUser, newPassword);
+        } catch (authErr) {
+          // If Firebase requires recent login, still sync PBKDF2 hash in Firestore and inform user
+          console.warn("Firebase updatePassword notice:", authErr);
+        }
+      }
+      await saveCleanUserProfile(state.currentUser.uid, { resetPassword: hashedPassword });
+      const newInput = document.getElementById("profile-new-password");
+      const confirmInput = document.getElementById("profile-confirm-password");
+      if (newInput) newInput.value = "";
+      if (confirmInput) confirmInput.value = "";
+      showToast("Password updated.", "success");
+    } catch (err) {
+      showToast(err.message || "Could not update password.", "error");
+    }
+  },
+
   async signOutUser() {
     await signOut(auth);
     showToast("Signed out.", "info");
@@ -1119,7 +1289,7 @@ window.appActions = {
           <div class="space-y-4">
             <div class="flex items-center gap-2.5 text-amber-700">
               <i class="fa-solid fa-circle-exclamation"></i>
-              <h3 class="text-base font-semibold text-slate-900">Rejoin Approval Required</h3>
+              <h3 class="text-base font-bold text-[#10113F]">Rejoin Approval Required</h3>
             </div>
             <p class="text-xs text-slate-600 leading-relaxed">
               You were previously removed from <strong>${escapeHtml(teamData.teamName || code)}</strong>. Would you like to send a rejoin request to the Worship Leader?
@@ -1199,7 +1369,7 @@ window.appActions = {
     openModal(`
       <div class="space-y-4">
         <div class="flex items-center justify-between pb-3 border-b border-slate-200">
-          <h3 class="text-base font-semibold text-slate-900">Rename Ministry Workspace</h3>
+          <h3 class="text-base font-bold text-[#10113F]">Rename Ministry Workspace</h3>
           <button onclick="window.appActions.closeModal()" class="text-slate-400 hover:text-slate-600"><i class="fa-solid fa-xmark"></i></button>
         </div>
         <form onsubmit="window.appActions.saveTeamName(event)" class="space-y-4">
@@ -1227,12 +1397,52 @@ window.appActions = {
     showToast("Team name updated.", "success");
   },
 
+  // --- Ministry Calendar Navigation & Actions ---
+  changeCalendarMonth(delta) {
+    let { year, month } = state.calendar;
+    month += Number(delta) || 0;
+    if (month < 0) {
+      month = 11;
+      year -= 1;
+    } else if (month > 11) {
+      month = 0;
+      year += 1;
+    }
+    state.calendar.year = year;
+    state.calendar.month = month;
+    const firstOfMonth = `${year}-${String(month + 1).padStart(2, "0")}-01`;
+    if (!state.calendar.selectedDate || !state.calendar.selectedDate.startsWith(`${year}-${String(month + 1).padStart(2, "0")}`)) {
+      state.calendar.selectedDate = firstOfMonth;
+    }
+    renderApp();
+  },
+
+  jumpCalendarToday() {
+    const now = new Date();
+    const iso = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+    state.calendar.year = now.getFullYear();
+    state.calendar.month = now.getMonth();
+    state.calendar.selectedDate = iso;
+    renderApp();
+  },
+
+  selectCalendarDate(isoDate) {
+    if (!isoDate) return;
+    const parts = String(isoDate).split("-").map(Number);
+    if (parts.length === 3 && !Number.isNaN(parts[0]) && !Number.isNaN(parts[1])) {
+      state.calendar.year = parts[0];
+      state.calendar.month = parts[1] - 1;
+    }
+    state.calendar.selectedDate = isoDate;
+    renderApp();
+  },
+
   // --- Announcements (/teams/{teamCode}/announcements/{announcementId}) ---
   openAnnouncementModal() {
     openModal(`
       <div class="space-y-4">
         <div class="flex items-center justify-between pb-3 border-b border-slate-200">
-          <h3 class="text-base font-semibold text-slate-900">Post Ministry Announcement</h3>
+          <h3 class="text-base font-bold text-[#10113F]">Post Ministry Announcement</h3>
           <button onclick="window.appActions.closeModal()" class="text-slate-400 hover:text-slate-600"><i class="fa-solid fa-xmark"></i></button>
         </div>
         <form onsubmit="window.appActions.saveAnnouncement(event)" class="space-y-4">
@@ -1245,7 +1455,7 @@ window.appActions = {
             <textarea id="ann-content" rows="4" required maxlength="1200" placeholder="Share schedule reminders, dress code, or song updates..." class="form-textarea"></textarea>
           </div>
           <label class="flex items-center gap-2 text-xs font-medium text-slate-700 cursor-pointer">
-            <input id="ann-urgent" type="checkbox" class="rounded border-slate-300 text-indigo-600" />
+            <input id="ann-urgent" type="checkbox" class="rounded border-slate-300 text-[#500568]" />
             <span>Mark as Urgent Notice</span>
           </label>
           <div class="flex justify-end gap-2 pt-2">
@@ -1290,27 +1500,28 @@ window.appActions = {
   },
 
   // --- Member Unavailability (saved on /users/{uid}.unavailableRanges) ---
-  openAvailabilityModal() {
+  openAvailabilityModal(prefillDate = "") {
     const ranges = state.currentUser?.unavailableRanges || [];
+    const defaultDate = prefillDate || state.calendar?.selectedDate || "";
     openModal(`
       <div class="space-y-5">
         <div class="flex items-center justify-between pb-3 border-b border-slate-200">
           <div>
-            <h3 class="text-base font-semibold text-slate-900">Manage My Unavailability</h3>
-            <p class="text-xs text-slate-500">Leaders will see conflict alerts if you are scheduled during these dates.</p>
+            <h3 class="text-base font-bold text-[#10113F]">Manage My Unavailability</h3>
+            <p class="text-xs text-slate-500">Synchronized with the Ministry Calendar and Leader Schedule views.</p>
           </div>
           <button onclick="window.appActions.closeModal()" class="text-slate-400 hover:text-slate-600"><i class="fa-solid fa-xmark"></i></button>
         </div>
 
-        <form onsubmit="window.appActions.addUnavailableRange(event)" class="space-y-3 bg-slate-50 p-4 rounded-md border border-slate-200">
+        <form onsubmit="window.appActions.addUnavailableRange(event)" class="space-y-3 bg-[#F5F5F8] p-4 rounded-xl border border-slate-200">
           <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <label class="form-label">Start Date</label>
-              <input id="unavail-start" type="date" required class="form-input" />
+              <input id="unavail-start" type="date" required value="${escapeHtml(defaultDate)}" class="form-input" />
             </div>
             <div>
               <label class="form-label">End Date</label>
-              <input id="unavail-end" type="date" required class="form-input" />
+              <input id="unavail-end" type="date" required value="${escapeHtml(defaultDate)}" class="form-input" />
             </div>
           </div>
           <div>
@@ -1318,23 +1529,23 @@ window.appActions = {
             <input id="unavail-reason" type="text" maxlength="80" placeholder="e.g. Out of town / Family event" class="form-input" />
           </div>
           <button type="submit" class="w-full btn btn-primary">
-            <i class="fa-solid fa-plus text-xs"></i> Add Unavailable Dates
+            <i class="fa-solid fa-plus text-xs"></i> Save Unavailable Dates
           </button>
         </form>
 
         <div class="space-y-2">
-          <h4 class="text-xs font-semibold uppercase tracking-wider text-slate-500">Current Unavailable Dates (${ranges.length})</h4>
+          <h4 class="text-xs font-bold uppercase tracking-wider text-slate-500">Current Unavailable Dates (${ranges.length})</h4>
           ${ranges.length === 0 ? `
             <p class="text-xs text-slate-400 italic py-2">You have no unavailable dates marked.</p>
           ` : `
-            <div class="divide-y divide-slate-200 border border-slate-200 rounded-md">
+            <div class="divide-y divide-slate-200 border border-slate-200 rounded-xl overflow-hidden bg-white">
               ${ranges.map((r) => `
                 <div class="flex items-center justify-between px-3.5 py-2.5 text-xs">
                   <div>
-                    <div class="font-semibold text-slate-800">${escapeHtml(r.startDate)} &rarr; ${escapeHtml(r.endDate)}</div>
+                    <div class="font-bold text-[#10113F]">${escapeHtml(r.startDate)} &rarr; ${escapeHtml(r.endDate)}</div>
                     ${r.reason ? `<div class="text-slate-500">${escapeHtml(r.reason)}</div>` : ""}
                   </div>
-                  <button onclick="window.appActions.removeUnavailableRange('${escapeHtml(r.id)}')" class="btn btn-danger btn-sm">
+                  <button onclick="window.appActions.removeUnavailableRange('${escapeHtml(r.id)}', true)" class="btn btn-danger btn-sm">
                     <i class="fa-regular fa-trash-can"></i>
                   </button>
                 </div>
@@ -1348,9 +1559,15 @@ window.appActions = {
 
   async addUnavailableRange(e) {
     e.preventDefault();
-    const startDate = document.getElementById("unavail-start")?.value || "";
-    const endDate = document.getElementById("unavail-end")?.value || startDate;
-    const reason = document.getElementById("unavail-reason")?.value.trim() || "";
+    const modalStart = document.getElementById("unavail-start")?.value;
+    const startDate = modalStart || document.getElementById("cal-unavail-start")?.value || "";
+    const endDate =
+      (modalStart ? document.getElementById("unavail-end")?.value : document.getElementById("cal-unavail-end")?.value) ||
+      startDate;
+    const reason =
+      (modalStart ? document.getElementById("unavail-reason")?.value : document.getElementById("cal-unavail-reason")?.value)?.trim() ||
+      "";
+
     if (!startDate) return;
     if (endDate < startDate) return showToast("End date cannot be earlier than start date.", "error");
 
@@ -1364,18 +1581,26 @@ window.appActions = {
     });
     await saveCleanUserProfile(state.currentUser.uid, { unavailableRanges: current });
     showToast("Availability updated.", "success");
-    this.openAvailabilityModal();
+
+    if (modalStart) {
+      this.openAvailabilityModal(startDate);
+    } else {
+      const reasonInput = document.getElementById("cal-unavail-reason");
+      if (reasonInput) reasonInput.value = "";
+    }
   },
 
-  async removeUnavailableRange(rangeId) {
+  async removeUnavailableRange(rangeId, reopenModal = true) {
     const current = (state.currentUser.unavailableRanges || []).filter((r) => r.id !== rangeId);
     await saveCleanUserProfile(state.currentUser.uid, { unavailableRanges: current });
-    showToast("Removed unavailable date range.", "info");
-    this.openAvailabilityModal();
+    showToast("Cleared unavailable date range.", "info");
+    if (reopenModal) {
+      this.openAvailabilityModal();
+    }
   },
 
   // --- Service Schedule & Lineup Modal (/teams/{teamCode}/services/{serviceId}) ---
-  openServiceModal(serviceId = null) {
+  openServiceModal(serviceId = null, prefillDate = "") {
     const existing = serviceId ? state.services.find((s) => s.id === serviceId) : null;
     const assignedMap = {};
     (existing?.assignments || []).forEach((m) => {
@@ -1385,12 +1610,13 @@ window.appActions = {
       (existing?.songs || []).map((s) => (typeof s === "string" ? s : s.title))
     );
     const rehearsal = existing?.rehearsal || {};
+    const initialDate = existing?.date || prefillDate || "";
 
     openModal(`
       <div class="space-y-5">
         <div class="flex items-center justify-between pb-3 border-b border-slate-200">
           <div>
-            <h3 class="text-base font-semibold text-slate-900">${existing ? "Edit Worship Service & Lineup" : "Schedule Worship Service"}</h3>
+            <h3 class="text-base font-bold text-[#10113F]">${existing ? "Edit Worship Service & Lineup" : "Schedule Worship Service"}</h3>
             <p class="text-xs text-slate-500">Set service times, venue, rehearsal dates, assigned members, and song lineup.</p>
           </div>
           <button onclick="window.appActions.closeModal()" class="text-slate-400 hover:text-slate-600"><i class="fa-solid fa-xmark"></i></button>
@@ -1418,7 +1644,7 @@ window.appActions = {
           <div class="grid grid-cols-2 sm:grid-cols-5 gap-3">
             <div>
               <label class="form-label">Service Date</label>
-              <input id="srv-date" type="date" required value="${escapeHtml(existing?.date || "")}" class="form-input" />
+              <input id="srv-date" type="date" required value="${escapeHtml(initialDate)}" class="form-input" />
             </div>
             <div>
               <label class="form-label">Start Time</label>
@@ -1440,17 +1666,17 @@ window.appActions = {
 
           <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <!-- Member Assignments -->
-            <div class="border border-slate-200 rounded-md p-3.5 bg-slate-50/50 space-y-2 max-h-60 overflow-y-auto">
+            <div class="border border-slate-200 rounded-xl p-3.5 bg-[#F5F5F8]/70 space-y-2 max-h-60 overflow-y-auto">
               <label class="form-label mb-1">Assign Team Lineup</label>
               ${state.teamMembers.map((m) => {
                 const checked = Boolean(assignedMap[m.uid]);
                 const roleVal = assignedMap[m.uid] || m.ministryRole || "Member";
                 const mName = m.fullName || m.name || "Member";
                 return `
-                  <div class="flex items-center justify-between gap-2 bg-white px-2.5 py-1.5 rounded border border-slate-200 text-xs">
+                  <div class="flex items-center justify-between gap-2 bg-white px-2.5 py-1.5 rounded-lg border border-slate-200 text-xs">
                     <label class="flex items-center gap-2 truncate cursor-pointer flex-1">
-                      <input type="checkbox" class="srv-member-check rounded border-slate-300 text-indigo-600" data-uid="${escapeHtml(m.uid)}" data-name="${escapeHtml(mName)}" data-email="${escapeHtml(m.email || "")}" ${checked ? "checked" : ""} />
-                      <span class="truncate font-medium text-slate-800">${escapeHtml(mName)}</span>
+                      <input type="checkbox" class="srv-member-check rounded border-slate-300 text-[#500568]" data-uid="${escapeHtml(m.uid)}" data-name="${escapeHtml(mName)}" data-email="${escapeHtml(m.email || "")}" ${checked ? "checked" : ""} />
+                      <span class="truncate font-semibold text-slate-800">${escapeHtml(mName)}</span>
                     </label>
                     <input type="text" class="srv-member-role w-28 bg-slate-50 border border-slate-200 rounded px-2 py-0.5 text-[11px] text-slate-700" data-uid="${escapeHtml(m.uid)}" value="${escapeHtml(roleVal)}" />
                   </div>
@@ -1458,16 +1684,17 @@ window.appActions = {
               }).join("")}
             </div>
 
-            <!-- Song Setlist Selection -->
-            <div class="border border-slate-200 rounded-md p-3.5 bg-slate-50/50 space-y-2 max-h-60 overflow-y-auto">
+            <!-- Song Setlist Selection with Cover Thumbnails -->
+            <div class="border border-slate-200 rounded-xl p-3.5 bg-[#F5F5F8]/70 space-y-2 max-h-60 overflow-y-auto">
               <label class="form-label mb-1">Select Worship Song Setlist</label>
               ${state.songs.length === 0 ? `
                 <p class="text-xs text-slate-400 italic">No songs in library yet. Add songs in the Song Library tab.</p>
               ` : state.songs.map((song) => `
-                <label class="flex items-center justify-between gap-2 bg-white px-2.5 py-1.5 rounded border border-slate-200 text-xs cursor-pointer">
-                  <div class="flex items-center gap-2 truncate">
-                    <input type="checkbox" class="srv-song-check rounded border-slate-300 text-indigo-600" value="${escapeHtml(song.title)}" ${currentSetlist.has(song.title) ? "checked" : ""} />
-                    <span class="truncate font-medium text-slate-800">${escapeHtml(song.title)}</span>
+                <label class="flex items-center justify-between gap-2 bg-white px-2.5 py-1.5 rounded-lg border border-slate-200 text-xs cursor-pointer hover:border-[#500568]/40 transition">
+                  <div class="flex items-center gap-2.5 truncate">
+                    <input type="checkbox" class="srv-song-check rounded border-slate-300 text-[#500568]" value="${escapeHtml(song.title)}" ${currentSetlist.has(song.title) ? "checked" : ""} />
+                    ${getSongCoverHtml(song, "w-9 h-6 rounded shrink-0")}
+                    <span class="truncate font-semibold text-slate-800">${escapeHtml(song.title)}</span>
                   </div>
                   <span class="badge badge-indigo font-mono text-[10px]">${escapeHtml(song.key || "C")}</span>
                 </label>
@@ -1477,7 +1704,7 @@ window.appActions = {
 
           <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
-              <label class="form-label">Rehearsal & Service Notes</label>
+              <label class="form-label">Rehearsal &amp; Service Notes</label>
               <input id="srv-notes" type="text" maxlength="240" value="${escapeHtml(rehearsal.notes || "")}" placeholder="e.g. Call time 7:30 AM, neutral attire" class="form-input" />
             </div>
             <div>
@@ -1606,7 +1833,7 @@ window.appActions = {
       <div class="space-y-4">
         <div class="flex items-center justify-between pb-3 border-b border-slate-200">
           <div>
-            <h3 class="text-base font-semibold text-slate-900">Request a Lineup Substitute</h3>
+            <h3 class="text-base font-bold text-[#10113F]">Request a Lineup Substitute</h3>
             <p class="text-xs text-slate-500">${escapeHtml(srv.title)} (${escapeHtml(srv.date)})</p>
           </div>
           <button onclick="window.appActions.closeModal()" class="text-slate-400 hover:text-slate-600"><i class="fa-solid fa-xmark"></i></button>
@@ -1722,9 +1949,14 @@ window.appActions = {
     showToast(`Substitution request ${newStatus.toLowerCase()}.`, "success");
   },
 
-  // --- Song Library & Interactive Stage Chord Studio (/teams/{teamCode}/songs/{songId}) ---
+  // --- Song Library & Flicker-Free Stage Chord Studio (/teams/{teamCode}/songs/{songId}) ---
   setSongSearch(q) {
     state.songSearchQuery = q;
+    renderApp();
+  },
+
+  setSongKeyFilter(k) {
+    state.songKeyFilter = k || "";
     renderApp();
   },
 
@@ -1746,6 +1978,7 @@ window.appActions = {
 
     state.stageModal.songId = songId;
     state.stageModal.semitones = 0;
+    state.stageModal.useFlatsOverride = null;
     state.stageModal.lyricsOnly = false;
     state.stageModal.fontSize = 15;
     state.stageModal.autoScrollSpeed = 0;
@@ -1756,84 +1989,217 @@ window.appActions = {
     metronome.stop();
     metronome.setBpm(song.bpm || 74);
 
-    this.renderStageModalContent();
+    this.renderInitialStageModal();
   },
 
-  renderStageModalContent() {
+  /**
+   * Computes current transpose state for the open song in Stage View.
+   */
+  getStageTransposeInfo() {
     const song = state.songs.find((s) => s.id === state.stageModal.songId);
-    if (!song) return;
-    const isLeader = hasLeaderPrivileges(state.currentUser);
-    const { semitones, lyricsOnly, fontSize, autoScrollSpeed } = state.stageModal;
+    if (!song) return null;
     const originalKey = song.key || "C";
-    const activeKey = transposeSingleNote(originalKey, semitones);
+    const origPitch = getNotePitch(originalKey);
+    const minor = isMinorKey(originalKey);
+    const semitones = ((state.stageModal.semitones % 12) + 12) % 12;
+    const activePitch = ((origPitch >= 0 ? origPitch : 0) + semitones) % 12;
+
+    // Determine flat vs sharp spelling based on active key or user override
+    const defaultTargetLabel = `${CHROMATIC_ROOTS[activePitch]}${minor ? "m" : ""}`;
+    const useFlats =
+      typeof state.stageModal.useFlatsOverride === "boolean"
+        ? state.stageModal.useFlatsOverride
+        : shouldUseFlatsForKey(defaultTargetLabel);
+
+    const activeKeyLabel = getTargetKeyLabel(originalKey, semitones, useFlats);
+    return {
+      song,
+      originalKey,
+      origPitch: origPitch >= 0 ? origPitch : 0,
+      minor,
+      semitones,
+      activePitch,
+      useFlats,
+      activeKeyLabel
+    };
+  },
+
+  /**
+   * Mounts the Stage Modal DOM ONCE when opened.
+   * Subsequent transpose key changes, lyrics toggles, or BPM updates mutate only the
+   * targeted DOM nodes via `updateStageViewInPlace()` so the Transpose Window and YouTube
+   * iframe NEVER unmount, remount, or flicker.
+   */
+  renderInitialStageModal() {
+    const info = this.getStageTransposeInfo();
+    if (!info) return;
+    const { song, originalKey, origPitch, minor, semitones, activePitch, useFlats, activeKeyLabel } = info;
+    const isLeader = hasLeaderPrivileges(state.currentUser);
+    const { lyricsOnly, fontSize, autoScrollSpeed } = state.stageModal;
     const ytId = extractYoutubeVideoId(song.referenceUrl);
-    const formattedHtml = renderFormattedChordSheet(song.sheet, song.lyrics, semitones, lyricsOnly);
+    const formattedHtml = renderFormattedChordSheet(song.sheet, song.lyrics, semitones, lyricsOnly, useFlats);
+    const bpmText = formatBpmDisplay(metronome.bpm);
+    const intervalMs = (60000 / metronome.bpm).toFixed(1);
 
     openModal(`
-      <div class="space-y-4">
-        <!-- Song Title & Actions Header -->
-        <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-200">
-          <div>
-            <div class="flex flex-wrap items-center gap-2">
-              <span class="badge badge-indigo font-mono">Key: ${escapeHtml(activeKey)}${semitones !== 0 ? ` (${semitones > 0 ? "+" : ""}${semitones} from ${escapeHtml(originalKey)})` : ""}</span>
-              ${song.bpm ? `<span class="badge badge-neutral font-mono">${escapeHtml(song.bpm)} BPM</span>` : ""}
+      <div class="space-y-4" id="stage-modal-container">
+        <!-- Song Title, Cover Thumbnail & Actions Header -->
+        <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3.5 border-b border-slate-200">
+          <div class="flex items-center gap-3.5 min-w-0">
+            ${getSongCoverHtml(song, "w-20 h-14 rounded-lg shrink-0")}
+            <div class="min-w-0">
+              <div class="flex flex-wrap items-center gap-1.5">
+                <span id="stage-active-key-badge" class="badge badge-indigo font-mono">
+                  Key: ${escapeHtml(activeKeyLabel)}${semitones !== 0 ? ` (Original: ${escapeHtml(originalKey)})` : ""}
+                </span>
+                <span id="stage-bpm-badge" class="badge badge-neutral font-mono">${escapeHtml(bpmText)} BPM</span>
+              </div>
+              <h2 class="text-lg font-extrabold text-[#10113F] truncate mt-1">${escapeHtml(song.title || "Untitled Song")}</h2>
+              <p class="text-xs text-slate-500 truncate">${escapeHtml(song.artist || "Worship Song")}</p>
             </div>
-            <h2 class="text-lg font-semibold text-slate-900 mt-1">${escapeHtml(song.title || "Untitled Song")}</h2>
-            <p class="text-xs text-slate-500">${escapeHtml(song.artist || "Unknown Artist")}</p>
           </div>
-          <div class="flex items-center gap-2 self-start sm:self-auto">
+          <div class="flex items-center gap-2 self-start sm:self-auto shrink-0">
             ${isLeader ? `
-              <button onclick="window.appActions.openSongEditorModal('${escapeHtml(song.id)}')" class="btn btn-secondary btn-sm">
+              <button type="button" onclick="window.appActions.openSongEditorModal('${escapeHtml(song.id)}')" class="btn btn-secondary btn-sm">
                 <i class="fa-solid fa-pen text-[11px]"></i> Edit Chart
               </button>
             ` : ""}
-            <button onclick="window.appActions.closeModal()" class="btn btn-secondary btn-sm">
+            <button type="button" onclick="window.appActions.closeModal()" class="btn btn-secondary btn-sm">
               <i class="fa-solid fa-xmark"></i> Close
             </button>
           </div>
         </div>
 
-        <!-- Stage Controls Toolbar -->
-        <div class="bg-slate-50 border border-slate-200 rounded-md p-3 flex flex-wrap items-center justify-between gap-3">
-          <!-- Transpose Controls -->
-          <div class="flex items-center gap-1.5">
-            <span class="text-xs font-medium text-slate-600 mr-1">Transpose:</span>
-            <button onclick="window.appActions.adjustStageTranspose(-1)" class="btn btn-secondary btn-sm font-mono">-1</button>
-            <button onclick="window.appActions.adjustStageTranspose(0, true)" class="btn btn-secondary btn-sm">Reset (${escapeHtml(originalKey)})</button>
-            <button onclick="window.appActions.adjustStageTranspose(1)" class="btn btn-secondary btn-sm font-mono">+1</button>
-          </div>
-
-          <!-- Lyrics Mode & Font Size -->
-          <div class="flex items-center gap-1.5">
-            <button onclick="window.appActions.toggleStageLyricsOnly()" class="btn ${lyricsOnly ? "btn-indigo" : "btn-secondary"} btn-sm">
-              <i class="fa-solid fa-microphone-lines text-[11px]"></i> ${lyricsOnly ? "Lyrics Only: ON" : "Chords + Lyrics"}
-            </button>
-            <button onclick="window.appActions.adjustStageFont(-1)" class="btn btn-secondary btn-sm" title="Smaller Font">A-</button>
-            <button onclick="window.appActions.adjustStageFont(1)" class="btn btn-secondary btn-sm" title="Larger Font">A+</button>
-          </div>
-
-          <!-- Auto-Scroll & Metronome -->
-          <div class="flex items-center gap-3">
-            <div class="flex items-center gap-1.5">
-              <span class="text-xs font-medium text-slate-600">Scroll:</span>
-              <input type="range" min="0" max="5" step="1" value="${autoScrollSpeed}" onchange="window.appActions.setStageAutoScroll(this.value)" class="w-20 accent-indigo-600 cursor-pointer" />
+        <!-- Persistent Transpose & Stage Controls Panel (Never Unmounted on Key Change) -->
+        <div class="grid grid-cols-1 lg:grid-cols-12 gap-3">
+          <!-- Transpose Key Selector Card (Matches Mobile 12-Key Chromatic Grid) -->
+          <div id="stage-transpose-panel" class="lg:col-span-7 bg-[#F5F5F8] border border-slate-200/90 rounded-xl p-3.5 space-y-2.5">
+            <div class="flex flex-wrap items-center justify-between gap-2">
+              <div class="flex items-center gap-2">
+                <span class="text-xs font-extrabold uppercase tracking-wider text-[#10113F]">
+                  <i class="fa-solid fa-sliders text-[#500568] mr-1"></i> Transpose Key
+                </span>
+                <span id="stage-semitone-pill" class="px-2 py-0.5 rounded-full text-[11px] font-mono font-bold bg-[#F5D0FE] text-[#500568]">
+                  ${semitones === 0 ? "Original Key" : `${semitones > 0 ? "+" : ""}${semitones} st`}
+                </span>
+              </div>
+              <div class="flex items-center gap-1.5">
+                <button type="button" onclick="window.appActions.adjustStageTranspose(-1)" class="btn btn-secondary btn-sm font-mono px-2.5 py-1" title="Transpose Down 1 Semitone">
+                  -1
+                </button>
+                <button type="button" onclick="window.appActions.adjustStageTranspose(0, true)" class="btn btn-secondary btn-sm px-2.5 py-1 text-[11px]" title="Reset to Original Key">
+                  Original (${escapeHtml(originalKey)})
+                </button>
+                <button type="button" onclick="window.appActions.adjustStageTranspose(1)" class="btn btn-secondary btn-sm font-mono px-2.5 py-1" title="Transpose Up 1 Semitone">
+                  +1
+                </button>
+                <button type="button" id="stage-enharmonic-btn" onclick="window.appActions.toggleStageEnharmonic()" class="btn btn-secondary btn-sm font-mono px-2.5 py-1 text-[11px]" title="Toggle Sharp (#) / Flat (b) Spelling">
+                  ${useFlats ? "♭ Flats" : "♯ Sharps"}
+                </button>
+              </div>
             </div>
-            <button onclick="window.appActions.toggleMetronome()" class="btn btn-secondary btn-sm">
-              <span id="metronome-beat-dot" class="w-2.5 h-2.5 rounded-full bg-slate-300"></span>
-              <span class="font-mono">${escapeHtml(song.bpm || "74")} BPM</span>
-            </button>
+
+            <!-- 12-Key Chromatic Selector Grid -->
+            <div id="stage-key-grid" class="grid grid-cols-6 sm:grid-cols-12 gap-1.5 pt-0.5" role="group" aria-label="Select Song Key">
+              ${CHROMATIC_ROOTS.map((rootLabel, pitchIdx) => {
+                const displayKey = `${getTargetKeyLabel(minor ? "Am" : "C", pitchIdx, useFlats)}`;
+                const isCurrent = pitchIdx === activePitch;
+                const isOrig = pitchIdx === origPitch;
+                return `
+                  <button
+                    type="button"
+                    data-pitch="${pitchIdx}"
+                    onclick="window.appActions.setStageTargetPitch(${pitchIdx})"
+                    class="transpose-key-btn py-1.5 px-1 rounded-lg font-mono text-xs text-center ${isCurrent ? "active" : ""} ${isOrig && !isCurrent ? "original-key" : ""}"
+                    title="${isOrig ? `Original Key (${displayKey})` : `Transpose to ${displayKey}`}"
+                  >
+                    ${escapeHtml(displayKey)}
+                  </button>
+                `;
+              }).join("")}
+            </div>
+
+            <!-- View Mode, Font Size & Auto-Scroll Controls -->
+            <div class="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-200/80">
+              <div class="flex items-center gap-1.5">
+                <button type="button" id="stage-lyrics-toggle-btn" onclick="window.appActions.toggleStageLyricsOnly()" class="btn ${lyricsOnly ? "btn-primary" : "btn-secondary"} btn-sm">
+                  <i class="fa-solid fa-microphone-lines text-[11px]"></i>
+                  <span>${lyricsOnly ? "Lyrics Only: ON" : "Chords + Lyrics"}</span>
+                </button>
+                <button type="button" onclick="window.appActions.adjustStageFont(-1)" class="btn btn-secondary btn-sm font-bold" title="Decrease Font Size">A-</button>
+                <button type="button" onclick="window.appActions.adjustStageFont(1)" class="btn btn-secondary btn-sm font-bold" title="Increase Font Size">A+</button>
+              </div>
+              <div class="flex items-center gap-2">
+                <label for="stage-scroll-range" class="text-[11px] font-semibold text-slate-600">Auto-Scroll:</label>
+                <input id="stage-scroll-range" type="range" min="0" max="5" step="1" value="${autoScrollSpeed}" oninput="window.appActions.setStageAutoScroll(this.value)" class="w-24 accent-[#500568] cursor-pointer" />
+              </div>
+            </div>
+          </div>
+
+          <!-- Precision Decimal Metronome Card (Supports 72.5, 85.5, 100.25, 120.5 BPM) -->
+          <div class="lg:col-span-5 bg-[#F5F5F8] border border-slate-200/90 rounded-xl p-3.5 flex flex-col justify-between space-y-2.5">
+            <div class="flex items-center justify-between gap-2">
+              <div class="flex items-center gap-2">
+                <span id="metronome-beat-dot" class="w-3 h-3 rounded-full bg-slate-300 transition-transform duration-75"></span>
+                <span class="text-xs font-extrabold uppercase tracking-wider text-[#10113F]">Metronome</span>
+              </div>
+              <div class="flex items-center gap-1.5">
+                <button type="button" onclick="window.appActions.tapMetronomeTempo()" class="btn btn-secondary btn-sm px-2.5 py-1 text-[11px]" title="Tap Tempo">
+                  <i class="fa-regular fa-hand-pointer text-[10px]"></i> Tap
+                </button>
+                <button type="button" id="stage-metronome-play-btn" onclick="window.appActions.toggleMetronome()" class="btn btn-primary btn-sm font-semibold min-w-[84px]">
+                  <i class="fa-solid fa-play text-[10px]"></i> Start
+                </button>
+              </div>
+            </div>
+
+            <!-- Decimal BPM Input & Step Controls -->
+            <div class="flex flex-wrap items-center gap-1.5">
+              <button type="button" onclick="window.appActions.stepMetronomeBpm(-1)" class="btn btn-secondary btn-sm font-mono px-2 py-1 text-[11px]" title="-1 BPM">-1</button>
+              <button type="button" onclick="window.appActions.stepMetronomeBpm(-0.5)" class="btn btn-secondary btn-sm font-mono px-2 py-1 text-[11px]" title="-0.5 BPM">-0.5</button>
+              <div class="relative flex-1 min-w-[105px]">
+                <input
+                  id="stage-metronome-bpm-input"
+                  type="number"
+                  step="any"
+                  min="30"
+                  max="240"
+                  inputmode="decimal"
+                  value="${escapeHtml(bpmText)}"
+                  aria-label="Metronome BPM (supports decimals like 72.5 or 100.25)"
+                  onchange="window.appActions.applyMetronomeBpmInput(this.value)"
+                  onkeydown="if(event.key==='Enter'){event.preventDefault();window.appActions.applyMetronomeBpmInput(this.value);}"
+                  class="form-input font-mono font-bold text-center text-xs py-1.5 pr-10"
+                />
+                <span class="absolute right-2.5 top-1/2 -translate-y-1/2 text-[10px] font-bold text-slate-400 pointer-events-none">BPM</span>
+              </div>
+              <button type="button" onclick="window.appActions.stepMetronomeBpm(0.5)" class="btn btn-secondary btn-sm font-mono px-2 py-1 text-[11px]" title="+0.5 BPM">+0.5</button>
+              <button type="button" onclick="window.appActions.stepMetronomeBpm(1)" class="btn btn-secondary btn-sm font-mono px-2 py-1 text-[11px]" title="+1 BPM">+1</button>
+            </div>
+
+            <div class="flex items-center justify-between gap-2 pt-1 border-t border-slate-200/80 text-[11px]">
+              <span id="stage-metronome-status" class="font-mono text-slate-600 truncate">
+                Ready · ${escapeHtml(bpmText)} BPM (${intervalMs} ms/beat)
+              </span>
+              <div class="flex items-center gap-1 shrink-0">
+                <label for="stage-metronome-meter" class="text-slate-500 font-medium">Meter:</label>
+                <select id="stage-metronome-meter" onchange="window.appActions.setMetronomeMeter(this.value)" class="bg-white border border-slate-200 rounded px-1.5 py-0.5 text-[11px] font-semibold text-[#10113F]">
+                  ${[2, 3, 4, 6, 8].map((m) => `<option value="${m}" ${metronome.meter === m ? "selected" : ""}>${m}/4</option>`).join("")}
+                </select>
+              </div>
+            </div>
           </div>
         </div>
 
         <!-- Chord Sheet & Optional YouTube Split Layout -->
         <div class="grid grid-cols-1 ${ytId ? "lg:grid-cols-12" : ""} gap-4 items-start">
-          <div id="stage-chord-scroller" class="${ytId ? "lg:col-span-8" : ""} bg-[#FCFBF7] border border-slate-200 rounded-md p-5 max-h-[60vh] overflow-y-auto chord-sheet-container" style="font-size: ${fontSize}px;">
+          <div id="stage-chord-scroller" class="${ytId ? "lg:col-span-8" : ""} bg-[#FCFBF7] border border-slate-200 rounded-xl p-5 max-h-[58vh] overflow-y-auto chord-sheet-container" style="font-size: ${fontSize}px;">
             ${formattedHtml}
           </div>
 
           ${ytId ? `
             <div class="lg:col-span-4 space-y-3">
-              <div class="border border-slate-200 rounded-md overflow-hidden bg-slate-950 aspect-video">
+              <div class="border border-slate-200 rounded-xl overflow-hidden bg-slate-950 aspect-video shadow-xs">
                 <iframe
                   src="https://www.youtube.com/embed/${escapeHtml(ytId)}"
                   title="YouTube Reference Player"
@@ -1844,7 +2210,7 @@ window.appActions = {
                 ></iframe>
               </div>
               <a href="${escapeHtml(song.referenceUrl)}" target="_blank" rel="noopener" class="w-full btn btn-secondary btn-sm">
-                <i class="fa-brands fa-youtube text-rose-600"></i> Open on YouTube
+                <i class="fa-brands fa-youtube text-rose-600"></i> Open Reference on YouTube
               </a>
             </div>
           ` : ""}
@@ -1853,15 +2219,95 @@ window.appActions = {
     `, "max-w-5xl");
   },
 
+  /**
+   * Updates ONLY the song key badge, transpose button active states, and chord sheet HTML
+   * in-place without unmounting `#modal-root` or touching the YouTube iframe or scroll position.
+   */
+  updateStageViewInPlace() {
+    const info = this.getStageTransposeInfo();
+    if (!info) return;
+    const { song, originalKey, origPitch, minor, semitones, activePitch, useFlats, activeKeyLabel } = info;
+    const { lyricsOnly } = state.stageModal;
+
+    // 1. Update Key Badge in header
+    const keyBadge = document.getElementById("stage-active-key-badge");
+    if (keyBadge) {
+      keyBadge.textContent = `Key: ${activeKeyLabel}${semitones !== 0 ? ` (Original: ${originalKey})` : ""}`;
+    }
+
+    // 2. Update Semitone Offset Pill
+    const semitonePill = document.getElementById("stage-semitone-pill");
+    if (semitonePill) {
+      semitonePill.textContent = semitones === 0 ? "Original Key" : `${semitones > 0 ? "+" : ""}${semitones} st`;
+    }
+
+    // 3. Update Enharmonic Toggle Button
+    const enharmonicBtn = document.getElementById("stage-enharmonic-btn");
+    if (enharmonicBtn) {
+      enharmonicBtn.textContent = useFlats ? "♭ Flats" : "♯ Sharps";
+    }
+
+    // 4. Update 12-Key Chromatic Grid active states & enharmonic labels in-place
+    const keyGrid = document.getElementById("stage-key-grid");
+    if (keyGrid) {
+      keyGrid.querySelectorAll(".transpose-key-btn").forEach((btn) => {
+        const pitchIdx = Number(btn.getAttribute("data-pitch"));
+        const displayKey = getTargetKeyLabel(minor ? "Am" : "C", pitchIdx, useFlats);
+        btn.textContent = displayKey;
+        const isCurrent = pitchIdx === activePitch;
+        const isOrig = pitchIdx === origPitch;
+        btn.classList.toggle("active", isCurrent);
+        btn.classList.toggle("original-key", isOrig && !isCurrent);
+      });
+    }
+
+    // 5. Update Lyrics Only toggle button
+    const lyricsBtn = document.getElementById("stage-lyrics-toggle-btn");
+    if (lyricsBtn) {
+      lyricsBtn.className = `btn ${lyricsOnly ? "btn-primary" : "btn-secondary"} btn-sm`;
+      lyricsBtn.innerHTML = `
+        <i class="fa-solid fa-microphone-lines text-[11px]"></i>
+        <span>${lyricsOnly ? "Lyrics Only: ON" : "Chords + Lyrics"}</span>
+      `;
+    }
+
+    // 6. Update Chord Sheet DOM while strictly preserving user's scroll position
+    const scroller = document.getElementById("stage-chord-scroller");
+    if (scroller) {
+      const savedScrollTop = scroller.scrollTop;
+      scroller.innerHTML = renderFormattedChordSheet(song.sheet, song.lyrics, semitones, lyricsOnly, useFlats);
+      scroller.scrollTop = savedScrollTop;
+    }
+  },
+
+  setStageTargetPitch(targetPitch) {
+    const info = this.getStageTransposeInfo();
+    if (!info) return;
+    const diff = ((Number(targetPitch) - info.origPitch) % 12 + 12) % 12;
+    state.stageModal.semitones = diff;
+    this.updateStageViewInPlace();
+  },
+
   adjustStageTranspose(delta, reset = false) {
-    if (reset) state.stageModal.semitones = 0;
-    else state.stageModal.semitones = ((state.stageModal.semitones + delta) % 12);
-    this.renderStageModalContent();
+    if (reset) {
+      state.stageModal.semitones = 0;
+      state.stageModal.useFlatsOverride = null;
+    } else {
+      state.stageModal.semitones = ((state.stageModal.semitones + Number(delta)) % 12 + 12) % 12;
+    }
+    this.updateStageViewInPlace();
+  },
+
+  toggleStageEnharmonic() {
+    const info = this.getStageTransposeInfo();
+    if (!info) return;
+    state.stageModal.useFlatsOverride = !info.useFlats;
+    this.updateStageViewInPlace();
   },
 
   toggleStageLyricsOnly() {
     state.stageModal.lyricsOnly = !state.stageModal.lyricsOnly;
-    this.renderStageModalContent();
+    this.updateStageViewInPlace();
   },
 
   adjustStageFont(delta) {
@@ -1885,19 +2331,87 @@ window.appActions = {
     }
   },
 
+  // --- Decimal Metronome Controls (Beat Interval = 60,000 / BPM) ---
+  syncMetronomeUi() {
+    const bpmText = formatBpmDisplay(metronome.bpm);
+    const intervalMs = (60000 / metronome.bpm).toFixed(1);
+    const inputEl = document.getElementById("stage-metronome-bpm-input");
+    const badgeEl = document.getElementById("stage-bpm-badge");
+    const statusEl = document.getElementById("stage-metronome-status");
+
+    if (inputEl && document.activeElement !== inputEl) {
+      inputEl.value = bpmText;
+    }
+    if (badgeEl) {
+      badgeEl.textContent = `${bpmText} BPM`;
+    }
+    if (statusEl && !metronome.isPlaying) {
+      statusEl.textContent = `Ready · ${bpmText} BPM (${intervalMs} ms/beat)`;
+    }
+  },
+
+  applyMetronomeBpmInput(rawVal) {
+    const check = validateBpmValue(rawVal);
+    const inputEl = document.getElementById("stage-metronome-bpm-input");
+    if (!check.valid) {
+      showToast(check.error, "warning");
+      if (inputEl) inputEl.value = formatBpmDisplay(metronome.bpm);
+      return;
+    }
+    metronome.setBpm(check.value);
+    if (inputEl) inputEl.value = formatBpmDisplay(metronome.bpm);
+    this.syncMetronomeUi();
+  },
+
+  stepMetronomeBpm(delta) {
+    const next = Math.min(240, Math.max(30, Math.round((metronome.bpm + Number(delta)) * 100) / 100));
+    metronome.setBpm(next);
+    const inputEl = document.getElementById("stage-metronome-bpm-input");
+    if (inputEl) inputEl.value = formatBpmDisplay(metronome.bpm);
+    this.syncMetronomeUi();
+  },
+
+  setMetronomeMeter(meterVal) {
+    metronome.setMeter(meterVal);
+    this.syncMetronomeUi();
+  },
+
+  tapMetronomeTempo() {
+    const tappedBpm = metronome.tapTempo();
+    if (tappedBpm !== null) {
+      const inputEl = document.getElementById("stage-metronome-bpm-input");
+      if (inputEl) inputEl.value = formatBpmDisplay(metronome.bpm);
+      this.syncMetronomeUi();
+    } else {
+      const statusEl = document.getElementById("stage-metronome-status");
+      if (statusEl) statusEl.textContent = "Tap again to measure tempo...";
+    }
+  },
+
   toggleMetronome() {
+    const inputEl = document.getElementById("stage-metronome-bpm-input");
+    if (inputEl && inputEl.value) {
+      const check = validateBpmValue(inputEl.value);
+      if (!check.valid) {
+        showToast(check.error, "error");
+        return;
+      }
+      metronome.setBpm(check.value);
+    }
     const active = metronome.toggle();
-    showToast(active ? `Metronome started (${metronome.bpm} BPM)` : "Metronome stopped", "info");
+    this.syncMetronomeUi();
+    showToast(active ? `Metronome started (${formatBpmDisplay(metronome.bpm)} BPM)` : "Metronome stopped", "info");
   },
 
   openSongEditorModal(songId = null) {
     const existing = songId ? state.songs.find((s) => s.id === songId) : null;
+    const initialBpm = existing?.bpm !== undefined ? formatBpmDisplay(existing.bpm) : "72";
     openModal(`
       <div class="space-y-4">
         <div class="flex items-center justify-between pb-3 border-b border-slate-200">
           <div>
-            <h3 class="text-base font-semibold text-slate-900">${existing ? "Edit Song & Chord Sheet" : "Add Song to Ministry Library"}</h3>
-            <p class="text-xs text-slate-500">Supports both Chord-over-Lyric lines and inline [G] ChordPro brackets.</p>
+            <h3 class="text-base font-bold text-[#10113F]">${existing ? "Edit Song & Chord Sheet" : "Add Song to Ministry Library"}</h3>
+            <p class="text-xs text-slate-500">Supports Chord-over-Lyric lines, inline [G] ChordPro brackets, and decimal BPM.</p>
           </div>
           <button onclick="window.appActions.closeModal()" class="text-slate-400 hover:text-slate-600"><i class="fa-solid fa-xmark"></i></button>
         </div>
@@ -1923,7 +2437,7 @@ window.appActions = {
             </div>
             <div>
               <label class="form-label">Tempo (BPM)</label>
-              <input id="song-tempo" type="number" min="30" max="240" value="${escapeHtml(existing?.bpm || "72")}" class="form-input font-mono" />
+              <input id="song-tempo" type="number" step="any" min="30" max="240" inputmode="decimal" value="${escapeHtml(initialBpm)}" placeholder="e.g. 72.5" class="form-input font-mono" />
             </div>
             <div class="col-span-2 sm:col-span-1">
               <label class="form-label">YouTube Reference Link</label>
@@ -1932,7 +2446,7 @@ window.appActions = {
           </div>
 
           <div>
-            <label class="form-label">Chord Sheet & Lyrics</label>
+            <label class="form-label">Chord Sheet &amp; Lyrics</label>
             <textarea id="song-chords" rows="11" placeholder="[Verse 1]\nG                 C\nI love You Lord, Oh Your mercy never fails me..." class="form-textarea font-mono text-xs leading-relaxed">${escapeHtml(existing?.sheet || existing?.lyrics || "")}</textarea>
           </div>
 
@@ -1954,7 +2468,12 @@ window.appActions = {
     const title = (document.getElementById("song-title")?.value.trim() || "").slice(0, 120);
     const artist = (document.getElementById("song-artist")?.value.trim() || "").slice(0, 100);
     const key = (document.getElementById("song-key")?.value || "C").slice(0, 10);
-    const bpm = parseInt(document.getElementById("song-tempo")?.value || "74", 10) || 74;
+    const rawTempo = document.getElementById("song-tempo")?.value || "74";
+    const bpmCheck = validateBpmValue(rawTempo);
+    if (!bpmCheck.valid) {
+      return showToast(bpmCheck.error, "error");
+    }
+    const bpm = bpmCheck.value;
     const referenceUrl = (document.getElementById("song-yt")?.value.trim() || "");
     const sheet = (document.getElementById("song-chords")?.value || "").slice(0, 20000);
 
@@ -1979,6 +2498,38 @@ window.appActions = {
 
     closeModal();
     showToast(existingId ? "Song updated." : "Song added to library.", "success");
+  },
+
+  async seedDefaultSongs() {
+    const code = state.currentTeam?.teamCode || state.currentUser?.teamCode;
+    if (!code) return;
+    try {
+      const existingTitles = new Set(state.songs.map((s) => (s.title || "").trim().toLowerCase()));
+      let addedCount = 0;
+      const now = Date.now();
+      for (const seed of DEFAULT_SEED_SONGS) {
+        if (existingTitles.has(seed.title.toLowerCase())) continue;
+        const ref = doc(collection(db, "teams", code, "songs"));
+        await setDoc(ref, {
+          id: ref.id,
+          teamCode: code,
+          title: seed.title,
+          artist: seed.artist,
+          key: seed.key,
+          bpm: seed.bpm,
+          sheet: seed.sheet,
+          lyrics: seed.sheet,
+          referenceUrl: seed.referenceUrl,
+          createdBy: state.currentUser.uid,
+          createdAt: now,
+          updatedAt: now
+        });
+        addedCount++;
+      }
+      showToast(addedCount > 0 ? `Loaded ${addedCount} worship songs with cover art.` : "All starter songs are already in your library.", "success");
+    } catch (err) {
+      showToast(err.message || "Could not load starter songs.", "error");
+    }
   },
 
   async deleteSong(songId) {
@@ -2047,7 +2598,7 @@ window.appActions = {
       <div class="space-y-4">
         <div class="flex items-center justify-between pb-3 border-b border-slate-200">
           <div>
-            <h3 class="text-base font-semibold text-slate-900">Transfer Worship Leadership</h3>
+            <h3 class="text-base font-bold text-[#10113F]">Transfer Worship Leadership</h3>
             <p class="text-xs text-slate-500">Select a team member to become the new primary Worship Leader.</p>
           </div>
           <button onclick="window.appActions.closeModal()" class="text-slate-400 hover:text-slate-600"><i class="fa-solid fa-xmark"></i></button>
