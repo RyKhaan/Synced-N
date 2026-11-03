@@ -304,8 +304,11 @@ export function renderHomeView(state) {
           `}
         </div>
 
-        <!-- Right Column (5 cols): Action Items & Announcements -->
+        <!-- Right Column (5 cols): Dashboard Calendar Widget, Action Items & Announcements -->
         <div class="lg:col-span-5 space-y-6">
+          <!-- Integrated Dashboard Calendar Widget (Accessible directly from Home/Dashboard) -->
+          ${renderDashboardCalendarWidget(state)}
+
           <!-- Pending Requests Alert Card (Leaders Only) -->
           ${isLeader && (pendingSubs.length > 0 || pendingRejoins.length > 0) ? `
             <div class="surface-card overflow-hidden border-amber-300">
@@ -404,6 +407,210 @@ export function renderHomeView(state) {
             `}
           </div>
         </div>
+      </div>
+    </div>
+  `;
+}
+
+/**
+ * Integrated Dashboard Calendar Widget (Accessible directly from Dashboard / Home)
+ * Displays monthly calendar with service/rehearsal/unavailability dots, selected date details,
+ * upcoming rehearsals overview, and a button to open the full Calendar page.
+ */
+export function renderDashboardCalendarWidget(state) {
+  const { currentUser, services, calendar } = state;
+  const isLeader = hasLeaderPrivileges(currentUser);
+  const now = new Date();
+  const todayIso = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+
+  const year = calendar?.year ?? now.getFullYear();
+  const month = calendar?.month ?? now.getMonth();
+  const selectedDate = calendar?.selectedDate || todayIso;
+
+  const firstOfMonth = new Date(year, month, 1);
+  const monthLabel = firstOfMonth.toLocaleDateString("en-US", { month: "long" });
+  const startWeekday = firstOfMonth.getDay();
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const prevMonthDays = new Date(year, month, 0).getDate();
+  const totalCells = Math.ceil((startWeekday + daysInMonth) / 7) * 7;
+  const myRanges = currentUser?.unavailableRanges || [];
+
+  function getMiniEvents(isoKey) {
+    const dayServices = services.filter((s) => s.date === isoKey);
+    const dayRehearsals = services.filter((s) => (s.rehearsal?.date || s.rehearsalDate || "") === isoKey);
+    const myUnavail = myRanges.filter((r) => isoKey >= r.startDate && isoKey <= r.endDate);
+    return { dayServices, dayRehearsals, myUnavail };
+  }
+
+  const miniCells = [];
+  for (let i = 0; i < totalCells; i++) {
+    const dayNum = i - startWeekday + 1;
+    if (dayNum < 1) {
+      miniCells.push(`
+        <div class="calendar-day-cell compact-cell outside">
+          <span class="text-[11px] font-medium text-slate-400">${prevMonthDays + dayNum}</span>
+        </div>
+      `);
+    } else if (dayNum > daysInMonth) {
+      miniCells.push(`
+        <div class="calendar-day-cell compact-cell outside">
+          <span class="text-[11px] font-medium text-slate-400">${dayNum - daysInMonth}</span>
+        </div>
+      `);
+    } else {
+      const isoKey = `${year}-${String(month + 1).padStart(2, "0")}-${String(dayNum).padStart(2, "0")}`;
+      const isSelected = isoKey === selectedDate;
+      const isToday = isoKey === todayIso;
+      const { dayServices, dayRehearsals, myUnavail } = getMiniEvents(isoKey);
+      const hasService = dayServices.length > 0;
+      const hasRehearsal = dayRehearsals.length > 0;
+      const hasUnavail = myUnavail.length > 0;
+
+      miniCells.push(`
+        <button
+          type="button"
+          onclick="window.appActions.selectCalendarDate('${isoKey}')"
+          class="calendar-day-cell compact-cell ${isSelected ? "selected" : ""} ${isToday ? "today" : ""}"
+          aria-label="${escapeHtml(formatFriendlyDate(isoKey))}"
+        >
+          <span class="text-xs font-bold ${
+            isSelected ? "text-white" : hasUnavail ? "text-rose-600" : "text-[#10113F]"
+          }">${dayNum}</span>
+          <div class="flex items-center justify-center gap-0.5 mt-0.5 min-h-[6px]">
+            ${hasService ? `<span class="w-1.5 h-1.5 rounded-full ${isSelected ? "bg-emerald-300" : "bg-[#22C55E]"}"></span>` : ""}
+            ${hasRehearsal ? `<span class="w-1.5 h-1.5 rounded-full ${isSelected ? "bg-sky-300" : "bg-[#3B82F6]"}"></span>` : ""}
+            ${hasUnavail ? `<span class="w-1.5 h-1.5 rounded-full ${isSelected ? "bg-rose-300" : "bg-[#EF4444]"}"></span>` : ""}
+          </div>
+        </button>
+      `);
+    }
+  }
+
+  const selEvents = getMiniEvents(selectedDate);
+  const upcomingRehearsals = services.filter((s) => (s.rehearsal?.date || "") >= todayIso).slice(0, 2);
+  const weekdays = ["S", "M", "T", "W", "T", "F", "S"];
+
+  return `
+    <div class="surface-card p-4 sm:p-5 space-y-3.5" id="dashboard-calendar-widget">
+      <!-- Widget Header -->
+      <div class="flex items-center justify-between gap-2 pb-2.5 border-b border-slate-200">
+        <div class="flex items-center gap-2">
+          <div class="w-8 h-8 rounded-lg bg-[#F5D0FE]/70 text-[#500568] flex items-center justify-center text-xs shrink-0">
+            <i class="fa-solid fa-calendar-days"></i>
+          </div>
+          <div>
+            <h2 class="text-sm font-bold text-[#10113F]">Ministry Calendar</h2>
+            <p class="text-[11px] text-slate-500">Services, rehearsals & availability</p>
+          </div>
+        </div>
+        <button onclick="window.appActions.switchTab('calendar')" class="btn btn-secondary btn-sm">
+          <span>Open Full Calendar</span>
+          <i class="fa-solid fa-expand text-[10px]"></i>
+        </button>
+      </div>
+
+      <!-- Month Navigation -->
+      <div class="flex items-center justify-between gap-2">
+        <button
+          type="button"
+          onclick="window.appActions.changeCalendarMonth(-1)"
+          class="w-8 h-8 rounded-lg bg-[#F5F5F8] hover:bg-[#F5D0FE]/60 text-[#10113F] flex items-center justify-center font-bold transition"
+          aria-label="Previous month"
+        >
+          &lsaquo;
+        </button>
+        <div class="text-center">
+          <span class="text-sm font-extrabold text-[#10113F]">${escapeHtml(monthLabel)} ${year}</span>
+          ${selectedDate !== todayIso ? `
+            <button onclick="window.appActions.jumpCalendarToday()" class="ml-2 text-[11px] font-semibold text-[#500568] hover:underline">
+              Today
+            </button>
+          ` : ""}
+        </div>
+        <button
+          type="button"
+          onclick="window.appActions.changeCalendarMonth(1)"
+          class="w-8 h-8 rounded-lg bg-[#F5F5F8] hover:bg-[#F5D0FE]/60 text-[#10113F] flex items-center justify-center font-bold transition"
+          aria-label="Next month"
+        >
+          &rsaquo;
+        </button>
+      </div>
+
+      <!-- Weekday Headers -->
+      <div class="grid grid-cols-7 gap-1 text-center">
+        ${weekdays.map((d, idx) => `
+          <div class="text-[10px] font-bold uppercase ${idx === 0 || idx === 6 ? "text-[#D946EF]" : "text-slate-500"}">${d}</div>
+        `).join("")}
+      </div>
+
+      <!-- Compact Calendar Grid -->
+      <div class="calendar-grid">
+        ${miniCells.join("")}
+      </div>
+
+      <!-- Legend -->
+      <div class="flex flex-wrap items-center justify-between gap-2 pt-1 text-[11px] text-slate-500">
+        <div class="flex items-center gap-3">
+          <span class="inline-flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-[#22C55E]"></span> Service</span>
+          <span class="inline-flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-[#3B82F6]"></span> Rehearsal</span>
+          <span class="inline-flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-[#EF4444]"></span> Unavailable</span>
+        </div>
+      </div>
+
+      <!-- Selected Date Event Summary -->
+      <div class="p-3 rounded-xl bg-[#F8FAFC] border border-slate-200 space-y-2">
+        <div class="flex items-center justify-between gap-2">
+          <span class="text-xs font-bold text-[#10113F]">${escapeHtml(formatFriendlyDate(selectedDate))}</span>
+          <div class="flex items-center gap-1.5">
+            <button onclick="window.appActions.openAvailabilityModal('${escapeHtml(selectedDate)}')" class="text-[11px] font-semibold text-[#500568] hover:underline">
+              Set Unavailability
+            </button>
+          </div>
+        </div>
+
+        ${selEvents.dayServices.length === 0 && selEvents.dayRehearsals.length === 0 && selEvents.myUnavail.length === 0 ? `
+          <p class="text-xs text-slate-500">No services or rehearsals on this date.</p>
+        ` : `
+          <div class="space-y-1.5">
+            ${selEvents.dayServices.map((srv) => `
+              <div class="flex items-center justify-between gap-2 text-xs bg-emerald-50 border border-emerald-200 rounded-lg px-2.5 py-1.5">
+                <div class="truncate">
+                  <span class="font-bold text-emerald-800"><i class="fa-solid fa-church text-[10px] mr-1"></i>${escapeHtml(srv.title || "Worship Service")}</span>
+                  <span class="text-slate-600 ml-1">${srv.start ? formatFriendlyTime(srv.start) : ""}</span>
+                </div>
+                <button onclick="window.appActions.switchTab('calendar')" class="text-[11px] font-semibold text-[#500568] shrink-0">Details</button>
+              </div>
+            `).join("")}
+            ${selEvents.dayRehearsals.map((srv) => `
+              <div class="flex items-center justify-between gap-2 text-xs bg-blue-50 border border-blue-200 rounded-lg px-2.5 py-1.5">
+                <div class="truncate">
+                  <span class="font-bold text-blue-800"><i class="fa-solid fa-drum text-[10px] mr-1"></i>Rehearsal: ${escapeHtml(srv.title || "Service")}</span>
+                  <span class="text-slate-600 ml-1">${srv.rehearsal?.start ? formatFriendlyTime(srv.rehearsal.start) : ""}</span>
+                </div>
+                <button onclick="window.appActions.switchTab('calendar')" class="text-[11px] font-semibold text-[#500568] shrink-0">Details</button>
+              </div>
+            `).join("")}
+            ${selEvents.myUnavail.map((r) => `
+              <div class="flex items-center justify-between gap-2 text-xs bg-rose-50 border border-rose-200 rounded-lg px-2.5 py-1.5">
+                <span class="font-semibold text-rose-800 truncate"><i class="fa-regular fa-calendar-xmark mr-1"></i>Unavailable: ${escapeHtml(r.reason || "Personal")}</span>
+                <button onclick="window.appActions.removeUnavailableRange('${escapeHtml(r.id)}', false)" class="text-[11px] font-bold text-rose-700 hover:underline shrink-0">Clear</button>
+              </div>
+            `).join("")}
+          </div>
+        `}
+
+        ${upcomingRehearsals.length > 0 ? `
+          <div class="pt-2 border-t border-slate-200/80 space-y-1">
+            <div class="text-[10px] font-bold uppercase tracking-wider text-slate-400">Upcoming Rehearsals</div>
+            ${upcomingRehearsals.map((srv) => `
+              <div class="flex items-center justify-between text-xs text-slate-600">
+                <span class="truncate font-medium text-[#10113F]"><i class="fa-solid fa-drum text-blue-600 text-[10px] mr-1"></i>${escapeHtml(srv.title)}</span>
+                <span class="text-[11px] shrink-0">${escapeHtml(formatFriendlyDate(srv.rehearsal.date))}</span>
+              </div>
+            `).join("")}
+          </div>
+        ` : ""}
       </div>
     </div>
   `;
@@ -543,6 +750,11 @@ export function renderServiceCardHtml(srv, state, isLeader) {
             <span class="text-[11px] font-bold uppercase tracking-wider text-[#10113F]">
               Song Lineup (${setlist.length})
             </span>
+            ${isLeader ? `
+              <button onclick="window.appActions.openAddSongToServiceModal('${escapeHtml(srv.id)}')" class="text-[11px] font-bold text-[#500568] hover:underline flex items-center gap-1" title="Add Songs to Setlist">
+                <i class="fa-solid fa-plus text-[9px]"></i> Add Song
+              </button>
+            ` : ""}
           </div>
           ${setlist.length === 0 ? `
             <p class="text-xs text-slate-400 italic py-2">No songs added to setlist yet.</p>
@@ -747,7 +959,12 @@ export function renderCalendarView(state) {
       <!-- Page Header -->
       <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-slate-200">
         <div>
-          <h1 class="text-xl font-bold text-[#10113F]">Ministry Calendar & Availability</h1>
+          <div class="flex items-center gap-2">
+            <button onclick="window.appActions.switchTab('home')" class="btn btn-ghost btn-sm px-2 text-xs" title="Back to Dashboard">
+              <i class="fa-solid fa-arrow-left"></i> Dashboard
+            </button>
+            <h1 class="text-xl font-bold text-[#10113F]">Ministry Calendar & Availability</h1>
+          </div>
           <p class="text-xs text-slate-500 mt-0.5">Monthly schedule of church worship services, band rehearsals, and member availability synced with mobile.</p>
         </div>
         <div class="flex flex-wrap items-center gap-2">
@@ -1422,6 +1639,16 @@ export function renderRosterView(state) {
 
   return `
     <div class="space-y-6">
+      <!-- Mobile Team Hub Switcher (Matches Mobile App Team Chat / Members Tabs) -->
+      <div class="md:hidden grid grid-cols-2 p-1 bg-[#F5F5F8] rounded-xl border border-slate-200 text-xs font-bold">
+        <button type="button" onclick="window.appActions.switchTab('chat')" class="py-2 rounded-lg text-slate-600 hover:text-[#10113F] transition">
+          <i class="fa-regular fa-comments mr-1"></i> Team Chat
+        </button>
+        <button type="button" onclick="window.appActions.switchTab('roster')" class="py-2 rounded-lg bg-[#500568] text-white shadow-xs transition">
+          <i class="fa-solid fa-users mr-1"></i> Team Roster (${teamMembers.length})
+        </button>
+      </div>
+
       <!-- Page Header -->
       <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-slate-200">
         <div>
@@ -1597,154 +1824,258 @@ export function renderRosterView(state) {
 }
 
 export function renderChatView(state) {
-  const { currentUser, messages, chatReplyTarget, chatEditingMessage } = state;
+  const { currentUser, messages, chatReplyTarget, chatEditingMessage, teamMembers, chatScroll } = state;
+  const isScrolledUp = chatScroll && chatScroll.isPinnedToBottom === false;
 
   return `
-    <div class="surface-card flex flex-col h-[calc(100vh-9.5rem)] md:h-[calc(100vh-7.5rem)] min-h-[480px] overflow-hidden">
-      <!-- Chat Header -->
-      <div class="px-5 py-3.5 border-b border-slate-200 flex items-center justify-between bg-white">
-        <div class="flex items-center gap-2.5">
-          <div class="w-9 h-9 rounded-xl bg-[#F5D0FE]/70 border border-[#E879F9] flex items-center justify-center text-[#500568] text-xs">
-            <i class="fa-regular fa-comments"></i>
-          </div>
-          <div>
-            <h2 class="text-sm font-bold text-[#10113F]">Ministry Team Chat</h2>
-            <p class="text-[11px] text-slate-500">Real-time coordination synced across web and mobile</p>
-          </div>
-        </div>
-        <span class="badge badge-emerald">
-          <span class="w-1.5 h-1.5 rounded-full bg-emerald-600"></span> Live Sync
-        </span>
+    <div class="space-y-3">
+      <!-- Mobile Team Hub Switcher (Matches Mobile App Team Chat / Members Tabs) -->
+      <div class="md:hidden grid grid-cols-2 p-1 bg-[#F5F5F8] rounded-xl border border-slate-200 text-xs font-bold">
+        <button type="button" onclick="window.appActions.switchTab('chat')" class="py-2 rounded-lg bg-[#500568] text-white shadow-xs transition">
+          <i class="fa-regular fa-comments mr-1"></i> Team Chat
+        </button>
+        <button type="button" onclick="window.appActions.switchTab('roster')" class="py-2 rounded-lg text-slate-600 hover:text-[#10113F] transition">
+          <i class="fa-solid fa-users mr-1"></i> Team Roster (${(teamMembers || []).length})
+        </button>
       </div>
 
-      <!-- Messages Scroll Container -->
-      <div id="chat-messages-scroll" class="flex-1 overflow-y-auto p-4 sm:p-5 space-y-3.5 bg-[#F6F7FB]">
-        ${messages.length === 0 ? `
-          <div class="h-full flex flex-col items-center justify-center text-center py-12">
-            <div class="w-11 h-11 rounded-xl bg-white border border-slate-200 flex items-center justify-center mb-2.5 text-[#500568]">
-              <i class="fa-regular fa-comment-dots"></i>
+      <div class="surface-card relative flex flex-col h-[calc(100vh-12.5rem)] md:h-[calc(100vh-7.5rem)] min-h-[460px] overflow-hidden">
+        <!-- Chat Header -->
+        <div class="px-5 py-3.5 border-b border-slate-200 flex items-center justify-between bg-white">
+          <div class="flex items-center gap-2.5">
+            <div class="w-9 h-9 rounded-xl bg-[#F5D0FE]/70 border border-[#E879F9] flex items-center justify-center text-[#500568] text-xs">
+              <i class="fa-regular fa-comments"></i>
             </div>
-            <p class="text-sm font-bold text-[#10113F]">No messages yet</p>
-            <p class="text-xs text-slate-500 mt-0.5">Start a conversation with your worship team.</p>
+            <div>
+              <h2 class="text-sm font-bold text-[#10113F]">Ministry Team Chat</h2>
+              <p class="text-[11px] text-slate-500">Real-time coordination synced across web and mobile</p>
+            </div>
           </div>
-        ` : messages.map((msg) => {
-          const isMe = msg.senderUid === currentUser.uid;
-          const isDeleted = Boolean(msg.isDeleted);
+          <div class="flex items-center gap-2">
+            <button onclick="window.appActions.switchTab('roster')" class="hidden sm:inline-flex btn btn-secondary btn-sm text-xs">
+              <i class="fa-solid fa-users text-[10px]"></i> Roster (${(teamMembers || []).length})
+            </button>
+            <span class="badge badge-emerald">
+              <span class="w-1.5 h-1.5 rounded-full bg-emerald-600"></span> Live Sync
+            </span>
+          </div>
+        </div>
 
-          return `
-            <div class="flex items-start gap-2.5 ${isMe ? "flex-row-reverse" : ""}">
-              ${getAvatarHtml({ fullName: msg.senderName, photoUri: msg.senderPhotoUri }, "w-7 h-7", "text-[10px]")}
-              <div class="max-w-[82%] sm:max-w-[65%] flex flex-col ${isMe ? "items-end" : "items-start"}">
-                <div class="flex items-center gap-1.5 mb-1 px-0.5">
-                  <span class="text-[11px] font-bold text-[#10113F]">${escapeHtml(isMe ? "You" : (msg.senderName || "Member"))}</span>
-                  ${msg.senderRole ? `<span class="text-[10px] text-[#500568] font-medium">&middot; ${escapeHtml(msg.senderRole)}</span>` : ""}
-                  <span class="text-[10px] text-slate-400">${formatRelativeTime(msg.timestamp)}</span>
-                </div>
+        <!-- Messages Scroll Container -->
+        <div
+          id="chat-messages-scroll"
+          onscroll="window.appActions.handleChatScroll(this)"
+          class="flex-1 overflow-y-auto p-4 sm:p-5 space-y-3.5 bg-[#F6F7FB]"
+        >
+          ${messages.length === 0 ? `
+            <div class="h-full flex flex-col items-center justify-center text-center py-12">
+              <div class="w-11 h-11 rounded-xl bg-white border border-slate-200 flex items-center justify-center mb-2.5 text-[#500568]">
+                <i class="fa-regular fa-comment-dots"></i>
+              </div>
+              <p class="text-sm font-bold text-[#10113F]">No messages yet</p>
+              <p class="text-xs text-slate-500 mt-0.5">Start a conversation with your worship team.</p>
+            </div>
+          ` : messages.map((msg) => {
+            const isMe = msg.senderUid === currentUser.uid;
+            const isDeleted = Boolean(msg.isDeleted);
 
-                <div class="group relative rounded-2xl px-3.5 py-2.5 text-xs leading-relaxed ${
-                  isDeleted
-                    ? "bg-slate-100 border border-slate-200 text-slate-400 italic"
-                    : isMe
-                    ? "bg-[#500568] text-white shadow-xs"
-                    : "bg-white border border-slate-200 text-[#10113F] shadow-2xs"
-                }">
-                  ${!isDeleted && msg.replyToId ? `
-                    <div class="mb-2 pl-2.5 py-1 border-l-2 ${isMe ? "border-[#F5D0FE] bg-white/15 text-white" : "border-[#500568] bg-[#FAF5FF] text-slate-600"} rounded-r text-[11px]">
-                      <div class="font-bold">${escapeHtml(msg.replyToSender || "Member")}</div>
-                      <div class="truncate opacity-90">${escapeHtml(msg.replyToText || "Photo")}</div>
-                    </div>
-                  ` : ""}
+            return `
+              <div class="flex items-start gap-2.5 ${isMe ? "flex-row-reverse" : ""}">
+                ${getAvatarHtml({ fullName: msg.senderName, photoUri: msg.senderPhotoUri }, "w-7 h-7", "text-[10px]")}
+                <div class="max-w-[82%] sm:max-w-[65%] flex flex-col ${isMe ? "items-end" : "items-start"}">
+                  <div class="flex items-center gap-1.5 mb-1 px-0.5">
+                    <span class="text-[11px] font-bold text-[#10113F]">${escapeHtml(isMe ? "You" : (msg.senderName || "Member"))}</span>
+                    ${msg.senderRole ? `<span class="text-[10px] text-[#500568] font-medium">&middot; ${escapeHtml(msg.senderRole)}</span>` : ""}
+                    <span class="text-[10px] text-slate-400">${formatRelativeTime(msg.timestamp)}</span>
+                  </div>
 
-                  ${!isDeleted && msg.mediaUrl ? `
-                    <a href="${escapeHtml(msg.mediaUrl)}" target="_blank" rel="noopener" class="block mb-2">
-                      <img src="${escapeHtml(msg.mediaUrl)}" alt="Attachment" class="max-h-60 rounded-lg border border-slate-200 object-cover" />
-                    </a>
-                  ` : ""}
+                  <div class="group relative rounded-2xl px-3.5 py-2.5 text-xs leading-relaxed ${
+                    isDeleted
+                      ? "bg-slate-100 border border-slate-200 text-slate-400 italic"
+                      : isMe
+                      ? "bg-[#500568] text-white shadow-xs"
+                      : "bg-white border border-slate-200 text-[#10113F] shadow-2xs"
+                  }">
+                    ${!isDeleted && msg.replyToId ? `
+                      <div class="mb-2 pl-2.5 py-1 border-l-2 ${isMe ? "border-[#F5D0FE] bg-white/15 text-white" : "border-[#500568] bg-[#FAF5FF] text-slate-600"} rounded-r text-[11px]">
+                        <div class="font-bold">${escapeHtml(msg.replyToSender || "Member")}</div>
+                        <div class="truncate opacity-90">${escapeHtml(msg.replyToText || "Photo")}</div>
+                      </div>
+                    ` : ""}
 
-                  <div class="whitespace-pre-wrap break-words">${isDeleted ? "This message was unsent." : escapeHtml(msg.text || "")}</div>
-                  ${!isDeleted && msg.isEdited ? `<div class="text-[10px] opacity-70 mt-1">(edited)</div>` : ""}
+                    ${!isDeleted && msg.mediaUrl ? `
+                      <a href="${escapeHtml(msg.mediaUrl)}" target="_blank" rel="noopener" class="block mb-2">
+                        <img
+                          src="${escapeHtml(msg.mediaUrl)}"
+                          alt="Attachment"
+                          onload="window.appActions.handleChatMediaLoad()"
+                          class="max-h-60 rounded-lg border border-slate-200 object-cover"
+                        />
+                      </a>
+                    ` : ""}
 
-                  ${!isDeleted ? `
-                    <div class="hidden group-hover:flex items-center gap-1 absolute -top-3 ${isMe ? "left-2" : "right-2"} bg-white border border-slate-200 rounded-lg shadow-xs px-1.5 py-0.5 text-slate-600">
-                      <button onclick="window.appActions.setChatReply('${escapeHtml(msg.id)}')" class="hover:text-[#500568] p-1 text-[10px]" title="Reply">
-                        <i class="fa-solid fa-reply"></i>
-                      </button>
-                      ${isMe ? `
-                        <button onclick="window.appActions.startEditChatMessage('${escapeHtml(msg.id)}')" class="hover:text-amber-600 p-1 text-[10px]" title="Edit">
-                          <i class="fa-solid fa-pen"></i>
+                    <div class="whitespace-pre-wrap break-words">${isDeleted ? "This message was unsent." : escapeHtml(msg.text || "")}</div>
+                    ${!isDeleted && msg.isEdited ? `<div class="text-[10px] opacity-70 mt-1">(edited)</div>` : ""}
+
+                    ${!isDeleted ? `
+                      <div class="hidden group-hover:flex items-center gap-1 absolute -top-3 ${isMe ? "left-2" : "right-2"} bg-white border border-slate-200 rounded-lg shadow-xs px-1.5 py-0.5 text-slate-600">
+                        <button onclick="window.appActions.setChatReply('${escapeHtml(msg.id)}')" class="hover:text-[#500568] p-1 text-[10px]" title="Reply">
+                          <i class="fa-solid fa-reply"></i>
                         </button>
-                        <button onclick="window.appActions.retractChatMessage('${escapeHtml(msg.id)}')" class="hover:text-rose-600 p-1 text-[10px]" title="Unsend">
-                          <i class="fa-regular fa-trash-can"></i>
-                        </button>
-                      ` : ""}
-                    </div>
-                  ` : ""}
+                        ${isMe ? `
+                          <button onclick="window.appActions.startEditChatMessage('${escapeHtml(msg.id)}')" class="hover:text-amber-600 p-1 text-[10px]" title="Edit">
+                            <i class="fa-solid fa-pen"></i>
+                          </button>
+                          <button onclick="window.appActions.retractChatMessage('${escapeHtml(msg.id)}')" class="hover:text-rose-600 p-1 text-[10px]" title="Unsend">
+                            <i class="fa-regular fa-trash-can"></i>
+                          </button>
+                        ` : ""}
+                      </div>
+                    ` : ""}
+                  </div>
                 </div>
               </div>
-            </div>
-          `;
-        }).join("")}
-      </div>
-
-      <!-- Reply or Edit Context Banner -->
-      ${chatReplyTarget ? `
-        <div class="px-4 py-2 bg-[#FAF5FF] border-t border-[#F5D0FE] flex items-center justify-between text-xs">
-          <div class="truncate text-[#10113F]">
-            <span class="font-bold text-[#500568]"><i class="fa-solid fa-reply mr-1"></i>Replying to ${escapeHtml(chatReplyTarget.senderName)}:</span>
-            <span class="text-slate-600 ml-1">${escapeHtml(chatReplyTarget.text || "Photo")}</span>
-          </div>
-          <button onclick="window.appActions.clearChatReply()" class="text-slate-400 hover:text-slate-700 p-1">
-            <i class="fa-solid fa-xmark"></i>
-          </button>
+            `;
+          }).join("")}
+          <div id="chat-messages-bottom-anchor" class="h-px w-full"></div>
         </div>
-      ` : ""}
 
-      ${chatEditingMessage ? `
-        <div class="px-4 py-2 bg-amber-50 border-t border-amber-200 flex items-center justify-between text-xs">
-          <div class="truncate text-amber-900">
-            <span class="font-bold"><i class="fa-solid fa-pen mr-1"></i>Editing message:</span>
-            <span class="ml-1">${escapeHtml(chatEditingMessage.text)}</span>
-          </div>
-          <button onclick="window.appActions.clearChatEdit()" class="text-slate-400 hover:text-slate-700 p-1">
-            <i class="fa-solid fa-xmark"></i>
-          </button>
-        </div>
-      ` : ""}
-
-      <!-- Message Composer -->
-      <form onsubmit="window.appActions.sendChatMessage(event)" class="p-3 bg-white border-t border-slate-200 flex items-center gap-2">
-        <label class="btn btn-secondary btn-sm cursor-pointer shrink-0" title="Send Image">
-          <i class="fa-regular fa-image text-[#500568]"></i>
-          <input id="chat-photo-input" type="file" accept="image/*" class="hidden" onchange="window.appActions.sendChatPhoto(this)" />
-        </label>
-        <input
-          id="chat-message-input"
-          type="text"
-          value="${escapeHtml(chatEditingMessage ? chatEditingMessage.text : "")}"
-          placeholder="Write a message to the team..."
-          class="form-input flex-1"
-          autocomplete="off"
-        />
-        <button type="submit" class="btn btn-primary shrink-0">
-          <i class="fa-solid fa-paper-plane text-xs"></i> Send
+        <!-- Jump to Latest Messages Pill (Visible only when user manually scrolls upward) -->
+        <button
+          id="chat-scroll-bottom-btn"
+          type="button"
+          onclick="window.appActions.scrollToLatestChatMessages(true)"
+          class="${isScrolledUp ? "inline-flex" : "hidden"} absolute bottom-16 left-1/2 -translate-x-1/2 z-20 items-center gap-1.5 px-3.5 py-1.5 rounded-full bg-[#500568] text-white text-xs font-bold shadow-lg border border-white/20 hover:bg-[#3D0350] transition"
+        >
+          <i class="fa-solid fa-arrow-down text-[10px]"></i>
+          <span>Latest messages</span>
         </button>
-      </form>
+
+        <!-- Reply or Edit Context Banner -->
+        ${chatReplyTarget ? `
+          <div class="px-4 py-2 bg-[#FAF5FF] border-t border-[#F5D0FE] flex items-center justify-between text-xs">
+            <div class="truncate text-[#10113F]">
+              <span class="font-bold text-[#500568]"><i class="fa-solid fa-reply mr-1"></i>Replying to ${escapeHtml(chatReplyTarget.senderName)}:</span>
+              <span class="text-slate-600 ml-1">${escapeHtml(chatReplyTarget.text || "Photo")}</span>
+            </div>
+            <button onclick="window.appActions.clearChatReply()" class="text-slate-400 hover:text-slate-700 p-1">
+              <i class="fa-solid fa-xmark"></i>
+            </button>
+          </div>
+        ` : ""}
+
+        ${chatEditingMessage ? `
+          <div class="px-4 py-2 bg-amber-50 border-t border-amber-200 flex items-center justify-between text-xs">
+            <div class="truncate text-amber-900">
+              <span class="font-bold"><i class="fa-solid fa-pen mr-1"></i>Editing message:</span>
+              <span class="ml-1">${escapeHtml(chatEditingMessage.text)}</span>
+            </div>
+            <button onclick="window.appActions.clearChatEdit()" class="text-slate-400 hover:text-slate-700 p-1">
+              <i class="fa-solid fa-xmark"></i>
+            </button>
+          </div>
+        ` : ""}
+
+        <!-- Message Composer -->
+        <form onsubmit="window.appActions.sendChatMessage(event)" class="p-3 bg-white border-t border-slate-200 flex items-center gap-2">
+          <label class="btn btn-secondary btn-sm cursor-pointer shrink-0" title="Send Image">
+            <i class="fa-regular fa-image text-[#500568]"></i>
+            <input id="chat-photo-input" type="file" accept="image/*" class="hidden" onchange="window.appActions.sendChatPhoto(this)" />
+          </label>
+          <input
+            id="chat-message-input"
+            type="text"
+            value="${escapeHtml(chatEditingMessage ? chatEditingMessage.text : "")}"
+            placeholder="Write a message to the team..."
+            class="form-input flex-1"
+            autocomplete="off"
+          />
+          <button type="submit" class="btn btn-primary shrink-0">
+            <i class="fa-solid fa-paper-plane text-xs"></i> Send
+          </button>
+        </form>
+      </div>
     </div>
   `;
 }
 
 export function renderProfileView(state) {
-  const { currentUser, currentTeam } = state;
+  const { currentUser, currentTeam, theme } = state;
   const isPrimaryLeader = isWorshipLeader(currentUser.ministryRole, currentUser.role) || currentTeam?.leaderUid === currentUser.uid;
   const displayName = currentUser.fullName || currentUser.name || "Member";
   const teamDisplayName = currentTeam?.teamName || currentUser?.teamName || "None";
+  const isDark = theme === "dark";
 
   return `
     <div class="max-w-2xl mx-auto space-y-6">
       <!-- Page Header -->
       <div class="pb-4 border-b border-slate-200">
-        <h1 class="text-xl font-bold text-[#10113F]">Account & Ministry Profile</h1>
-        <p class="text-xs text-slate-500 mt-0.5">Update your personal details, profile photo, ministry role, and account password.</p>
+        <h1 class="text-xl font-bold text-[#10113F]">Account, Theme & Ministry Settings</h1>
+        <p class="text-xs text-slate-500 mt-0.5">Manage your appearance preference, personal details, ministry role, and account password.</p>
+      </div>
+
+      <!-- Appearance & Dark Mode Card -->
+      <div class="surface-card p-6 space-y-4">
+        <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div class="flex items-start gap-3.5">
+            <div class="w-10 h-10 rounded-xl bg-[#F5D0FE]/70 border border-[#E879F9] flex items-center justify-center text-[#500568] shrink-0">
+              <i class="fa-solid ${isDark ? "fa-moon" : "fa-sun"} text-sm"></i>
+            </div>
+            <div>
+              <h2 class="text-sm font-bold text-[#10113F]">Appearance & Theme</h2>
+              <p class="text-xs text-slate-500 mt-0.5">Switch between Light Mode and Dark Mode. Your choice is saved automatically on this device.</p>
+            </div>
+          </div>
+
+          <div class="grid grid-cols-2 p-1 bg-[#F5F5F8] rounded-xl border border-slate-200 text-xs font-bold shrink-0">
+            <button
+              id="theme-btn-light"
+              type="button"
+              onclick="window.appActions.setTheme('light')"
+              aria-pressed="${!isDark}"
+              class="px-3.5 py-2 rounded-lg flex items-center justify-center gap-1.5 transition ${
+                !isDark ? "bg-[#500568] text-white shadow-xs" : "text-slate-600 hover:text-[#10113F]"
+              }"
+            >
+              <i class="fa-regular fa-sun text-xs"></i>
+              <span>Light Mode</span>
+            </button>
+            <button
+              id="theme-btn-dark"
+              type="button"
+              onclick="window.appActions.setTheme('dark')"
+              aria-pressed="${isDark}"
+              class="px-3.5 py-2 rounded-lg flex items-center justify-center gap-1.5 transition ${
+                isDark ? "bg-[#500568] text-white shadow-xs" : "text-slate-600 hover:text-[#10113F]"
+              }"
+            >
+              <i class="fa-solid fa-moon text-xs"></i>
+              <span>Dark Mode</span>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Mobile Quick Access Shortcuts (Calendar & Team Roster) -->
+      <div class="md:hidden grid grid-cols-2 gap-3">
+        <button onclick="window.appActions.switchTab('calendar')" class="surface-card surface-card-interactive p-3.5 flex items-center gap-3 text-left">
+          <div class="w-9 h-9 rounded-lg bg-[#F5D0FE]/70 text-[#500568] flex items-center justify-center text-xs shrink-0">
+            <i class="fa-solid fa-calendar-days"></i>
+          </div>
+          <div>
+            <div class="text-xs font-bold text-[#10113F]">Ministry Calendar</div>
+            <div class="text-[11px] text-slate-500">Full month view</div>
+          </div>
+        </button>
+        <button onclick="window.appActions.switchTab('roster')" class="surface-card surface-card-interactive p-3.5 flex items-center gap-3 text-left">
+          <div class="w-9 h-9 rounded-lg bg-[#E0E7FF] text-[#10113F] flex items-center justify-center text-xs shrink-0">
+            <i class="fa-solid fa-users"></i>
+          </div>
+          <div>
+            <div class="text-xs font-bold text-[#10113F]">Team Roster</div>
+            <div class="text-[11px] text-slate-500">Members & roles</div>
+          </div>
+        </button>
       </div>
 
       <!-- Profile Card -->

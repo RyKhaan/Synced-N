@@ -78,6 +78,7 @@ const state = {
   authUser: null,
   currentUser: null,
   currentTeam: null,
+  theme: (typeof localStorage !== "undefined" && localStorage.getItem("synced_n_theme") === "dark") ? "dark" : "light",
   activeTab: "home", // home | calendar | schedule | songs | roster | chat | profile
   authMode: "login", // login | register | reset
   songSearchQuery: "",
@@ -96,6 +97,13 @@ const state = {
   rejoinRequests: [],
   chatReplyTarget: null,
   chatEditingMessage: null,
+  chatScroll: {
+    isPinnedToBottom: true,
+    savedScrollTop: 0,
+    lastMessageCount: 0,
+    lastMessageId: "",
+    pendingSmoothScroll: false
+  },
   stageModal: {
     songId: null,
     semitones: 0,
@@ -106,6 +114,29 @@ const state = {
     scrollTimer: null
   }
 };
+
+// Apply & Persist Theme ("light" | "dark")
+function applyThemeToDom(themeMode) {
+  const mode = themeMode === "dark" ? "dark" : "light";
+  state.theme = mode;
+  if (typeof document !== "undefined") {
+    document.documentElement.setAttribute("data-theme", mode);
+    document.documentElement.classList.toggle("dark", mode === "dark");
+    const metaTheme = document.querySelector('meta[name="theme-color"]');
+    if (metaTheme) {
+      metaTheme.setAttribute("content", mode === "dark" ? "#0B0D1D" : "#10113F");
+    }
+  }
+  try {
+    if (typeof localStorage !== "undefined") {
+      localStorage.setItem("synced_n_theme", mode);
+    }
+  } catch {
+    // Ignore storage errors in restricted environments
+  }
+}
+
+applyThemeToDom(state.theme);
 
 let lastRenderedViewKey = "";
 let unsubUserDoc = null;
@@ -310,10 +341,12 @@ export function showToast(message, type = "info") {
   }, 3600);
 }
 
-// Modal Helper
-function openModal(htmlContent, maxWidthClass = "max-w-lg") {
+// Modal Helper (supports options.closeOnBackdrop = false for Song Creation / Addition modals)
+function openModal(htmlContent, maxWidthClass = "max-w-lg", options = {}) {
   const modalRoot = document.getElementById("modal-root");
   if (!modalRoot) return;
+  const closeOnBackdrop = options?.closeOnBackdrop !== false;
+  modalRoot.setAttribute("data-close-on-backdrop", closeOnBackdrop ? "true" : "false");
   modalRoot.classList.remove("hidden");
   modalRoot.classList.add("flex");
   modalRoot.innerHTML = `
@@ -321,7 +354,11 @@ function openModal(htmlContent, maxWidthClass = "max-w-lg") {
       ${htmlContent}
     </div>
   `;
-  modalRoot.onclick = () => closeModal();
+  modalRoot.onclick = closeOnBackdrop
+    ? (e) => {
+        if (e.target === modalRoot) closeModal();
+      }
+    : null;
 }
 
 function closeModal() {
@@ -333,6 +370,8 @@ function closeModal() {
   metronome.stop();
   const modalRoot = document.getElementById("modal-root");
   if (!modalRoot) return;
+  modalRoot.removeAttribute("data-close-on-backdrop");
+  modalRoot.onclick = null;
   modalRoot.classList.add("hidden");
   modalRoot.classList.remove("flex");
   modalRoot.innerHTML = "";
@@ -438,14 +477,27 @@ function subscribeToTeamWorkspace(teamCode) {
     (snap) => {
       const list = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
       list.sort((a, b) => Number(a.timestamp || 0) - Number(b.timestamp || 0));
+
+      const prevCount = state.chatScroll.lastMessageCount;
+      const prevLastId = state.chatScroll.lastMessageId;
+      const newCount = list.length;
+      const newestMsg = newCount > 0 ? list[newCount - 1] : null;
+      const newLastId = newestMsg?.id || "";
+      const hasNewMessages = newCount > prevCount || (newLastId && newLastId !== prevLastId);
+
+      // If this is the initial snapshot load or the current user sent the latest message, pin to bottom
+      if (prevCount === 0 || (hasNewMessages && newestMsg?.senderUid === state.currentUser?.uid)) {
+        state.chatScroll.isPinnedToBottom = true;
+      }
+
+      if (hasNewMessages && prevCount > 0 && state.chatScroll.isPinnedToBottom) {
+        state.chatScroll.pendingSmoothScroll = true;
+      }
+
+      state.chatScroll.lastMessageCount = newCount;
+      state.chatScroll.lastMessageId = newLastId;
       state.messages = list;
       renderApp();
-      if (state.activeTab === "chat") {
-        setTimeout(() => {
-          const scroller = document.getElementById("chat-messages-scroll");
-          if (scroller) scroller.scrollTop = scroller.scrollHeight;
-        }, 40);
-      }
     }
   );
 
@@ -527,6 +579,55 @@ onAuthStateChanged(auth, async (fbUser) => {
   });
 });
 
+/**
+ * Synchronizes the Team Chat scroll position after DOM render:
+ * - When opening the chat or when `isPinnedToBottom` is true, automatically positions
+ *   the conversation at the latest message (`scrollHeight`).
+ * - When the user has manually scrolled upward (`isPinnedToBottom === false`), preserves
+ *   their `savedScrollTop` without forcibly pulling them down, and shows the floating
+ *   "Latest messages" button.
+ */
+function syncChatScrollPosition({ smooth = false } = {}) {
+  const scroller = document.getElementById("chat-messages-scroll");
+  if (!scroller) return;
+  const jumpBtn = document.getElementById("chat-scroll-bottom-btn");
+
+  if (state.chatScroll.isPinnedToBottom) {
+    if (jumpBtn) {
+      jumpBtn.classList.add("hidden");
+      jumpBtn.classList.remove("inline-flex");
+    }
+    const scrollToBottom = (useSmooth) => {
+      const targetTop = scroller.scrollHeight;
+      if (useSmooth && typeof scroller.scrollTo === "function") {
+        try {
+          scroller.scrollTo({ top: targetTop, behavior: "smooth" });
+        } catch {
+          scroller.scrollTop = targetTop;
+        }
+      } else {
+        scroller.scrollTop = targetTop;
+      }
+      state.chatScroll.savedScrollTop = scroller.scrollTop;
+    };
+
+    scrollToBottom(smooth);
+    if (typeof requestAnimationFrame === "function") {
+      requestAnimationFrame(() => {
+        if (state.chatScroll.isPinnedToBottom) {
+          scrollToBottom(smooth);
+        }
+      });
+    }
+  } else {
+    scroller.scrollTop = state.chatScroll.savedScrollTop;
+    if (jumpBtn) {
+      jumpBtn.classList.remove("hidden");
+      jumpBtn.classList.add("inline-flex");
+    }
+  }
+}
+
 // Render Root Application (Preserving Focus & Scroll Position Without Flicker)
 function renderApp() {
   const appEl = document.getElementById("app");
@@ -538,6 +639,18 @@ function renderApp() {
   const selectionStart = typeof activeEl?.selectionStart === "number" ? activeEl.selectionStart : null;
   const selectionEnd = typeof activeEl?.selectionEnd === "number" ? activeEl.selectionEnd : null;
   const prevScrollY = window.scrollY;
+
+  // Capture existing chat scroll state & draft input before replacing innerHTML
+  const existingChatScroller = document.getElementById("chat-messages-scroll");
+  if (existingChatScroller && state.activeTab === "chat") {
+    const distFromBottom =
+      existingChatScroller.scrollHeight - existingChatScroller.scrollTop - existingChatScroller.clientHeight;
+    if (distFromBottom > 80 && !state.chatScroll.isPinnedToBottom) {
+      state.chatScroll.savedScrollTop = existingChatScroller.scrollTop;
+    }
+  }
+  const existingChatInput = document.getElementById("chat-message-input");
+  const hadDraftInput = existingChatInput && !state.chatEditingMessage ? existingChatInput.value : null;
 
   if (state.authLoading) {
     appEl.innerHTML = renderLoadingState();
@@ -574,6 +687,21 @@ function renderApp() {
       mainInner.classList.remove("animate-fade-in");
     }
     window.scrollTo(0, prevScrollY);
+  }
+
+  // Restore any in-progress chat message draft
+  if (hadDraftInput !== null && !state.chatEditingMessage) {
+    const restoredChatInput = document.getElementById("chat-message-input");
+    if (restoredChatInput && restoredChatInput.value === "") {
+      restoredChatInput.value = hadDraftInput;
+    }
+  }
+
+  // Synchronize Team Chat scroll position (auto-scroll when opening or at bottom; preserve scroll when reading history)
+  if (state.activeTab === "chat") {
+    const useSmooth = Boolean(state.chatScroll.pendingSmoothScroll && !animate);
+    state.chatScroll.pendingSmoothScroll = false;
+    syncChatScrollPosition({ smooth: useSmooth });
   }
 
   restoreFocus(activeId, selectionStart, selectionEnd);
@@ -821,10 +949,11 @@ function renderTeamSetupView(animate = true) {
   `;
 }
 
-// Main Dashboard Shell (Sidebar + Top Header + Page Content + Mobile Nav)
+// Main Dashboard Shell (Sidebar + Top Header + Page Content + Reorganized Mobile Nav)
 function renderDashboardShell() {
-  const { currentUser, currentTeam, activeTab, substitutions, rejoinRequests } = state;
+  const { currentUser, currentTeam, activeTab, substitutions, rejoinRequests, theme } = state;
   const isLeader = hasLeaderPrivileges(currentUser);
+  const isDark = theme === "dark";
   const pendingActionCount = isLeader
     ? substitutions.filter((s) => s.status === "Pending" || s.status === "Substitute Accepted").length +
       rejoinRequests.filter((r) => r.status === "Pending").length
@@ -833,7 +962,8 @@ function renderDashboardShell() {
   const teamCode = currentTeam?.teamCode || currentUser?.teamCode || "------";
   const userDisplayName = currentUser?.fullName || currentUser?.name || "Member";
 
-  const navItems = [
+  // Full 7-section navigation for the Desktop Sidebar
+  const desktopNavItems = [
     { id: "home", label: "Home", fullLabel: "Dashboard", icon: "fa-solid fa-house" },
     { id: "calendar", label: "Calendar", fullLabel: "Ministry Calendar", icon: "fa-solid fa-calendar-days" },
     { id: "schedule", label: "Schedule", fullLabel: "Schedule & Lineups", icon: "fa-regular fa-calendar-check", badge: pendingActionCount || 0 },
@@ -841,6 +971,41 @@ function renderDashboardShell() {
     { id: "roster", label: "Roster", fullLabel: "Team Roster", icon: "fa-solid fa-users" },
     { id: "chat", label: "Chat", fullLabel: "Team Chat", icon: "fa-regular fa-comments" },
     { id: "profile", label: "Profile", fullLabel: "Account Profile", icon: "fa-regular fa-user" }
+  ];
+
+  // Reorganized 5-item Mobile Bottom Navigation (Calendar is integrated in Dashboard; Roster is in the Team Hub Switcher & Dashboard)
+  const mobileNavItems = [
+    {
+      id: "home",
+      label: "Home",
+      icon: "fa-solid fa-house",
+      isActive: activeTab === "home" || activeTab === "calendar"
+    },
+    {
+      id: "schedule",
+      label: "Schedule",
+      icon: "fa-regular fa-calendar-check",
+      badge: pendingActionCount || 0,
+      isActive: activeTab === "schedule"
+    },
+    {
+      id: "songs",
+      label: "Songs",
+      icon: "fa-solid fa-music",
+      isActive: activeTab === "songs"
+    },
+    {
+      id: "chat",
+      label: "Chat",
+      icon: "fa-regular fa-comments",
+      isActive: activeTab === "chat" || activeTab === "roster"
+    },
+    {
+      id: "profile",
+      label: "Profile",
+      icon: "fa-regular fa-user",
+      isActive: activeTab === "profile"
+    }
   ];
 
   let mainViewHtml = "";
@@ -867,6 +1032,15 @@ function renderDashboardShell() {
               <div class="text-[11px] text-white/75 truncate mt-1">${escapeHtml(teamDisplayName)}</div>
             </div>
           </div>
+          <button
+            type="button"
+            onclick="window.appActions.toggleTheme()"
+            class="w-8 h-8 rounded-lg bg-white/10 hover:bg-white/20 text-white/90 flex items-center justify-center transition shrink-0"
+            title="${isDark ? "Switch to Light Mode" : "Switch to Dark Mode"}"
+            aria-label="${isDark ? "Switch to Light Mode" : "Switch to Dark Mode"}"
+          >
+            <i class="fa-solid ${isDark ? "fa-sun text-amber-300" : "fa-moon text-[#F5D0FE]"} text-xs"></i>
+          </button>
         </div>
 
         <!-- Navigation Links -->
@@ -874,7 +1048,7 @@ function renderDashboardShell() {
           <div class="px-2.5 pb-1.5 text-[10px] font-bold uppercase tracking-wider text-slate-400">
             Ministry Workspace
           </div>
-          ${navItems.map((item) => {
+          ${desktopNavItems.map((item) => {
             const active = activeTab === item.id;
             return `
               <button
@@ -937,7 +1111,16 @@ function renderDashboardShell() {
             <div class="text-[10px] text-[#F5D0FE] font-mono mt-0.5">Code: ${escapeHtml(teamCode)}</div>
           </div>
         </div>
-        <div class="flex items-center gap-2">
+        <div class="flex items-center gap-1.5">
+          <button
+            type="button"
+            onclick="window.appActions.toggleTheme()"
+            class="w-7 h-7 rounded-md bg-white/10 hover:bg-white/20 text-white/90 flex items-center justify-center transition"
+            title="${isDark ? "Switch to Light Mode" : "Switch to Dark Mode"}"
+            aria-label="${isDark ? "Switch to Light Mode" : "Switch to Dark Mode"}"
+          >
+            <i class="fa-solid ${isDark ? "fa-sun text-amber-300" : "fa-moon text-[#F5D0FE]"} text-[11px]"></i>
+          </button>
           <button onclick="window.appActions.copyTeamCode()" class="px-2 py-1 rounded-md bg-white/10 text-[10px] font-mono text-white/90 hover:bg-white/20" title="Copy Team Code">
             <i class="fa-regular fa-copy"></i>
           </button>
@@ -954,21 +1137,23 @@ function renderDashboardShell() {
         </div>
       </main>
 
-      <!-- Mobile Bottom Navigation -->
-      <nav class="md:hidden fixed bottom-0 inset-x-0 z-30 bg-white/95 backdrop-blur-md border-t border-slate-200/90 grid grid-cols-7 py-1 px-0.5 shadow-lg" aria-label="Mobile Navigation">
-        ${navItems.map((item) => {
-          const active = activeTab === item.id;
+      <!-- Reorganized 5-Item Mobile Bottom Navigation -->
+      <nav id="mobile-bottom-nav" class="md:hidden fixed bottom-0 inset-x-0 z-30 bg-white/95 backdrop-blur-md border-t border-slate-200/90 grid grid-cols-5 py-1.5 px-1.5 gap-1 shadow-lg" aria-label="Mobile Navigation">
+        ${mobileNavItems.map((item) => {
+          const active = item.isActive;
           return `
             <button
+              type="button"
+              data-mobile-nav="${item.id}"
               onclick="window.appActions.switchTab('${item.id}')"
-              class="relative flex flex-col items-center justify-center py-1.5 rounded-lg text-[10px] font-medium transition ${
+              class="relative flex flex-col items-center justify-center py-1.5 px-1 rounded-xl text-[11px] font-medium transition ${
                 active ? "text-[#500568] font-bold bg-[#F5D0FE]/40" : "text-slate-500 hover:text-[#10113F]"
               }"
             >
-              <i class="${item.icon} text-xs mb-0.5"></i>
-              <span class="truncate max-w-[46px] leading-tight">${escapeHtml(item.label)}</span>
+              <i class="${item.icon} text-sm mb-0.5"></i>
+              <span class="truncate max-w-[64px] leading-tight">${escapeHtml(item.label)}</span>
               ${item.badge ? `
-                <span class="absolute top-1 right-1.5 w-2 h-2 rounded-full bg-amber-500"></span>
+                <span class="absolute top-1 right-2.5 w-2 h-2 rounded-full bg-amber-500"></span>
               ` : ""}
             </button>
           `;
@@ -984,6 +1169,19 @@ function renderDashboardShell() {
 window.appActions = {
   closeModal,
 
+  // --- Theme Controls (Light Mode / Dark Mode with Persistence) ---
+  setTheme(mode) {
+    const target = mode === "dark" ? "dark" : "light";
+    applyThemeToDom(target);
+    renderApp();
+    showToast(`Switched to ${target === "dark" ? "Dark Mode" : "Light Mode"}.`, "info");
+  },
+
+  toggleTheme() {
+    const next = state.theme === "dark" ? "light" : "dark";
+    this.setTheme(next);
+  },
+
   setAuthMode(mode) {
     state.authMode = mode;
     renderApp();
@@ -991,6 +1189,11 @@ window.appActions = {
 
   switchTab(tabId) {
     state.activeTab = tabId;
+    if (tabId === "chat") {
+      // Ensure opening chat always displays the latest messages immediately
+      state.chatScroll.isPinnedToBottom = true;
+      state.chatScroll.pendingSmoothScroll = false;
+    }
     renderApp();
     window.scrollTo({ top: 0, behavior: "smooth" });
   },
@@ -2216,7 +2419,7 @@ window.appActions = {
           ` : ""}
         </div>
       </div>
-    `, "max-w-5xl");
+    `, "max-w-5xl", { closeOnBackdrop: false });
   },
 
   /**
@@ -2403,50 +2606,60 @@ window.appActions = {
     showToast(active ? `Metronome started (${formatBpmDisplay(metronome.bpm)} BPM)` : "Metronome stopped", "info");
   },
 
-  openSongEditorModal(songId = null) {
+  openSongEditorModal(songId = null, forServiceId = "") {
     const existing = songId ? state.songs.find((s) => s.id === songId) : null;
     const initialBpm = existing?.bpm !== undefined ? formatBpmDisplay(existing.bpm) : "72";
-    openModal(`
-      <div class="space-y-4">
+    openModal(
+      `
+      <div class="space-y-4" id="song-editor-modal-container">
         <div class="flex items-center justify-between pb-3 border-b border-slate-200">
           <div>
             <h3 class="text-base font-bold text-[#10113F]">${existing ? "Edit Song & Chord Sheet" : "Add Song to Ministry Library"}</h3>
             <p class="text-xs text-slate-500">Supports Chord-over-Lyric lines, inline [G] ChordPro brackets, and decimal BPM.</p>
           </div>
-          <button onclick="window.appActions.closeModal()" class="text-slate-400 hover:text-slate-600"><i class="fa-solid fa-xmark"></i></button>
+          <button
+            type="button"
+            id="song-modal-close-x"
+            aria-label="Close song window"
+            onclick="window.appActions.closeModal()"
+            class="w-8 h-8 rounded-lg flex items-center justify-center text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition"
+            title="Close Window"
+          >
+            <i class="fa-solid fa-xmark text-sm"></i>
+          </button>
         </div>
 
-        <form onsubmit="window.appActions.saveSong(event, '${existing ? escapeHtml(existing.id) : ""}')" class="space-y-4">
+        <form onsubmit="window.appActions.saveSong(event, '${existing ? escapeHtml(existing.id) : ""}', '${escapeHtml(forServiceId || "")}')" class="space-y-4">
           <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
-              <label class="form-label">Song Title</label>
+              <label class="form-label" for="song-title">Song Title</label>
               <input id="song-title" type="text" required maxlength="100" value="${escapeHtml(existing?.title || "")}" placeholder="e.g. Goodness of God" class="form-input" />
             </div>
             <div>
-              <label class="form-label">Artist / Writer</label>
+              <label class="form-label" for="song-artist">Artist / Writer</label>
               <input id="song-artist" type="text" maxlength="100" value="${escapeHtml(existing?.artist || "")}" placeholder="e.g. Bethel Music" class="form-input" />
             </div>
           </div>
 
           <div class="grid grid-cols-2 sm:grid-cols-3 gap-3">
             <div>
-              <label class="form-label">Original Key</label>
+              <label class="form-label" for="song-key">Original Key</label>
               <select id="song-key" class="form-select font-mono">
                 ${MUSICAL_KEYS.map((k) => `<option value="${escapeHtml(k)}" ${(existing?.key || "G") === k ? "selected" : ""}>${escapeHtml(k)}</option>`).join("")}
               </select>
             </div>
             <div>
-              <label class="form-label">Tempo (BPM)</label>
+              <label class="form-label" for="song-tempo">Tempo (BPM)</label>
               <input id="song-tempo" type="number" step="any" min="30" max="240" inputmode="decimal" value="${escapeHtml(initialBpm)}" placeholder="e.g. 72.5" class="form-input font-mono" />
             </div>
             <div class="col-span-2 sm:col-span-1">
-              <label class="form-label">YouTube Reference Link</label>
+              <label class="form-label" for="song-yt">YouTube Reference Link</label>
               <input id="song-yt" type="url" value="${escapeHtml(existing?.referenceUrl || "")}" placeholder="https://youtube.com/watch?v=..." class="form-input" />
             </div>
           </div>
 
           <div>
-            <label class="form-label">Chord Sheet &amp; Lyrics</label>
+            <label class="form-label" for="song-chords">Chord Sheet &amp; Lyrics</label>
             <textarea id="song-chords" rows="11" placeholder="[Verse 1]\nG                 C\nI love You Lord, Oh Your mercy never fails me..." class="form-textarea font-mono text-xs leading-relaxed">${escapeHtml(existing?.sheet || existing?.lyrics || "")}</textarea>
           </div>
 
@@ -2456,10 +2669,13 @@ window.appActions = {
           </div>
         </form>
       </div>
-    `, "max-w-2xl");
+    `,
+      "max-w-2xl",
+      { closeOnBackdrop: false }
+    );
   },
 
-  async saveSong(e, existingId = "") {
+  async saveSong(e, existingId = "", forServiceId = "") {
     e.preventDefault();
     const code = state.currentTeam?.teamCode || state.currentUser?.teamCode;
     if (!code) return;
@@ -2481,7 +2697,7 @@ window.appActions = {
       ? doc(db, "teams", code, "songs", existingId)
       : doc(collection(db, "teams", code, "songs"));
 
-    await setDoc(ref, {
+    const songData = {
       id: ref.id,
       teamCode: code,
       title,
@@ -2494,10 +2710,134 @@ window.appActions = {
       createdBy: existing?.createdBy || state.currentUser.uid,
       createdAt: existing?.createdAt !== undefined ? existing.createdAt : Date.now(),
       updatedAt: Date.now()
-    });
+    };
+
+    await setDoc(ref, songData);
+
+    // If created from a Service Setlist song addition flow, also add the new song to that service setlist
+    if (forServiceId) {
+      const srv = state.services.find((s) => s.id === forServiceId);
+      if (srv) {
+        const currentSongs = Array.isArray(srv.songs) ? [...srv.songs] : [];
+        const alreadyExists = currentSongs.some(
+          (s) => (typeof s === "string" ? s : s.title).toLowerCase() === title.toLowerCase()
+        );
+        if (!alreadyExists) {
+          currentSongs.push({ title, artist, key, bpm });
+          await setDoc(doc(db, "teams", code, "services", srv.id), {
+            ...srv,
+            songs: currentSongs.slice(0, 50),
+            updatedAt: Date.now()
+          });
+        }
+      }
+    }
 
     closeModal();
     showToast(existingId ? "Song updated." : "Song added to library.", "success");
+  },
+
+  /**
+   * Opens the "Add Songs to Service Setlist" window for a scheduled worship service.
+   * Clicking outside the modal does NOT close it (`closeOnBackdrop: false`).
+   */
+  openAddSongToServiceModal(serviceId) {
+    const srv = state.services.find((s) => s.id === serviceId);
+    if (!srv) return;
+    const currentSetlist = new Set(
+      (srv.songs || []).map((s) => (typeof s === "string" ? s : s.title))
+    );
+
+    openModal(
+      `
+      <div class="space-y-4" id="add-song-service-modal-container">
+        <div class="flex items-center justify-between pb-3 border-b border-slate-200">
+          <div>
+            <h3 class="text-base font-bold text-[#10113F]">Add Songs to Service Setlist</h3>
+            <p class="text-xs text-slate-500">${escapeHtml(srv.title || "Worship Service")} · ${escapeHtml(srv.date || "")}</p>
+          </div>
+          <button
+            type="button"
+            id="add-song-service-close-x"
+            aria-label="Close add songs window"
+            onclick="window.appActions.closeModal()"
+            class="w-8 h-8 rounded-lg flex items-center justify-center text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition"
+            title="Close Window"
+          >
+            <i class="fa-solid fa-xmark text-sm"></i>
+          </button>
+        </div>
+
+        <div class="flex flex-wrap items-center justify-between gap-2 bg-[#F5F5F8] p-3 rounded-xl border border-slate-200">
+          <div class="text-xs text-slate-600">
+            Select songs from your ministry library or create a new song for this service.
+          </div>
+          <button
+            type="button"
+            onclick="window.appActions.openSongEditorModal(null, '${escapeHtml(srv.id)}')"
+            class="btn btn-secondary btn-sm shrink-0"
+          >
+            <i class="fa-solid fa-plus text-[10px]"></i> Create New Song
+          </button>
+        </div>
+
+        <form onsubmit="window.appActions.saveSongsToServiceSetlist(event, '${escapeHtml(srv.id)}')" class="space-y-4">
+          <div class="border border-slate-200 rounded-xl p-3 bg-[#F5F5F8]/70 space-y-2 max-h-72 overflow-y-auto">
+            ${state.songs.length === 0 ? `
+              <p class="text-xs text-slate-400 italic py-4 text-center">No songs in library yet. Click "Create New Song" above to add one.</p>
+            ` : state.songs.map((song) => `
+              <label class="flex items-center justify-between gap-2 bg-white px-3 py-2 rounded-lg border border-slate-200 text-xs cursor-pointer hover:border-[#500568]/40 transition">
+                <div class="flex items-center gap-2.5 truncate">
+                  <input type="checkbox" class="add-srv-song-check rounded border-slate-300 text-[#500568]" value="${escapeHtml(song.title)}" ${currentSetlist.has(song.title) ? "checked" : ""} />
+                  ${getSongCoverHtml(song, "w-10 h-7 rounded shrink-0")}
+                  <div class="truncate">
+                    <div class="font-semibold text-slate-800 truncate">${escapeHtml(song.title)}</div>
+                    <div class="text-[11px] text-slate-400 truncate">${escapeHtml(song.artist || "Worship Song")}</div>
+                  </div>
+                </div>
+                <span class="badge badge-indigo font-mono text-[10px] shrink-0">${escapeHtml(song.key || "C")}</span>
+              </label>
+            `).join("")}
+          </div>
+
+          <div class="flex justify-end gap-2 pt-2 border-t border-slate-200">
+            <button type="button" onclick="window.appActions.closeModal()" class="btn btn-secondary">Cancel</button>
+            <button type="submit" class="btn btn-primary">Save Service Setlist</button>
+          </div>
+        </form>
+      </div>
+    `,
+      "max-w-xl",
+      { closeOnBackdrop: false }
+    );
+  },
+
+  async saveSongsToServiceSetlist(e, serviceId) {
+    e.preventDefault();
+    const code = state.currentTeam?.teamCode || state.currentUser?.teamCode;
+    const srv = state.services.find((s) => s.id === serviceId);
+    if (!code || !srv) return;
+
+    const selectedSongs = [];
+    document.querySelectorAll(".add-srv-song-check:checked").forEach((chk) => {
+      const songTitle = chk.value;
+      const libSong = state.songs.find((s) => s.title === songTitle);
+      selectedSongs.push({
+        title: songTitle,
+        artist: libSong?.artist || "",
+        key: libSong?.key || "C",
+        bpm: Number(libSong?.bpm) || 74
+      });
+    });
+
+    await setDoc(doc(db, "teams", code, "services", srv.id), {
+      ...srv,
+      songs: selectedSongs.slice(0, 50),
+      updatedAt: Date.now()
+    });
+
+    closeModal();
+    showToast("Service song setlist updated.", "success");
   },
 
   async seedDefaultSongs() {
@@ -2646,7 +2986,37 @@ window.appActions = {
     showToast("Leadership transferred.", "success");
   },
 
-  // --- Team Chat Actions (/teams/{teamCode}/messages/{messageId}) ---
+  // --- Team Chat Actions & Smart Auto-Scrolling (/teams/{teamCode}/messages/{messageId}) ---
+  handleChatScroll(scrollerEl) {
+    if (!scrollerEl) return;
+    const distanceFromBottom = scrollerEl.scrollHeight - scrollerEl.scrollTop - scrollerEl.clientHeight;
+    const atBottom = distanceFromBottom <= 80;
+    state.chatScroll.isPinnedToBottom = atBottom;
+    state.chatScroll.savedScrollTop = scrollerEl.scrollTop;
+
+    const jumpBtn = document.getElementById("chat-scroll-bottom-btn");
+    if (jumpBtn) {
+      if (atBottom) {
+        jumpBtn.classList.add("hidden");
+        jumpBtn.classList.remove("inline-flex");
+      } else {
+        jumpBtn.classList.remove("hidden");
+        jumpBtn.classList.add("inline-flex");
+      }
+    }
+  },
+
+  handleChatMediaLoad() {
+    if (state.activeTab === "chat" && state.chatScroll.isPinnedToBottom) {
+      syncChatScrollPosition({ smooth: false });
+    }
+  },
+
+  scrollToLatestChatMessages(smooth = true) {
+    state.chatScroll.isPinnedToBottom = true;
+    syncChatScrollPosition({ smooth });
+  },
+
   setChatReply(msgId) {
     const msg = state.messages.find((m) => m.id === msgId);
     if (!msg) return;
@@ -2698,6 +3068,11 @@ window.appActions = {
     state.chatReplyTarget = null;
     if (input) input.value = "";
 
+    // Always pin to bottom and scroll down when the current user sends a message
+    state.chatScroll.isPinnedToBottom = true;
+    state.chatScroll.pendingSmoothScroll = true;
+    this.scrollToLatestChatMessages(true);
+
     const ref = doc(collection(db, "teams", code, "messages"));
     await setDoc(ref, {
       id: ref.id,
@@ -2717,6 +3092,7 @@ window.appActions = {
       isDeleted: false,
       deletedAt: 0
     });
+    this.scrollToLatestChatMessages(true);
   },
 
   async sendChatPhoto(inputEl) {
@@ -2725,6 +3101,8 @@ window.appActions = {
     if (!file || !code) return;
     try {
       showToast("Uploading photo to chat...", "info");
+      state.chatScroll.isPinnedToBottom = true;
+      state.chatScroll.pendingSmoothScroll = true;
       const mediaUrl = await uploadImageToCloudinary(file);
       const ref = doc(collection(db, "teams", code, "messages"));
       await setDoc(ref, {
@@ -2745,6 +3123,7 @@ window.appActions = {
         isDeleted: false,
         deletedAt: 0
       });
+      this.scrollToLatestChatMessages(true);
       showToast("Photo sent.", "success");
     } catch (err) {
       showToast(err.message || "Failed to upload chat photo.", "error");
