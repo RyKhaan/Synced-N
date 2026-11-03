@@ -1,0 +1,24 @@
+{
+  "name": "Synced-N: Church Music Ministry Schedule & Lineup System",
+  "short_name": "Synced-N",
+  "description": "Real-time Church Music Ministry Schedule, Lineup, Chord Sheet, and Team Management System",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0f0716",
+  "theme_color": "#500568",
+  "orientation": "any",
+  "icons": [
+    {
+      "src": "/assets/team_icon.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/assets/logo.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ]
+}
