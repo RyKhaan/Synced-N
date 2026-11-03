@@ -86,7 +86,9 @@ export function renderPasswordInputHtml({
   required = true,
   value = "",
   autocomplete = "current-password",
-  ariaLabel = "Toggle password visibility"
+  ariaLabel = "Toggle password visibility",
+  onInput = "",
+  maxlength = 128
 }) {
   return `
     <div class="password-input-wrapper">
@@ -94,9 +96,11 @@ export function renderPasswordInputHtml({
         id="${escapeHtml(id)}"
         type="password"
         ${required ? "required" : ""}
+        maxlength="${Number(maxlength) || 128}"
         value="${escapeHtml(value)}"
         placeholder="${escapeHtml(placeholder)}"
         autocomplete="${escapeHtml(autocomplete)}"
+        ${onInput ? `oninput="${escapeHtml(onInput)}"` : ""}
         class="form-input"
       />
       <button
@@ -109,6 +113,44 @@ export function renderPasswordInputHtml({
       >
         <i class="fa-regular fa-eye text-xs pointer-events-none"></i>
       </button>
+    </div>
+  `;
+}
+
+export function renderPasswordStrengthBoxHtml(inputId) {
+  const safeId = escapeHtml(inputId);
+  return `
+    <div id="${safeId}-strength-box" class="mt-2 p-3 rounded-xl bg-[#F5F5F8] border border-slate-200/90 space-y-2">
+      <div class="flex items-center justify-between">
+        <span class="text-[11px] font-bold text-[#10113F]">Password Requirements</span>
+        <span id="${safeId}-strength-badge" class="px-2 py-0.5 rounded-md text-[10px] font-bold bg-slate-200/80 text-slate-600">
+          Min. 8 chars
+        </span>
+      </div>
+      <div class="grid grid-cols-4 gap-1.5">
+        <div id="${safeId}-bar-1" class="h-1.5 rounded-full bg-slate-200 transition-colors"></div>
+        <div id="${safeId}-bar-2" class="h-1.5 rounded-full bg-slate-200 transition-colors"></div>
+        <div id="${safeId}-bar-3" class="h-1.5 rounded-full bg-slate-200 transition-colors"></div>
+        <div id="${safeId}-bar-4" class="h-1.5 rounded-full bg-slate-200 transition-colors"></div>
+      </div>
+      <div class="grid grid-cols-2 gap-x-3 gap-y-1 pt-0.5 text-[11px] font-medium text-slate-500">
+        <div id="${safeId}-req-len" class="flex items-center gap-1.5">
+          <i class="fa-regular fa-circle text-[9px]"></i>
+          <span>8+ characters</span>
+        </div>
+        <div id="${safeId}-req-case" class="flex items-center gap-1.5">
+          <i class="fa-regular fa-circle text-[9px]"></i>
+          <span>Upper &amp; lower (Aa)</span>
+        </div>
+        <div id="${safeId}-req-num" class="flex items-center gap-1.5">
+          <i class="fa-regular fa-circle text-[9px]"></i>
+          <span>Number (0-9)</span>
+        </div>
+        <div id="${safeId}-req-spec" class="flex items-center gap-1.5">
+          <i class="fa-regular fa-circle text-[9px]"></i>
+          <span>Special (!@#$)</span>
+        </div>
+      </div>
     </div>
   `;
 }
@@ -2161,7 +2203,8 @@ export function renderProfileView(state) {
                 placeholder: "8+ chars, upper, lower, number, symbol",
                 required: true,
                 autocomplete: "new-password",
-                ariaLabel: "Show or hide new password"
+                ariaLabel: "Show or hide new password",
+                onInput: "window.appActions.updatePasswordStrengthUi('profile-new-password', this.value)"
               })}
             </div>
             <div>
@@ -2175,7 +2218,7 @@ export function renderProfileView(state) {
               })}
             </div>
           </div>
-          <p class="text-[11px] text-slate-500">Must include at least 8 characters, an uppercase letter, a lowercase letter, a number, and a special character.</p>
+          ${renderPasswordStrengthBoxHtml("profile-new-password")}
           <div class="flex justify-end">
             <button id="change-password-btn" type="submit" class="btn btn-navy">
               <i class="fa-solid fa-key text-xs"></i> Update Password

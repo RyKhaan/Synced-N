@@ -4,6 +4,8 @@ import {
   onAuthStateChanged,
   signInWithEmailAndPassword,
   createUserWithEmailAndPassword,
+  signInAnonymously,
+  updateProfile,
   signOut,
   GoogleAuthProvider,
   signInWithPopup,
@@ -35,6 +37,15 @@ import {
   generateTeamCode,
   evaluatePassword,
   validateEmailForAuth,
+  isValidName,
+  isValidUsername,
+  isValidPhilippinePhone,
+  isLoginLocked,
+  getLoginLockRemainingSeconds,
+  recordLoginFailure,
+  resetLoginAttempts,
+  computeSessionHmac,
+  verifySessionHmac,
   hashPasswordPbkdf2,
   verifyPasswordPbkdf2,
   isWorshipLeader,
@@ -54,6 +65,7 @@ import {
   getAvatarHtml,
   getSongCoverHtml,
   renderPasswordInputHtml,
+  renderPasswordStrengthBoxHtml,
   renderHomeView,
   renderCalendarView,
   renderScheduleView,
@@ -78,9 +90,23 @@ const state = {
   authUser: null,
   currentUser: null,
   currentTeam: null,
+  overrideProfileUid: null,
   theme: (typeof localStorage !== "undefined" && localStorage.getItem("synced_n_theme") === "dark") ? "dark" : "light",
   activeTab: "home", // home | calendar | schedule | songs | roster | chat | profile
-  authMode: "login", // login | register | reset
+  authMode: "login", // login | register | reset | otp | success
+  authSuccessMessage: "",
+  pendingAuth: {
+    flow: "", // "register" | "reset"
+    username: "",
+    fullName: "",
+    email: "",
+    password: "",
+    ministryRole: "Member",
+    sentAt: 0,
+    expiresAt: 0,
+    resendCooldownSec: 0,
+    cooldownTimer: null
+  },
   songSearchQuery: "",
   songKeyFilter: "",
   calendar: {
@@ -270,6 +296,281 @@ async function saveCleanTeamDoc(teamCode, updates = {}) {
 
   await setDoc(teamRef, cleanPayload);
   return cleanPayload;
+}
+
+// ============================================================================
+// Trusted Backend OTP API Client & Mobile-Parity Auth Helpers
+// ============================================================================
+
+/**
+ * Calls the trusted backend authentication / OTP service (`/api/auth/*`).
+ * If served from a static host that returns HTML for `/api/auth/*`, automatically
+ * falls back to `http://localhost:3000${path}`.
+ */
+async function callAuthApi(path, payload = {}) {
+  const endpoints = [path];
+  if (typeof window !== "undefined" && window.location?.origin && !window.location.origin.includes("localhost:3000")) {
+    endpoints.push(`http://localhost:3000${path}`);
+  }
+
+  let lastError = null;
+  for (const url of endpoints) {
+    try {
+      const response = await fetch(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json"
+        },
+        body: JSON.stringify(payload)
+      });
+      const contentType = response.headers.get("content-type") || "";
+      if (!contentType.includes("application/json")) {
+        throw new Error("Non-JSON response from endpoint");
+      }
+      const data = await response.json();
+      return { status: response.status, ok: response.ok, ...data };
+    } catch (err) {
+      lastError = err;
+    }
+  }
+  throw lastError || new Error("Unable to reach authentication verification server.");
+}
+
+/**
+ * Starts the 60-second resend cooldown timer matching `EmailOtpService.RESEND_COOLDOWN_MS`.
+ */
+function startOtpCooldownTimer(seconds = 60) {
+  if (state.pendingAuth.cooldownTimer) {
+    clearInterval(state.pendingAuth.cooldownTimer);
+    state.pendingAuth.cooldownTimer = null;
+  }
+  state.pendingAuth.resendCooldownSec = Math.max(0, Math.ceil(seconds));
+
+  const updateResendBtnDom = () => {
+    const btn = document.getElementById("otp-resend-btn");
+    if (!btn) return;
+    if (state.pendingAuth.resendCooldownSec > 0) {
+      btn.disabled = true;
+      btn.textContent = `Resend in ${state.pendingAuth.resendCooldownSec}s`;
+      btn.className = "text-xs font-bold text-slate-400 cursor-not-allowed";
+    } else {
+      btn.disabled = false;
+      btn.textContent = "Resend Code";
+      btn.className = "text-xs font-bold text-[#500568] hover:underline cursor-pointer";
+    }
+  };
+
+  updateResendBtnDom();
+  if (state.pendingAuth.resendCooldownSec > 0) {
+    state.pendingAuth.cooldownTimer = setInterval(() => {
+      state.pendingAuth.resendCooldownSec = Math.max(0, state.pendingAuth.resendCooldownSec - 1);
+      updateResendBtnDom();
+      if (state.pendingAuth.resendCooldownSec <= 0 && state.pendingAuth.cooldownTimer) {
+        clearInterval(state.pendingAuth.cooldownTimer);
+        state.pendingAuth.cooldownTimer = null;
+      }
+    }, 1000);
+  }
+}
+
+/**
+ * Wipes any pending registration / reset credentials and stops OTP timers.
+ */
+function clearPendingAuthState() {
+  if (state.pendingAuth.cooldownTimer) {
+    clearInterval(state.pendingAuth.cooldownTimer);
+  }
+  state.pendingAuth = {
+    flow: "",
+    username: "",
+    fullName: "",
+    email: "",
+    password: "",
+    ministryRole: "Member",
+    sentAt: 0,
+    expiresAt: 0,
+    resendCooldownSec: 0,
+    cooldownTimer: null
+  };
+}
+
+/**
+ * Signs and persists session metadata using HMAC-SHA256 (matching `SessionManager.kt`).
+ */
+async function persistVerifiedSession(userProfile, isOverride = false) {
+  if (!userProfile || typeof sessionStorage === "undefined") return;
+  try {
+    const email = String(userProfile.email || "").trim().toLowerCase();
+    const role = String(userProfile.role || "Member").trim();
+    const teamCode = String(userProfile.teamCode || "").trim().toUpperCase();
+    const hmac = await computeSessionHmac(email, role, teamCode);
+    sessionStorage.setItem("synced_n_session_email", email);
+    sessionStorage.setItem("synced_n_session_role", role);
+    sessionStorage.setItem("synced_n_session_team", teamCode);
+    sessionStorage.setItem("synced_n_session_hmac", hmac);
+    if (isOverride && userProfile.uid) {
+      sessionStorage.setItem("synced_n_override_uid", userProfile.uid);
+    } else if (!isOverride) {
+      sessionStorage.removeItem("synced_n_override_uid");
+    }
+  } catch {
+    // Ignore storage errors
+  }
+}
+
+/**
+ * Restores and cryptographically verifies any override profile UID stored in sessionStorage.
+ * If session data was tampered with (`verifySessionHmac === false`), clears the session.
+ */
+async function restoreOverrideUidFromSession() {
+  if (typeof sessionStorage === "undefined") return null;
+  try {
+    const overrideUid = sessionStorage.getItem("synced_n_override_uid");
+    if (!overrideUid) return null;
+    const email = sessionStorage.getItem("synced_n_session_email") || "";
+    const role = sessionStorage.getItem("synced_n_session_role") || "";
+    const team = sessionStorage.getItem("synced_n_session_team") || "";
+    const storedHmac = sessionStorage.getItem("synced_n_session_hmac") || "";
+    const isValid = await verifySessionHmac(email, role, team, storedHmac);
+    if (!isValid) {
+      clearVerifiedSession();
+      return null;
+    }
+    return overrideUid;
+  } catch {
+    return null;
+  }
+}
+
+function clearVerifiedSession() {
+  state.overrideProfileUid = null;
+  if (typeof sessionStorage === "undefined") return;
+  try {
+    sessionStorage.removeItem("synced_n_override_uid");
+    sessionStorage.removeItem("synced_n_session_email");
+    sessionStorage.removeItem("synced_n_session_role");
+    sessionStorage.removeItem("synced_n_session_team");
+    sessionStorage.removeItem("synced_n_session_hmac");
+  } catch {
+    // Ignore storage errors
+  }
+}
+
+/**
+ * Checks if an email is already registered in Firestore (`/users` or `/password_resets`),
+ * matching `FirestoreManager.checkEmailExistsInFirestore(email)` on Android.
+ */
+async function checkEmailExistsInFirestore(email) {
+  const cleanEmail = String(email || "").trim();
+  const lowerEmail = cleanEmail.toLowerCase();
+  if (!cleanEmail) return false;
+
+  try {
+    const qExact = query(collection(db, "users"), where("email", "==", cleanEmail));
+    const snapExact = await getDocs(qExact);
+    if (!snapExact.empty) return true;
+
+    if (lowerEmail !== cleanEmail) {
+      const qLower = query(collection(db, "users"), where("email", "==", lowerEmail));
+      const snapLower = await getDocs(qLower);
+      if (!snapLower.empty) return true;
+    }
+
+    const resetDoc = await getDoc(doc(db, "password_resets", lowerEmail));
+    if (resetDoc.exists()) return true;
+  } catch (err) {
+    console.warn("checkEmailExistsInFirestore warning:", err);
+  }
+  return false;
+}
+
+/**
+ * Looks up a user profile in `/users` by email (case-tolerant), matching `FirestoreManager.getUserByEmail`.
+ */
+async function getUserProfileByEmail(email) {
+  const cleanEmail = String(email || "").trim();
+  const lowerEmail = cleanEmail.toLowerCase();
+  if (!cleanEmail) return null;
+
+  try {
+    const qExact = query(collection(db, "users"), where("email", "==", cleanEmail));
+    const snapExact = await getDocs(qExact);
+    if (!snapExact.empty) {
+      const d = snapExact.docs[0];
+      return normalizeUserDoc(d.id, d.data());
+    }
+
+    if (lowerEmail !== cleanEmail) {
+      const qLower = query(collection(db, "users"), where("email", "==", lowerEmail));
+      const snapLower = await getDocs(qLower);
+      if (!snapLower.empty) {
+        const d = snapLower.docs[0];
+        return normalizeUserDoc(d.id, d.data());
+      }
+    }
+  } catch (err) {
+    console.warn("getUserProfileByEmail warning:", err);
+  }
+  return null;
+}
+
+/**
+ * Retrieves the PBKDF2-HMAC-SHA256 password hash from `/password_resets/{emailLower}`,
+ * matching `FirestoreManager.getPasswordReset(email)` on Android.
+ */
+async function getPasswordResetHash(email) {
+  const lowerEmail = String(email || "").trim().toLowerCase();
+  if (!lowerEmail) return null;
+  try {
+    const snap = await getDoc(doc(db, "password_resets", lowerEmail));
+    if (snap.exists()) {
+      const pwd = String(snap.data()?.password || "").trim();
+      return pwd || null;
+    }
+  } catch (err) {
+    console.warn("getPasswordResetHash warning:", err);
+  }
+  return null;
+}
+
+/**
+ * Hashes the new password with PBKDF2-HMAC-SHA256 and saves it to `/password_resets/{emailLower}`
+ * (and updates `resetPassword` on any matching `/users/{uid}` doc if authenticated),
+ * matching `FirestoreManager.savePasswordReset(email, newPassword)` on Android.
+ */
+async function savePasswordResetInFirestore(email, newPlainPassword) {
+  const cleanEmail = String(email || "").trim();
+  const lowerEmail = cleanEmail.toLowerCase();
+  const cleanPassword = String(newPlainPassword || "").trim();
+  const hashedPassword = await hashPasswordPbkdf2(cleanPassword);
+
+  // 1. Write to /password_resets/{lowerEmail} (100% compliant with isValidPasswordReset in firestore.rules)
+  await setDoc(doc(db, "password_resets", lowerEmail), {
+    email: lowerEmail,
+    password: hashedPassword,
+    updatedAt: Date.now()
+  });
+
+  // 2. Also update `resetPassword` on matching `/users/{uid}` documents when accessible
+  try {
+    const qExact = query(collection(db, "users"), where("email", "==", cleanEmail));
+    const snapExact = await getDocs(qExact);
+    for (const userDoc of snapExact.docs) {
+      await saveCleanUserProfile(userDoc.id, { resetPassword: hashedPassword });
+    }
+    if (lowerEmail !== cleanEmail) {
+      const qLower = query(collection(db, "users"), where("email", "==", lowerEmail));
+      const snapLower = await getDocs(qLower);
+      for (const userDoc of snapLower.docs) {
+        await saveCleanUserProfile(userDoc.id, { resetPassword: hashedPassword });
+      }
+    }
+  } catch {
+    // Unauthenticated users may not have write access to /users/{uid}; /password_resets/{email} is authoritative
+  }
+
+  return hashedPassword;
 }
 
 // Metronome Instance with Visual Beat Indicator Support
@@ -510,8 +811,13 @@ function subscribeToTeamWorkspace(teamCode) {
   );
 }
 
-// Auth State Observer
-onAuthStateChanged(auth, async (fbUser) => {
+let loginVerificationInProgress = false;
+
+/**
+ * Subscribes to the authenticated user's `/users/{effectiveUid}` document and
+ * automatically syncs their team workspace and HMAC-signed session metadata.
+ */
+async function activateAuthenticatedSession(fbUser, overrideUid = null) {
   if (unsubUserDoc) {
     unsubUserDoc();
     unsubUserDoc = null;
@@ -526,16 +832,30 @@ onAuthStateChanged(auth, async (fbUser) => {
     return;
   }
 
+  const effectiveUid = overrideUid || state.overrideProfileUid || fbUser.uid;
   state.authUser = fbUser;
-  const userRef = doc(db, "users", fbUser.uid);
+  const userRef = doc(db, "users", effectiveUid);
 
-  // Ensure user document exists & matches firestore.rules schema
   try {
     const initialSnap = await getDoc(userRef);
     if (!initialSnap.exists()) {
+      // If this is an anonymous fallback session without an existing user doc, sign out
+      if (fbUser.isAnonymous && !overrideUid) {
+        clearVerifiedSession();
+        await signOut(auth);
+        return;
+      }
+      // Check if an existing profile exists by email before creating a new doc
+      const existingByEmail = fbUser.email ? await getUserProfileByEmail(fbUser.email) : null;
+      if (existingByEmail && existingByEmail.uid !== effectiveUid) {
+        state.overrideProfileUid = existingByEmail.uid;
+        await persistVerifiedSession(existingByEmail, true);
+        return activateAuthenticatedSession(fbUser, existingByEmail.uid);
+      }
+
       const defaultName = fbUser.displayName || (fbUser.email ? fbUser.email.split("@")[0] : "Member");
-      await saveCleanUserProfile(fbUser.uid, {
-        uid: fbUser.uid,
+      await saveCleanUserProfile(effectiveUid, {
+        uid: effectiveUid,
         fullName: defaultName,
         username: defaultName.split(/\s+/)[0] || "Member",
         email: fbUser.email || "",
@@ -547,10 +867,10 @@ onAuthStateChanged(auth, async (fbUser) => {
         unavailableRanges: []
       });
     } else {
-      // Automatically heal any legacy web fields (e.g., name / teamId) so future updates never fail firestore.rules
+      // Automatically heal any legacy web fields so future updates never fail firestore.rules
       const raw = initialSnap.data();
       if ("name" in raw || "teamId" in raw || "profilePictureUrl" in raw || "unavailableDates" in raw || "password" in raw) {
-        await saveCleanUserProfile(fbUser.uid, raw);
+        await saveCleanUserProfile(effectiveUid, raw);
       }
     }
   } catch (err) {
@@ -558,11 +878,12 @@ onAuthStateChanged(auth, async (fbUser) => {
   }
 
   let activeSubscribedTeamCode = null;
-  unsubUserDoc = onSnapshot(userRef, (snap) => {
+  unsubUserDoc = onSnapshot(doc(db, "users", effectiveUid), (snap) => {
     state.authLoading = false;
     if (!snap.exists()) return;
     const normalized = normalizeUserDoc(snap.id, snap.data());
     state.currentUser = normalized;
+    persistVerifiedSession(normalized, Boolean(state.overrideProfileUid));
 
     const nextTeamCode = (!normalized.removedByLeader && normalized.teamCode) ? normalized.teamCode : "";
     if (nextTeamCode !== activeSubscribedTeamCode) {
@@ -577,6 +898,39 @@ onAuthStateChanged(auth, async (fbUser) => {
       renderApp();
     }
   });
+}
+
+// Auth State Observer
+onAuthStateChanged(auth, async (fbUser) => {
+  if (loginVerificationInProgress) {
+    return;
+  }
+
+  if (!fbUser) {
+    if (unsubUserDoc) {
+      unsubUserDoc();
+      unsubUserDoc = null;
+    }
+    clearTeamListeners();
+    clearVerifiedSession();
+    state.authLoading = false;
+    state.authUser = null;
+    state.currentUser = null;
+    renderApp();
+    return;
+  }
+
+  const restoredOverrideUid = await restoreOverrideUidFromSession();
+  if (fbUser.isAnonymous && !restoredOverrideUid && !state.overrideProfileUid) {
+    clearVerifiedSession();
+    await signOut(auth);
+    return;
+  }
+  if (restoredOverrideUid) {
+    state.overrideProfileUid = restoredOverrideUid;
+  }
+
+  await activateAuthenticatedSession(fbUser, state.overrideProfileUid);
 });
 
 /**
@@ -736,9 +1090,13 @@ function renderLoadingState() {
   `;
 }
 
-// Authentication Screen (Login / Register / Password Reset) matching Mobile Brand Palette
+// Authentication Screen (Login / Register / OTP Verification / Password Reset) preserving existing Web UI
 function renderAuthView(animate = true) {
   const mode = state.authMode;
+  const pending = state.pendingAuth;
+  const cooldownSec = Number(pending?.resendCooldownSec || 0);
+  const isResetOtp = pending?.flow === "reset";
+
   return `
     <div class="min-h-screen flex flex-col justify-center items-center p-4 sm:p-6 bg-[#F7F7FA]">
       <div class="w-full max-w-md space-y-5 ${animate ? "animate-fade-in" : ""}">
@@ -755,23 +1113,25 @@ function renderAuthView(animate = true) {
 
         <!-- Auth Card -->
         <div class="surface-card p-6 sm:p-7 space-y-5">
-          <!-- Mode Switcher -->
-          <div class="grid grid-cols-2 p-1 bg-[#F5F5F8] rounded-xl border border-slate-200/90 text-xs font-bold">
-            <button type="button" onclick="window.appActions.setAuthMode('login')"
-              class="py-2 rounded-lg transition ${mode === "login" ? "bg-[#500568] text-white shadow-xs" : "text-slate-600 hover:text-[#10113F]"}">
-              Sign In
-            </button>
-            <button type="button" onclick="window.appActions.setAuthMode('register')"
-              class="py-2 rounded-lg transition ${mode === "register" ? "bg-[#500568] text-white shadow-xs" : "text-slate-600 hover:text-[#10113F]"}">
-              Create Account
-            </button>
-          </div>
+          ${mode === "login" || mode === "register" ? `
+            <!-- Mode Switcher -->
+            <div class="grid grid-cols-2 p-1 bg-[#F5F5F8] rounded-xl border border-slate-200/90 text-xs font-bold">
+              <button type="button" onclick="window.appActions.setAuthMode('login')"
+                class="py-2 rounded-lg transition ${mode === "login" ? "bg-[#500568] text-white shadow-xs" : "text-slate-600 hover:text-[#10113F]"}">
+                Sign In
+              </button>
+              <button type="button" onclick="window.appActions.setAuthMode('register')"
+                class="py-2 rounded-lg transition ${mode === "register" ? "bg-[#500568] text-white shadow-xs" : "text-slate-600 hover:text-[#10113F]"}">
+                Create Account
+              </button>
+            </div>
+          ` : ""}
 
           ${mode === "login" ? `
             <form onsubmit="window.appActions.handleLogin(event)" class="space-y-4">
               <div>
                 <label class="form-label" for="login-email">Email Address</label>
-                <input id="login-email" type="email" required autocomplete="email" placeholder="you@church.org" class="form-input" />
+                <input id="login-email" type="email" required maxlength="60" autocomplete="email" placeholder="you@church.org" class="form-input" />
               </div>
               <div>
                 <div class="flex items-center justify-between mb-1">
@@ -795,16 +1155,16 @@ function renderAuthView(animate = true) {
             <form onsubmit="window.appActions.handleRegister(event)" class="space-y-4">
               <div>
                 <label class="form-label" for="reg-name">Full Name</label>
-                <input id="reg-name" type="text" required maxlength="60" autocomplete="name" placeholder="e.g. Joshua Lagare" class="form-input" />
+                <input id="reg-name" type="text" required maxlength="60" autocomplete="name" value="${escapeHtml(pending.flow === "register" ? pending.fullName : "")}" placeholder="e.g. Joshua Lagare" class="form-input" />
               </div>
               <div>
                 <label class="form-label" for="reg-email">Email Address</label>
-                <input id="reg-email" type="email" required maxlength="60" autocomplete="email" placeholder="you@church.org" class="form-input" />
+                <input id="reg-email" type="email" required maxlength="60" autocomplete="email" value="${escapeHtml(pending.flow === "register" ? pending.email : "")}" placeholder="you@church.org" class="form-input" />
               </div>
               <div>
                 <label class="form-label" for="reg-role">Primary Ministry Role</label>
                 <select id="reg-role" class="form-select">
-                  ${DEFAULT_MINISTRY_ROLES.map((r) => `<option value="${escapeHtml(r)}">${escapeHtml(r)}</option>`).join("")}
+                  ${DEFAULT_MINISTRY_ROLES.map((r) => `<option value="${escapeHtml(r)}" ${(pending.ministryRole || "Member") === r ? "selected" : ""}>${escapeHtml(r)}</option>`).join("")}
                 </select>
               </div>
               <div>
@@ -813,40 +1173,145 @@ function renderAuthView(animate = true) {
                   id: "reg-password",
                   placeholder: "8+ chars, upper, lower, number, symbol",
                   autocomplete: "new-password",
-                  required: true
+                  required: true,
+                  onInput: "window.appActions.updatePasswordStrengthUi('reg-password', this.value)"
                 })}
-                <p class="text-[11px] text-slate-500 mt-1.5">Must include at least 8 characters, uppercase, lowercase, number, and symbol.</p>
+                ${renderPasswordStrengthBoxHtml("reg-password")}
+              </div>
+              <div>
+                <label class="form-label" for="reg-confirm-password">Confirm Password</label>
+                ${renderPasswordInputHtml({
+                  id: "reg-confirm-password",
+                  placeholder: "Re-enter your password",
+                  autocomplete: "new-password",
+                  required: true,
+                  ariaLabel: "Toggle confirm password visibility"
+                })}
               </div>
               <button id="auth-submit-btn" type="submit" class="w-full btn btn-primary py-2.5">
                 Create Ministry Account
               </button>
             </form>
-          ` : `
+          ` : mode === "reset" ? `
             <form onsubmit="window.appActions.handlePasswordReset(event)" class="space-y-4">
-              <p class="text-xs text-slate-600 leading-relaxed">Enter your registered email address and we will send a password reset link.</p>
+              <div class="space-y-1">
+                <h2 class="text-base font-bold text-[#10113F]">Reset Account Password</h2>
+                <p class="text-xs text-slate-500 leading-relaxed">
+                  Enter your registered email address and your new password. We will send a 6-digit verification code to your email to confirm the reset.
+                </p>
+              </div>
               <div>
-                <label class="form-label" for="reset-email">Email Address</label>
-                <input id="reset-email" type="email" required autocomplete="email" placeholder="you@church.org" class="form-input" />
+                <label class="form-label" for="reset-email">Registered Email Address</label>
+                <input id="reset-email" type="email" required maxlength="60" autocomplete="email" value="${escapeHtml(pending.flow === "reset" ? pending.email : "")}" placeholder="you@church.org" class="form-input" />
+              </div>
+              <div>
+                <label class="form-label" for="reset-new-password">New Password</label>
+                ${renderPasswordInputHtml({
+                  id: "reset-new-password",
+                  placeholder: "8+ chars, upper, lower, number, symbol",
+                  autocomplete: "new-password",
+                  required: true,
+                  onInput: "window.appActions.updatePasswordStrengthUi('reset-new-password', this.value)"
+                })}
+                ${renderPasswordStrengthBoxHtml("reset-new-password")}
+              </div>
+              <div>
+                <label class="form-label" for="reset-confirm-password">Confirm New Password</label>
+                ${renderPasswordInputHtml({
+                  id: "reset-confirm-password",
+                  placeholder: "Re-enter your new password",
+                  autocomplete: "new-password",
+                  required: true,
+                  ariaLabel: "Toggle confirm new password visibility"
+                })}
               </div>
               <button id="auth-submit-btn" type="submit" class="w-full btn btn-primary py-2.5">
-                Send Password Reset Link
+                Send Verification Code
               </button>
               <button type="button" onclick="window.appActions.setAuthMode('login')" class="w-full btn btn-ghost text-xs">
                 Back to Sign In
               </button>
             </form>
+          ` : mode === "otp" ? `
+            <form onsubmit="window.appActions.handleVerifyOtp(event)" class="space-y-4">
+              <div class="text-center space-y-1.5">
+                <div class="w-11 h-11 rounded-xl bg-[#F5D0FE]/70 border border-[#E879F9] text-[#500568] flex items-center justify-center mx-auto">
+                  <i class="fa-solid fa-shield-halved text-base"></i>
+                </div>
+                <h2 class="text-base font-bold text-[#10113F]">
+                  ${isResetOtp ? "Password Reset Verification" : "Verify Your Email Address"}
+                </h2>
+                <p class="text-xs text-slate-500 leading-relaxed">
+                  Enter the 6-digit verification code sent to <strong class="text-[#10113F]">${escapeHtml(pending.email || "your email")}</strong>.
+                  This code expires in 10 minutes.
+                </p>
+              </div>
+
+              <div>
+                <label class="form-label text-center" for="otp-code-input">6-Digit Verification Code</label>
+                <input
+                  id="otp-code-input"
+                  type="text"
+                  inputmode="numeric"
+                  autocomplete="one-time-code"
+                  required
+                  maxlength="6"
+                  pattern="[0-9]{6}"
+                  placeholder="000000"
+                  oninput="this.value = this.value.replace(/[^0-9]/g, '').slice(0, 6)"
+                  class="form-input text-center font-mono text-lg font-extrabold tracking-[0.35em] py-3"
+                />
+              </div>
+
+              <div class="flex items-center justify-between px-1 text-xs">
+                <span class="text-slate-500">Didn't receive the code?</span>
+                <button
+                  id="otp-resend-btn"
+                  type="button"
+                  onclick="window.appActions.handleResendOtp()"
+                  ${cooldownSec > 0 ? "disabled" : ""}
+                  class="${cooldownSec > 0 ? "text-xs font-bold text-slate-400 cursor-not-allowed" : "text-xs font-bold text-[#500568] hover:underline cursor-pointer"}"
+                >
+                  ${cooldownSec > 0 ? `Resend in ${cooldownSec}s` : "Resend Code"}
+                </button>
+              </div>
+
+              <button id="auth-submit-btn" type="submit" class="w-full btn btn-primary py-2.5">
+                ${isResetOtp ? "Verify & Reset Password" : "Verify & Create Account"}
+              </button>
+              <button type="button" onclick="window.appActions.cancelOtpVerification()" class="w-full btn btn-ghost text-xs">
+                Back to ${isResetOtp ? "Password Reset" : "Registration"}
+              </button>
+            </form>
+          ` : `
+            <div class="text-center space-y-4 py-2">
+              <div class="w-12 h-12 rounded-2xl bg-emerald-100 text-emerald-700 flex items-center justify-center mx-auto">
+                <i class="fa-solid fa-circle-check text-xl"></i>
+              </div>
+              <div class="space-y-1">
+                <h2 class="text-base font-bold text-[#10113F]">Verification Complete</h2>
+                <p class="text-xs text-slate-600 leading-relaxed">
+                  ${escapeHtml(state.authSuccessMessage || "Password has been successfully reset! You can now log in.")}
+                </p>
+              </div>
+              <button type="button" onclick="window.appActions.setAuthMode('login')" class="w-full btn btn-primary py-2.5">
+                Continue to Sign In
+              </button>
+            </div>
           `}
 
-          <div class="relative flex py-1 items-center">
-            <div class="flex-grow border-t border-slate-200"></div>
-            <span class="flex-shrink mx-3 text-[11px] uppercase tracking-wider text-slate-400 font-bold">or continue with</span>
-            <div class="flex-grow border-t border-slate-200"></div>
-          </div>
+          ${mode === "login" || mode === "register" ? `
+            <div class="relative flex py-1 items-center">
+              <div class="flex-grow border-t border-slate-200"></div>
+              <span class="flex-shrink mx-3 text-[11px] uppercase tracking-wider text-slate-400 font-bold">or continue with</span>
+              <div class="flex-grow border-t border-slate-200"></div>
+            </div>
 
-          <button type="button" onclick="window.appActions.handleGoogleSignIn()" class="w-full btn btn-secondary py-2.5">
-            <i class="fa-brands fa-google text-[#500568]"></i>
-            <span>Continue with Google</span>
-          </button>
+            <button type="button" onclick="window.appActions.handleGoogleSignIn()" class="w-full btn btn-secondary py-2.5">
+              <i class="fa-brands fa-google text-[#500568]"></i>
+              <span>Continue with Google</span>
+            </button>
+          ` : ""}
         </div>
       </div>
     </div>
@@ -1183,8 +1648,76 @@ window.appActions = {
   },
 
   setAuthMode(mode) {
+    if (mode !== "otp") {
+      clearPendingAuthState();
+    }
     state.authMode = mode;
     renderApp();
+  },
+
+  cancelOtpVerification() {
+    const returnMode = state.pendingAuth.flow === "reset" ? "reset" : "register";
+    if (state.pendingAuth.cooldownTimer) {
+      clearInterval(state.pendingAuth.cooldownTimer);
+      state.pendingAuth.cooldownTimer = null;
+    }
+    state.pendingAuth.password = "";
+    state.authMode = returnMode;
+    renderApp();
+  },
+
+  /**
+   * Real-time Password Strength Meter & Checklist updater matching `MemberActivity.kt` `passwordStrengthBox`.
+   */
+  updatePasswordStrengthUi(inputId, rawValue) {
+    const pwd = String(rawValue ?? document.getElementById(inputId)?.value ?? "");
+    const ev = evaluatePassword(pwd);
+
+    const badge = document.getElementById(`${inputId}-strength-badge`);
+    if (badge) {
+      if (!pwd) {
+        badge.textContent = "Min. 8 chars";
+        badge.className = "px-2 py-0.5 rounded-md text-[10px] font-bold bg-slate-200/80 text-slate-600";
+      } else {
+        const badgeStyles = {
+          1: "bg-rose-100 text-rose-700",
+          2: "bg-amber-100 text-amber-800",
+          3: "bg-blue-100 text-blue-700",
+          4: "bg-emerald-100 text-emerald-700"
+        };
+        badge.textContent = ev.strengthLabel || "Weak";
+        badge.className = `px-2 py-0.5 rounded-md text-[10px] font-bold ${badgeStyles[ev.score] || badgeStyles[1]}`;
+      }
+    }
+
+    const barColors = {
+      1: "bg-rose-500",
+      2: "bg-amber-500",
+      3: "bg-blue-500",
+      4: "bg-emerald-500"
+    };
+    const activeBarColor = barColors[ev.score] || "bg-slate-200";
+    for (let i = 1; i <= 4; i++) {
+      const bar = document.getElementById(`${inputId}-bar-${i}`);
+      if (bar) {
+        bar.className = `h-1.5 rounded-full transition-colors ${pwd && i <= ev.score ? activeBarColor : "bg-slate-200"}`;
+      }
+    }
+
+    const updateReqItem = (reqSuffix, met, labelText) => {
+      const el = document.getElementById(`${inputId}-${reqSuffix}`);
+      if (!el) return;
+      el.className = `flex items-center gap-1.5 ${met ? "text-emerald-600 font-semibold" : "text-slate-500"}`;
+      el.innerHTML = `
+        <i class="fa-${met ? "solid fa-circle-check text-emerald-600" : "regular fa-circle"} text-[9px]"></i>
+        <span>${labelText}</span>
+      `;
+    };
+
+    updateReqItem("req-len", ev.hasMinLength, "8+ characters");
+    updateReqItem("req-case", ev.hasUpper && ev.hasLower, "Upper &amp; lower (Aa)");
+    updateReqItem("req-num", ev.hasNumber, "Number (0-9)");
+    updateReqItem("req-spec", ev.hasSpecial, "Special (!@#$)");
   },
 
   switchTab(tabId) {
@@ -1232,12 +1765,35 @@ window.appActions = {
     }
   },
 
-  // --- Authentication Handlers ---
+  // --- Authentication Handlers (100% Mobile Parity with AuthManager.kt & MemberActivity.kt) ---
   async handleLogin(e) {
     e.preventDefault();
-    const email = document.getElementById("login-email")?.value.trim() || "";
-    const password = document.getElementById("login-password")?.value || "";
-    const emailErr = validateEmailForAuth(email);
+    const cleanEmail = (document.getElementById("login-email")?.value || "").trim();
+    const cleanPassword = (document.getElementById("login-password")?.value || "").trim();
+
+    if (!cleanEmail || !cleanPassword) {
+      return showToast("Please fill in all fields", "error");
+    }
+
+    // 1. Brute-force lockout check (Client + Trusted Backend parity with ValidationUtils.isLoginLocked)
+    if (isLoginLocked(cleanEmail)) {
+      const remSec = getLoginLockRemainingSeconds(cleanEmail);
+      return showToast(`Too many login attempts. Please wait ${remSec} seconds.`, "error");
+    }
+    try {
+      const rateCheck = await callAuthApi("/api/auth/login-rate-limit", {
+        action: "check",
+        email: cleanEmail
+      });
+      if (rateCheck.locked) {
+        return showToast(`Too many login attempts. Please wait ${rateCheck.remainingSec || 60} seconds.`, "error");
+      }
+    } catch {
+      // Fall back to client-side rate limiter if backend is unreachable
+    }
+
+    // 2. Email validation (matching ValidationUtils.validateEmailForAuth)
+    const emailErr = validateEmailForAuth(cleanEmail);
     if (emailErr) return showToast(emailErr, "error");
 
     const btn = document.getElementById("auth-submit-btn");
@@ -1246,31 +1802,129 @@ window.appActions = {
       btn.textContent = "Signing in...";
     }
 
-    try {
-      await signInWithEmailAndPassword(auth, email, password);
-      showToast("Signed in to Synced N.", "success");
-    } catch (err) {
-      // Fallback check for custom PBKDF2 hash stored in Firestore
+    const recordFailedAttemptAndNotify = async (baseErrorMsg) => {
+      const clientRem = recordLoginFailure(cleanEmail);
+      let serverRes = null;
       try {
-        const q = query(collection(db, "users"), where("email", "==", email));
-        const snap = await getDocs(q);
-        if (!snap.empty) {
-          const userDoc = snap.docs[0].data();
-          const storedHash = userDoc.resetPassword || userDoc.password;
-          if (storedHash) {
-            const matches = await verifyPasswordPbkdf2(password, storedHash);
-            if (matches) {
-              await sendPasswordResetEmail(auth, email);
-              showToast("Password verified. Please check your email link to synchronize Firebase Auth.", "info");
+        serverRes = await callAuthApi("/api/auth/login-rate-limit", {
+          action: "record_failure",
+          email: cleanEmail
+        });
+      } catch {
+        // Ignore backend error
+      }
+      const isLocked = clientRem === 0 || Boolean(serverRes?.locked);
+      const remaining = serverRes?.remainingAttempts !== undefined ? serverRes.remainingAttempts : clientRem;
+
+      if (isLocked) {
+        showToast("Too many failed attempts. Account locked for 60 seconds.", "error");
+      } else if (remaining <= 2) {
+        showToast(`${baseErrorMsg} (${remaining} attempt(s) left)`, "error");
+      } else {
+        showToast(baseErrorMsg, "error");
+      }
+    };
+
+    loginVerificationInProgress = true;
+    clearVerifiedSession();
+
+    try {
+      // Step 1: Attempt standard Firebase Authentication login
+      const cred = await signInWithEmailAndPassword(auth, cleanEmail, cleanPassword);
+
+      // Step 1A: Mobile Security Parity Check (AuthManager.kt lines 135-146)
+      // Check if the password was reset via OTP (/password_resets/{emailLower}).
+      // If a reset hash exists and does NOT match the entered password, the user is trying
+      // to sign in with their old pre-reset password -> reject and signOut immediately!
+      const storedResetHash = await getPasswordResetHash(cleanEmail);
+      if (storedResetHash) {
+        const matchesReset = await verifyPasswordPbkdf2(cleanPassword, storedResetHash);
+        if (!matchesReset) {
+          await signOut(auth);
+          loginVerificationInProgress = false;
+          await recordFailedAttemptAndNotify(
+            "Incorrect password. This account's password was changed. Please use your new password."
+          );
+          return;
+        }
+        // The user entered their new OTP-reset password and Firebase Auth also accepted it
+        try {
+          await updatePassword(cred.user, cleanPassword);
+        } catch {
+          // Ignore updatePassword notice
+        }
+      }
+
+      // Reset brute-force counters on successful login
+      resetLoginAttempts(cleanEmail);
+      try {
+        await callAuthApi("/api/auth/login-rate-limit", { action: "reset", email: cleanEmail });
+      } catch {
+        // Ignore
+      }
+
+      loginVerificationInProgress = false;
+      await activateAuthenticatedSession(cred.user, null);
+      showToast("Signed in to Synced N.", "success");
+    } catch (firebaseAuthError) {
+      // Step 2: Cross-Platform OTP Password Reset Fallback (AuthManager.kt lines 186-235)
+      // When a user resets their password via OTP on Mobile or Web, the new PBKDF2-HMAC-SHA256 hash
+      // is stored in `/password_resets/{emailLower}` while Firebase Auth still holds the old password.
+      try {
+        const storedResetHash = await getPasswordResetHash(cleanEmail);
+        let existingProfile = await getUserProfileByEmail(cleanEmail);
+        const candidateHash = storedResetHash || existingProfile?.resetPassword || "";
+
+        if (candidateHash) {
+          const matchesResetPassword = await verifyPasswordPbkdf2(cleanPassword, candidateHash);
+          if (matchesResetPassword) {
+            // Ensure we have a Firebase Auth token so Firestore rules (`isAuthenticated()`) succeed,
+            // matching `auth.signInAnonymously().await()` in `AuthManager.kt` lines 217-223.
+            let activeFbUser = auth.currentUser;
+            if (!activeFbUser) {
+              const anonCred = await signInAnonymously(auth);
+              activeFbUser = anonCred.user;
+            }
+
+            // Now that we have an authenticated token, look up the user's real profile in `/users` if not yet loaded
+            if (!existingProfile) {
+              existingProfile = await getUserProfileByEmail(cleanEmail);
+            }
+
+            if (existingProfile && existingProfile.uid) {
+              state.overrideProfileUid = existingProfile.uid;
+              await saveCleanUserProfile(existingProfile.uid, { resetPassword: candidateHash });
+              await persistVerifiedSession(existingProfile, true);
+
+              resetLoginAttempts(cleanEmail);
+              try {
+                await callAuthApi("/api/auth/login-rate-limit", { action: "reset", email: cleanEmail });
+              } catch {
+                // Ignore
+              }
+
+              loginVerificationInProgress = false;
+              await activateAuthenticatedSession(activeFbUser, existingProfile.uid);
+              showToast("Signed in to Synced N.", "success");
               return;
             }
           }
         }
-      } catch {
-        // Ignore fallback error
+      } catch (fallbackErr) {
+        console.warn("OTP password reset fallback check:", fallbackErr);
       }
-      showToast(err.message || "Invalid email or password.", "error");
+
+      loginVerificationInProgress = false;
+      const errCode = String(firebaseAuthError?.code || "");
+      let friendlyMsg = "Incorrect email or password";
+      if (errCode.includes("user-not-found")) {
+        friendlyMsg = "No account found with this email";
+      } else if (errCode.includes("too-many-requests")) {
+        friendlyMsg = "Too many failed attempts. Please try again later.";
+      }
+      await recordFailedAttemptAndNotify(friendlyMsg);
     } finally {
+      loginVerificationInProgress = false;
       if (btn) {
         btn.disabled = false;
         btn.textContent = "Sign In to Workspace";
@@ -1278,46 +1932,94 @@ window.appActions = {
     }
   },
 
+  /**
+   * Step 1 of Registration (matches `MemberActivity.kt` `setupRegister` lines 1510-1572):
+   * Validates inputs, checks for duplicate email in Firestore, and sends a 6-digit OTP via Brevo
+   * BEFORE creating the Firebase Auth / Firestore user account.
+   */
   async handleRegister(e) {
     e.preventDefault();
-    const fullName = document.getElementById("reg-name")?.value.trim() || "";
-    const email = document.getElementById("reg-email")?.value.trim() || "";
+    const fullName = (document.getElementById("reg-name")?.value || "").trim();
+    const email = (document.getElementById("reg-email")?.value || "").trim();
     const ministryRole = document.getElementById("reg-role")?.value || "Member";
-    const password = document.getElementById("reg-password")?.value || "";
+    const password = (document.getElementById("reg-password")?.value || "").trim();
+    const confirmPassword = (document.getElementById("reg-confirm-password")?.value || "").trim();
 
-    if (fullName.length < 2) return showToast("Enter your full name.", "error");
+    if (!fullName || !email || !password || !confirmPassword) {
+      return showToast("Please fill in all fields", "error");
+    }
+
+    if (!isValidName(fullName)) {
+      return showToast("Name must be 2-50 letters (spaces, hyphens, and apostrophes allowed)", "error");
+    }
+    const derivedUsername = fullName.split(/\s+/)[0] || fullName;
+    if (!isValidUsername(derivedUsername) && !isValidName(fullName)) {
+      return showToast("Username must be 2-30 characters (letters, numbers, spaces, underscore)", "error");
+    }
+
     const emailErr = validateEmailForAuth(email);
     if (emailErr) return showToast(emailErr, "error");
 
     const pwdEval = evaluatePassword(password);
     if (!pwdEval.isStrong) return showToast(pwdEval.errorMessage, "error");
 
+    if (password !== confirmPassword) {
+      return showToast("Passwords do not match", "error");
+    }
+
     const btn = document.getElementById("auth-submit-btn");
     if (btn) {
       btn.disabled = true;
-      btn.textContent = "Creating account...";
+      btn.textContent = "Checking email...";
     }
 
     try {
-      const cred = await createUserWithEmailAndPassword(auth, email, password);
-      const hashedPassword = await hashPasswordPbkdf2(password);
-      const isLeaderRole = ministryRole === "Worship Leader";
-      await saveCleanUserProfile(cred.user.uid, {
-        uid: cred.user.uid,
-        fullName,
-        username: fullName.split(/\s+/)[0] || "Member",
+      // Check if email is already registered in Firestore (matching MemberActivity.kt lines 1545-1551)
+      const exists = await checkEmailExistsInFirestore(email);
+      if (exists) {
+        showToast("This email is already registered. Please log in instead.", "error");
+        return;
+      }
+
+      if (btn) {
+        btn.textContent = "Sending verification code...";
+      }
+
+      const otpRes = await callAuthApi("/api/auth/send-otp", {
         email,
-        resetPassword: hashedPassword,
-        role: isLeaderRole ? "Leader" : "Member",
-        ministryRole,
-        teamCode: "",
-        teamName: "",
-        photoUri: "",
-        unavailableRanges: []
+        recipientName: fullName,
+        purpose: "register"
       });
-      showToast("Account created.", "success");
+
+      if (!otpRes.ok || !otpRes.success) {
+        if (otpRes.cooldownRemainingMs > 0) {
+          const waitSec = Math.ceil(otpRes.cooldownRemainingMs / 1000);
+          showToast(`Please wait ${waitSec}s before requesting a new code.`, "warning");
+        } else {
+          showToast(otpRes.errorMessage || "Failed to send verification code.", "error");
+        }
+        return;
+      }
+
+      state.pendingAuth = {
+        flow: "register",
+        username: derivedUsername.slice(0, 30),
+        fullName,
+        email,
+        password,
+        ministryRole,
+        sentAt: Date.now(),
+        expiresAt: otpRes.expiresAt || Date.now() + 10 * 60 * 1000,
+        resendCooldownSec: 60,
+        cooldownTimer: null
+      };
+
+      state.authMode = "otp";
+      renderApp();
+      startOtpCooldownTimer(60);
+      showToast(`Verification code sent to ${email}`, "success");
     } catch (err) {
-      showToast(err.message || "Failed to create account.", "error");
+      showToast(err.message || "Failed to initiate email verification.", "error");
     } finally {
       if (btn) {
         btn.disabled = false;
@@ -1326,8 +2028,256 @@ window.appActions = {
     }
   },
 
+  /**
+   * Step 1 of Forgot Password / Password Reset (matches `MemberActivity.kt` `setupReset` lines 1578-1625):
+   * Validates registered email + strong new password + confirm password, verifies account existence
+   * in Firestore, and sends a 6-digit OTP (`purpose = "reset"`) via Brevo.
+   */
+  async handlePasswordReset(e) {
+    e.preventDefault();
+    const email = (document.getElementById("reset-email")?.value || "").trim();
+    const newPassword = (document.getElementById("reset-new-password")?.value || "").trim();
+    const confirmPassword = (document.getElementById("reset-confirm-password")?.value || "").trim();
+
+    if (!email || !newPassword || !confirmPassword) {
+      return showToast("Please fill in all fields", "error");
+    }
+
+    const emailErr = validateEmailForAuth(email);
+    if (emailErr) return showToast(emailErr, "error");
+
+    const pwdEval = evaluatePassword(newPassword);
+    if (!pwdEval.isStrong) return showToast(pwdEval.errorMessage, "error");
+
+    if (newPassword !== confirmPassword) {
+      return showToast("Passwords do not match", "error");
+    }
+
+    const btn = document.getElementById("auth-submit-btn");
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = "Verifying account...";
+    }
+
+    try {
+      // Verify the email belongs to an existing registered account (matching MemberActivity.kt lines 1602-1609)
+      const emailExists = await checkEmailExistsInFirestore(email);
+      if (!emailExists) {
+        showToast("No registered account found with this email address.", "error");
+        return;
+      }
+
+      if (btn) {
+        btn.textContent = "Sending reset code...";
+      }
+
+      const otpRes = await callAuthApi("/api/auth/send-otp", {
+        email,
+        recipientName: "Member",
+        purpose: "reset"
+      });
+
+      if (!otpRes.ok || !otpRes.success) {
+        if (otpRes.cooldownRemainingMs > 0) {
+          const waitSec = Math.ceil(otpRes.cooldownRemainingMs / 1000);
+          showToast(`Please wait ${waitSec}s before requesting a new code.`, "warning");
+        } else {
+          showToast(otpRes.errorMessage || "Failed to send password reset code.", "error");
+        }
+        return;
+      }
+
+      state.pendingAuth = {
+        flow: "reset",
+        username: "",
+        fullName: "",
+        email,
+        password: newPassword,
+        ministryRole: "Member",
+        sentAt: Date.now(),
+        expiresAt: otpRes.expiresAt || Date.now() + 10 * 60 * 1000,
+        resendCooldownSec: 60,
+        cooldownTimer: null
+      };
+
+      state.authMode = "otp";
+      renderApp();
+      startOtpCooldownTimer(60);
+      showToast(`Password reset code sent to ${email}`, "success");
+    } catch (err) {
+      showToast(err.message || "Could not send password reset code.", "error");
+    } finally {
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = "Send Verification Code";
+      }
+    }
+  },
+
+  /**
+   * Resends the 6-digit OTP code while enforcing the 60-second cooldown (`EmailOtpService.canResendOtp`).
+   */
+  async handleResendOtp() {
+    const pending = state.pendingAuth;
+    if (!pending.email || !pending.flow) {
+      return showToast("Session expired. Please start again.", "error");
+    }
+    if (pending.resendCooldownSec > 0) {
+      return showToast(`Please wait ${pending.resendCooldownSec}s before requesting a new code.`, "warning");
+    }
+
+    const resendBtn = document.getElementById("otp-resend-btn");
+    if (resendBtn) {
+      resendBtn.disabled = true;
+      resendBtn.textContent = "Sending...";
+    }
+
+    try {
+      const otpRes = await callAuthApi("/api/auth/send-otp", {
+        email: pending.email,
+        recipientName: pending.fullName || "Member",
+        purpose: pending.flow
+      });
+
+      if (!otpRes.ok || !otpRes.success) {
+        if (otpRes.cooldownRemainingMs > 0) {
+          const waitSec = Math.ceil(otpRes.cooldownRemainingMs / 1000);
+          startOtpCooldownTimer(waitSec);
+        }
+        showToast(otpRes.errorMessage || "Please wait before requesting a new code.", "warning");
+        return;
+      }
+
+      const otpInput = document.getElementById("otp-code-input");
+      if (otpInput) otpInput.value = "";
+      startOtpCooldownTimer(60);
+      showToast("New verification code sent!", "success");
+    } catch (err) {
+      showToast(err.message || "Failed to resend verification code.", "error");
+    }
+  },
+
+  /**
+   * Step 2 of Registration & Password Reset (`MemberActivity.kt` `setupOtp` lines 1658-1706):
+   * Verifies the 6-digit OTP through the trusted backend, consumes the single-use verification token,
+   * and completes either account creation (`AuthManager.registerUser`) or password reset (`FirestoreManager.savePasswordReset`).
+   */
+  async handleVerifyOtp(e) {
+    e.preventDefault();
+    const pending = state.pendingAuth;
+    if (!pending.email || !pending.flow || !pending.password) {
+      showToast("Verification session expired. Please try again.", "error");
+      state.authMode = "login";
+      renderApp();
+      return;
+    }
+
+    const code = (document.getElementById("otp-code-input")?.value || "").trim();
+    if (code.length !== 6 || !/^\d{6}$/.test(code)) {
+      return showToast("Please enter the 6-digit verification code", "error");
+    }
+
+    const btn = document.getElementById("auth-submit-btn");
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = "Verifying...";
+    }
+
+    try {
+      // 1. Verify OTP against trusted backend (enforces 10-min expiry, max 5 attempts, single-use)
+      const verifyRes = await callAuthApi("/api/auth/verify-otp", {
+        email: pending.email,
+        code
+      });
+
+      if (!verifyRes.ok || !verifyRes.verified) {
+        showToast(verifyRes.errorMessage || "Invalid verification code.", "error");
+        return;
+      }
+
+      // 2. Consume the single-use verification token to prevent OTP bypass or replay
+      const consumeRes = await callAuthApi("/api/auth/consume-verification", {
+        email: pending.email,
+        purpose: pending.flow,
+        verificationToken: verifyRes.verificationToken
+      });
+
+      if (!consumeRes.ok || !consumeRes.valid) {
+        showToast(consumeRes.errorMessage || "Verification token expired. Please request a new code.", "error");
+        return;
+      }
+
+      // 3A. Registration Flow (`AuthManager.registerUser` lines 31-108)
+      if (pending.flow === "register") {
+        if (btn) btn.textContent = "Creating account...";
+
+        const alreadyExists = await checkEmailExistsInFirestore(pending.email);
+        if (alreadyExists) {
+          clearPendingAuthState();
+          state.authMode = "login";
+          renderApp();
+          showToast("An account with this email already exists. Please log in.", "error");
+          return;
+        }
+
+        const cred = await createUserWithEmailAndPassword(auth, pending.email, pending.password);
+        try {
+          await updateProfile(cred.user, { displayName: pending.fullName });
+        } catch {
+          // Ignore updateProfile error
+        }
+
+        const hashedPassword = await hashPasswordPbkdf2(pending.password);
+        const isLeaderRole = pending.ministryRole === "Worship Leader";
+        const createdProfile = await saveCleanUserProfile(cred.user.uid, {
+          uid: cred.user.uid,
+          fullName: pending.fullName,
+          username: pending.username || pending.fullName.split(/\s+/)[0] || "Member",
+          email: pending.email,
+          resetPassword: hashedPassword,
+          role: isLeaderRole ? "Leader" : "Member",
+          ministryRole: pending.ministryRole || "Member",
+          teamCode: "",
+          teamName: "",
+          photoUri: "",
+          unavailableRanges: []
+        });
+
+        clearPendingAuthState();
+        await persistVerifiedSession(createdProfile, false);
+        showToast("Your account has been created!", "success");
+        return;
+      }
+
+      // 3B. Password Reset Flow (`FirestoreManager.savePasswordReset` lines 253-285)
+      if (pending.flow === "reset") {
+        if (btn) btn.textContent = "Saving new password...";
+
+        await savePasswordResetInFirestore(pending.email, pending.password);
+        clearPendingAuthState();
+        state.authSuccessMessage = "Password has been successfully reset! You can now log in.";
+        state.authMode = "success";
+        renderApp();
+        showToast("Password has been successfully reset!", "success");
+      }
+    } catch (err) {
+      const errCode = String(err?.code || "");
+      if (errCode.includes("email-already-in-use")) {
+        showToast("This email is already registered. Please log in instead.", "error");
+      } else {
+        showToast(err.message || "Verification failed. Please try again.", "error");
+      }
+    } finally {
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = pending.flow === "reset" ? "Verify & Reset Password" : "Verify & Create Account";
+      }
+    }
+  },
+
   async handleGoogleSignIn() {
     try {
+      clearVerifiedSession();
       await signInWithPopup(auth, googleProvider);
       showToast("Signed in with Google.", "success");
     } catch (err) {
@@ -1335,26 +2285,10 @@ window.appActions = {
     }
   },
 
-  async handlePasswordReset(e) {
-    e.preventDefault();
-    const email = document.getElementById("reset-email")?.value.trim() || "";
-    const emailErr = validateEmailForAuth(email);
-    if (emailErr) return showToast(emailErr, "error");
-
-    try {
-      await sendPasswordResetEmail(auth, email);
-      showToast("Password reset link sent to your email.", "success");
-      state.authMode = "login";
-      renderApp();
-    } catch (err) {
-      showToast(err.message || "Could not send password reset email.", "error");
-    }
-  },
-
   async handleChangePassword(e) {
     e.preventDefault();
-    const newPassword = document.getElementById("profile-new-password")?.value || "";
-    const confirmPassword = document.getElementById("profile-confirm-password")?.value || "";
+    const newPassword = (document.getElementById("profile-new-password")?.value || "").trim();
+    const confirmPassword = (document.getElementById("profile-confirm-password")?.value || "").trim();
 
     if (newPassword !== confirmPassword) {
       return showToast("Passwords do not match.", "error");
@@ -1365,28 +2299,46 @@ window.appActions = {
       return showToast(pwdEval.errorMessage, "error");
     }
 
+    const btn = document.getElementById("change-password-btn");
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = "Updating...";
+    }
+
     try {
       const hashedPassword = await hashPasswordPbkdf2(newPassword);
-      if (auth.currentUser) {
+      if (auth.currentUser && !auth.currentUser.isAnonymous) {
         try {
           await updatePassword(auth.currentUser, newPassword);
         } catch (authErr) {
-          // If Firebase requires recent login, still sync PBKDF2 hash in Firestore and inform user
           console.warn("Firebase updatePassword notice:", authErr);
         }
       }
       await saveCleanUserProfile(state.currentUser.uid, { resetPassword: hashedPassword });
+      if (state.currentUser?.email) {
+        await savePasswordResetInFirestore(state.currentUser.email, newPassword);
+      }
+
       const newInput = document.getElementById("profile-new-password");
       const confirmInput = document.getElementById("profile-confirm-password");
       if (newInput) newInput.value = "";
       if (confirmInput) confirmInput.value = "";
-      showToast("Password updated.", "success");
+      this.updatePasswordStrengthUi("profile-new-password", "");
+      showToast("Password updated for both web and mobile.", "success");
     } catch (err) {
       showToast(err.message || "Could not update password.", "error");
+    } finally {
+      if (btn) {
+        btn.disabled = false;
+        btn.innerHTML = `<i class="fa-solid fa-key text-xs"></i> Update Password`;
+      }
     }
   },
 
   async signOutUser() {
+    clearPendingAuthState();
+    clearVerifiedSession();
+    state.authMode = "login";
     await signOut(auth);
     showToast("Signed out.", "info");
   },
@@ -3162,7 +4114,12 @@ window.appActions = {
     const fullName = document.getElementById("profile-name-input")?.value.trim() || "";
     const phone = document.getElementById("profile-phone-input")?.value.trim() || "";
     const roleSelect = document.getElementById("profile-role-select");
-    if (fullName.length < 2) return showToast("Enter a valid name.", "error");
+    if (!isValidName(fullName)) {
+      return showToast("Name must be 2-50 letters (spaces, hyphens, and apostrophes allowed).", "error");
+    }
+    if (phone && !isValidPhilippinePhone(phone)) {
+      return showToast("Enter a valid Philippine phone number (e.g. 09XX XXX XXXX or +63 9XX XXX XXXX).", "error");
+    }
 
     const updates = {
       fullName,

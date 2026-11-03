@@ -70,10 +70,132 @@ export function validateEmailForAuth(email = "") {
   if (!domainPart || domainPart.startsWith(".") || domainPart.endsWith(".") || !domainPart.includes(".")) return "Enter a valid email address.";
   if (!/^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,10}$/.test(clean)) return "Enter a valid email address.";
   const domainLower = domainPart.toLowerCase();
-  if (DISPOSABLE_DOMAINS.has(domainLower) || domainLower.endsWith(".invalid") || domainLower.endsWith(".test")) {
-    return "Disposable or temporary email addresses are not allowed.";
+  if (
+    DISPOSABLE_DOMAINS.has(domainLower) ||
+    domainLower.endsWith(".invalid") ||
+    domainLower.endsWith(".test") ||
+    domainLower.startsWith(".") ||
+    domainLower.endsWith(".")
+  ) {
+    return "Disposable or temporary email addresses are not allowed. Please use an active email.";
   }
   return null;
+}
+
+// Validation & Brute-Force Rate Limiting matching ValidationUtils.kt
+export const MAX_NAME_LENGTH = 50;
+export const MAX_USERNAME_LENGTH = 30;
+export const MAX_PHONE_LENGTH = 13;
+export const MAX_EMAIL_LENGTH = 60;
+export const MIN_PASSWORD_LENGTH = 8;
+export const MAX_PASSWORD_LENGTH = 128;
+
+export const MAX_LOGIN_ATTEMPTS = 5;
+export const LOGIN_LOCKOUT_DURATION_MS = 60000;
+
+const PH_PHONE_REGEX = /^(\+639\d{9}|639\d{9}|09\d{9})$/;
+const loginAttempts = new Map();
+
+export function isValidName(name = "") {
+  const clean = String(name).trim();
+  return clean.length > 0 && clean.length <= MAX_NAME_LENGTH;
+}
+
+export function isValidUsername(username = "") {
+  const clean = String(username).trim();
+  return clean.length > 0 && clean.length <= MAX_USERNAME_LENGTH;
+}
+
+export function isValidPhilippinePhone(phone = "", allowBlank = true) {
+  const clean = String(phone).trim();
+  if (!clean) return allowBlank;
+  return PH_PHONE_REGEX.test(clean);
+}
+
+export function isLoginLocked(email = "", nowMs = Date.now()) {
+  const key = String(email).trim().toLowerCase();
+  const entry = loginAttempts.get(key);
+  if (!entry) return false;
+  if (entry.lockedUntilMs > nowMs) return true;
+  if (entry.lockedUntilMs > 0 && nowMs >= entry.lockedUntilMs) {
+    loginAttempts.delete(key);
+  }
+  return false;
+}
+
+export function getLoginLockRemainingSeconds(email = "", nowMs = Date.now()) {
+  const key = String(email).trim().toLowerCase();
+  const entry = loginAttempts.get(key);
+  if (!entry) return 0;
+  const remainingMs = entry.lockedUntilMs - nowMs;
+  if (remainingMs <= 0) return 0;
+  return Math.floor((remainingMs + 999) / 1000);
+}
+
+export function recordLoginFailure(email = "", nowMs = Date.now()) {
+  const key = String(email).trim().toLowerCase();
+  const current = loginAttempts.get(key);
+  const baseCount =
+    current && current.lockedUntilMs > 0 && nowMs >= current.lockedUntilMs
+      ? 0
+      : current?.failedCount || 0;
+  const nextCount = baseCount + 1;
+  if (nextCount >= MAX_LOGIN_ATTEMPTS) {
+    loginAttempts.set(key, {
+      failedCount: nextCount,
+      lockedUntilMs: nowMs + LOGIN_LOCKOUT_DURATION_MS
+    });
+    return 0;
+  }
+  loginAttempts.set(key, {
+    failedCount: nextCount,
+    lockedUntilMs: 0
+  });
+  return MAX_LOGIN_ATTEMPTS - nextCount;
+}
+
+export function resetLoginAttempts(email = "") {
+  const key = String(email).trim().toLowerCase();
+  if (key) {
+    loginAttempts.delete(key);
+  }
+}
+
+// Session HMAC-SHA256 Integrity matching ValidationUtils.kt (SESSION_HMAC_SECRET)
+const SESSION_HMAC_SECRET_BYTES = new Uint8Array([
+  0x53, 0x79, 0x6e, 0x63, 0x65, 0x64, 0x4e, 0x5f,
+  0x48, 0x6d, 0x61, 0x63, 0x5f, 0x32, 0x30, 0x32,
+  0x36, 0x5f, 0x4d, 0x69, 0x6e, 0x69, 0x73, 0x74,
+  0x72, 0x79, 0x5f, 0x53, 0x65, 0x63, 0x75, 0x72
+]);
+
+export async function computeSessionHmac(email = "", role = "", uid = "") {
+  try {
+    const enc = new TextEncoder();
+    const key = await crypto.subtle.importKey(
+      "raw",
+      SESSION_HMAC_SECRET_BYTES,
+      { name: "HMAC", hash: "SHA-256" },
+      false,
+      ["sign"]
+    );
+    const payload = `${String(email).trim().toLowerCase()}|${String(role).trim()}|${String(uid).trim()}`;
+    const signature = await crypto.subtle.sign("HMAC", key, enc.encode(payload));
+    return bytesToBase64(new Uint8Array(signature));
+  } catch {
+    return "";
+  }
+}
+
+export async function verifySessionHmac(email = "", role = "", uid = "", expectedHmac = "") {
+  if (!expectedHmac) return false;
+  const computed = await computeSessionHmac(email, role, uid);
+  if (!computed || computed.length !== expectedHmac.length) return false;
+  let diff = 0;
+  for (let i = 0; i < computed.length; i++) {
+    diff |= computed.charCodeAt(i) ^ expectedHmac.charCodeAt(i);
+  }
+  return diff === 0;
 }
 
 // WebCrypto PBKDF2-HMAC-SHA256 matching ValidationUtils.kt (65536 iterations, 256 bits)
