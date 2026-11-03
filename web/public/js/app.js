@@ -16,14 +16,10 @@ import {
   getDoc,
   getDocs,
   setDoc,
-  addDoc,
-  updateDoc,
   deleteDoc,
   query,
   where,
-  onSnapshot,
-  arrayUnion,
-  arrayRemove
+  onSnapshot
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 
 import { FIREBASE_CONFIG, DEFAULT_MINISTRY_ROLES, MUSICAL_KEYS } from "./config.js";
@@ -44,7 +40,6 @@ import {
 } from "./utils.js";
 import {
   getAvatarHtml,
-  getRoleBadgeHtml,
   renderHomeView,
   renderScheduleView,
   renderSongsView,
@@ -96,6 +91,129 @@ let unsubAnnouncements = null;
 let unsubSubstitutions = null;
 let unsubMessages = null;
 let unsubRejoinRequests = null;
+
+// ============================================================================
+// Firestore Schema Helpers (100% compliant with firestore.rules)
+// ============================================================================
+
+function normalizeUserDoc(uid, raw = {}) {
+  const fullName = String(raw.fullName || raw.name || raw.username || "Member").trim().slice(0, 100);
+  const username = String(raw.username || fullName.split(/\s+/)[0] || "Member").trim().slice(0, 50);
+  const email = String(raw.email || "").trim().slice(0, 100);
+  const role = ["Leader", "Member", ""].includes(raw.role) ? raw.role : "Member";
+  const teamCode = String(raw.teamCode || raw.teamId || "").trim().toUpperCase().slice(0, 20);
+  const teamName = String(raw.teamName || "").trim().slice(0, 100);
+  const ministryRole = String(raw.ministryRole || "Member").trim().slice(0, 50);
+  const photoUri = String(raw.photoUri || raw.profilePictureUrl || "").trim().slice(0, 500);
+  const unavailableRanges = Array.isArray(raw.unavailableRanges)
+    ? raw.unavailableRanges
+    : Array.isArray(raw.unavailableDates)
+    ? raw.unavailableDates
+    : [];
+
+  return {
+    uid,
+    username,
+    email,
+    role,
+    teamName,
+    teamCode,
+    resetPassword: String(raw.resetPassword || raw.password || "").slice(0, 128),
+    fullName,
+    phone: String(raw.phone || "").slice(0, 25),
+    country: String(raw.country || "Philippines").slice(0, 50),
+    language: String(raw.language || "English").slice(0, 50),
+    ministryRole,
+    unavailableRanges,
+    notificationsEnabled: typeof raw.notificationsEnabled === "boolean" ? raw.notificationsEnabled : true,
+    teamUnmuted: typeof raw.teamUnmuted === "boolean" ? raw.teamUnmuted : true,
+    fcmToken: String(raw.fcmToken || "").slice(0, 500),
+    photoUri,
+    removedByLeader: Boolean(raw.removedByLeader),
+    removedTeamCode: String(raw.removedTeamCode || "").slice(0, 128),
+    createdAt: raw.createdAt !== undefined ? raw.createdAt : Date.now(),
+    joinedAt: typeof raw.joinedAt === "number" ? raw.joinedAt : Date.now(),
+    // Convenience aliases for views
+    name: fullName
+  };
+}
+
+/**
+ * Writes a strictly validated `/users/{uid}` document that satisfies `isValidUser`
+ * and `areImmutableFieldsUnchanged(['uid', 'createdAt'])` in `firestore.rules`.
+ */
+async function saveCleanUserProfile(uid, updates = {}) {
+  const userRef = doc(db, "users", uid);
+  const snap = await getDoc(userRef);
+  const existing = snap.exists() ? snap.data() : {};
+  const merged = { ...existing, ...updates };
+  const normalized = normalizeUserDoc(uid, merged);
+
+  const cleanPayload = {
+    uid,
+    username: normalized.username,
+    email: normalized.email,
+    role: normalized.role,
+    teamName: normalized.teamName,
+    teamCode: normalized.teamCode,
+    resetPassword: normalized.resetPassword,
+    fullName: normalized.fullName,
+    phone: normalized.phone,
+    country: normalized.country,
+    language: normalized.language,
+    ministryRole: normalized.ministryRole,
+    unavailableRanges: normalized.unavailableRanges.slice(0, 100),
+    notificationsEnabled: normalized.notificationsEnabled,
+    teamUnmuted: normalized.teamUnmuted,
+    fcmToken: normalized.fcmToken,
+    photoUri: normalized.photoUri,
+    removedByLeader: normalized.removedByLeader,
+    removedTeamCode: normalized.removedTeamCode,
+    joinedAt: normalized.joinedAt
+  };
+
+  if (existing.createdAt !== undefined) {
+    cleanPayload.createdAt = existing.createdAt;
+  } else {
+    cleanPayload.createdAt = Date.now();
+  }
+
+  await setDoc(userRef, cleanPayload);
+  return cleanPayload;
+}
+
+/**
+ * Writes a strictly validated `/teams/{teamCode}` document that satisfies `isValidTeam`
+ * and `areImmutableFieldsUnchanged(['teamCode', 'createdAt'])` in `firestore.rules`.
+ */
+async function saveCleanTeamDoc(teamCode, updates = {}) {
+  const cleanCode = String(teamCode).trim().toUpperCase();
+  const teamRef = doc(db, "teams", cleanCode);
+  const snap = await getDoc(teamRef);
+  const existing = snap.exists() ? snap.data() : {};
+  const merged = { ...existing, ...updates };
+
+  const cleanPayload = {
+    teamCode: cleanCode,
+    teamName: String(merged.teamName || merged.name || "Worship Ministry").trim().slice(0, 100),
+    leaderUid: String(merged.leaderUid || merged.leaderId || state.currentUser?.uid || "").trim().slice(0, 128),
+    leaderName: String(merged.leaderName || state.currentUser?.fullName || "Worship Leader").trim().slice(0, 100),
+    leaderEmail: String(merged.leaderEmail || state.currentUser?.email || "").trim().slice(0, 120),
+    roles: Array.isArray(merged.roles) ? merged.roles.slice(0, 50) : DEFAULT_MINISTRY_ROLES,
+    removedMembers: Array.isArray(merged.removedMembers) ? merged.removedMembers.slice(0, 200) : [],
+    isDeleted: Boolean(merged.isDeleted),
+    status: String(merged.status || "active").slice(0, 50)
+  };
+
+  if (existing.createdAt !== undefined) {
+    cleanPayload.createdAt = existing.createdAt;
+  } else {
+    cleanPayload.createdAt = Date.now();
+  }
+
+  await setDoc(teamRef, cleanPayload);
+  return cleanPayload;
+}
 
 const metronome = new MetronomeEngine((beat, isAccent) => {
   const indicator = document.getElementById("metronome-beat-dot");
@@ -185,34 +303,47 @@ function clearTeamListeners() {
   state.rejoinRequests = [];
 }
 
-// Subscribe to Current Team & All Collections
-function subscribeToTeamWorkspace(teamId) {
+// Subscribe to Current Team & All Subcollections under /teams/{teamCode}/...
+function subscribeToTeamWorkspace(teamCode) {
   clearTeamListeners();
-  if (!teamId) {
+  const code = String(teamCode || "").trim().toUpperCase();
+  if (!code || code.length !== 6) {
     renderApp();
     return;
   }
 
-  unsubTeamDoc = onSnapshot(doc(db, "teams", teamId), (snap) => {
-    if (!snap.exists()) {
-      state.currentTeam = null;
+  unsubTeamDoc = onSnapshot(doc(db, "teams", code), (snap) => {
+    if (!snap.exists() || snap.data()?.isDeleted === true) {
+      state.currentTeam = {
+        teamCode: code,
+        teamName: state.currentUser?.teamName || "Worship Ministry"
+      };
       renderApp();
       return;
     }
-    state.currentTeam = { id: snap.id, ...snap.data() };
+    state.currentTeam = { teamCode: snap.id, ...snap.data() };
     renderApp();
   });
 
   unsubMembers = onSnapshot(
-    query(collection(db, "users"), where("teamId", "==", teamId)),
+    query(collection(db, "users"), where("teamCode", "==", code)),
     (snap) => {
-      state.teamMembers = snap.docs.map((d) => ({ uid: d.id, ...d.data() }));
+      const list = snap.docs
+        .map((d) => normalizeUserDoc(d.id, d.data()))
+        .filter((m) => !m.removedByLeader);
+      list.sort((a, b) => {
+        const aLeader = isWorshipLeader(a.ministryRole, a.role) ? 1 : 0;
+        const bLeader = isWorshipLeader(b.ministryRole, b.role) ? 1 : 0;
+        if (aLeader !== bLeader) return bLeader - aLeader;
+        return String(a.fullName).localeCompare(String(b.fullName));
+      });
+      state.teamMembers = list;
       renderApp();
     }
   );
 
   unsubServices = onSnapshot(
-    query(collection(db, "services"), where("teamId", "==", teamId)),
+    collection(db, "teams", code, "services"),
     (snap) => {
       const list = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
       list.sort((a, b) => String(a.date || "").localeCompare(String(b.date || "")));
@@ -222,7 +353,7 @@ function subscribeToTeamWorkspace(teamId) {
   );
 
   unsubSongs = onSnapshot(
-    query(collection(db, "songs"), where("teamId", "==", teamId)),
+    collection(db, "teams", code, "songs"),
     (snap) => {
       const list = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
       list.sort((a, b) => String(a.title || "").localeCompare(String(b.title || "")));
@@ -232,27 +363,27 @@ function subscribeToTeamWorkspace(teamId) {
   );
 
   unsubAnnouncements = onSnapshot(
-    query(collection(db, "announcements"), where("teamId", "==", teamId)),
+    collection(db, "teams", code, "announcements"),
     (snap) => {
       const list = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-      list.sort((a, b) => Number(b.timestamp || 0) - Number(a.timestamp || 0));
+      list.sort((a, b) => Number(b.createdAt || 0) - Number(a.createdAt || 0));
       state.announcements = list;
       renderApp();
     }
   );
 
   unsubSubstitutions = onSnapshot(
-    query(collection(db, "substitutions"), where("teamId", "==", teamId)),
+    collection(db, "teams", code, "substitutions"),
     (snap) => {
       const list = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-      list.sort((a, b) => Number(b.timestamp || 0) - Number(a.timestamp || 0));
+      list.sort((a, b) => Number(b.createdAt || 0) - Number(a.createdAt || 0));
       state.substitutions = list;
       renderApp();
     }
   );
 
   unsubMessages = onSnapshot(
-    query(collection(db, "messages"), where("teamId", "==", teamId)),
+    collection(db, "teams", code, "messages"),
     (snap) => {
       const list = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
       list.sort((a, b) => Number(a.timestamp || 0) - Number(b.timestamp || 0));
@@ -268,7 +399,7 @@ function subscribeToTeamWorkspace(teamId) {
   );
 
   unsubRejoinRequests = onSnapshot(
-    query(collection(db, "rejoin_requests"), where("teamId", "==", teamId)),
+    collection(db, "teams", code, "rejoin_requests"),
     (snap) => {
       state.rejoinRequests = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
       renderApp();
@@ -295,33 +426,46 @@ onAuthStateChanged(auth, async (fbUser) => {
   state.authUser = fbUser;
   const userRef = doc(db, "users", fbUser.uid);
 
-  // Ensure user document exists if signed in via Google or first time
-  const initialSnap = await getDoc(userRef);
-  if (!initialSnap.exists()) {
-    const newProfile = {
-      uid: fbUser.uid,
-      name: fbUser.displayName || (fbUser.email ? fbUser.email.split("@")[0] : "Member"),
-      email: fbUser.email || "",
-      role: "Member",
-      ministryRole: "Member",
-      teamId: "",
-      profilePictureUrl: fbUser.photoURL || "",
-      unavailableDates: []
-    };
-    await setDoc(userRef, newProfile);
+  // Ensure user document exists & matches firestore.rules schema
+  try {
+    const initialSnap = await getDoc(userRef);
+    if (!initialSnap.exists()) {
+      const defaultName = fbUser.displayName || (fbUser.email ? fbUser.email.split("@")[0] : "Member");
+      await saveCleanUserProfile(fbUser.uid, {
+        uid: fbUser.uid,
+        fullName: defaultName,
+        username: defaultName.split(/\s+/)[0] || "Member",
+        email: fbUser.email || "",
+        role: "Member",
+        ministryRole: "Member",
+        teamCode: "",
+        teamName: "",
+        photoUri: fbUser.photoURL || "",
+        unavailableRanges: []
+      });
+    } else {
+      // Automatically heal any legacy web fields (e.g., name / teamId) so future updates never fail firestore.rules
+      const raw = initialSnap.data();
+      if ("name" in raw || "teamId" in raw || "profilePictureUrl" in raw || "unavailableDates" in raw || "password" in raw) {
+        await saveCleanUserProfile(fbUser.uid, raw);
+      }
+    }
+  } catch (err) {
+    console.warn("Initial profile sync check:", err);
   }
 
-  let activeSubscribedTeamId = null;
+  let activeSubscribedTeamCode = null;
   unsubUserDoc = onSnapshot(userRef, (snap) => {
     state.authLoading = false;
     if (!snap.exists()) return;
-    const data = snap.data();
-    state.currentUser = { uid: snap.id, ...data };
-    const nextTeamId = data.teamId || "";
-    if (nextTeamId !== activeSubscribedTeamId) {
-      activeSubscribedTeamId = nextTeamId;
-      if (nextTeamId) {
-        subscribeToTeamWorkspace(nextTeamId);
+    const normalized = normalizeUserDoc(snap.id, snap.data());
+    state.currentUser = normalized;
+
+    const nextTeamCode = (!normalized.removedByLeader && normalized.teamCode) ? normalized.teamCode : "";
+    if (nextTeamCode !== activeSubscribedTeamCode) {
+      activeSubscribedTeamCode = nextTeamCode;
+      if (nextTeamCode) {
+        subscribeToTeamWorkspace(nextTeamCode);
       } else {
         clearTeamListeners();
         renderApp();
@@ -351,7 +495,7 @@ function renderApp() {
     return;
   }
 
-  if (!state.currentUser.teamId) {
+  if (!state.currentUser.teamCode || state.currentUser.removedByLeader) {
     appEl.innerHTML = renderTeamSetupView();
     return;
   }
@@ -495,6 +639,8 @@ function renderAuthView() {
 // Team Setup View (Join with 6-character code or Create a new Worship Team)
 function renderTeamSetupView() {
   const user = state.currentUser;
+  const displayName = user?.fullName || user?.name || "Member";
+
   return `
     <div class="min-h-screen flex flex-col justify-center items-center p-4 sm:p-6 bg-[#F8FAFC]">
       <div class="w-full max-w-3xl space-y-6 animate-fade-in">
@@ -505,7 +651,7 @@ function renderTeamSetupView() {
               <img src="/assets/logo.png" alt="Synced N" class="w-6 h-6 object-contain" />
             </div>
             <div>
-              <h1 class="text-lg font-semibold text-slate-900">Welcome, ${escapeHtml(user?.name || "Member")}</h1>
+              <h1 class="text-lg font-semibold text-slate-900">Welcome, ${escapeHtml(displayName)}</h1>
               <p class="text-xs text-slate-500">Connect to your church worship ministry workspace to access schedules and song lineups.</p>
             </div>
           </div>
@@ -513,6 +659,17 @@ function renderTeamSetupView() {
             <i class="fa-solid fa-right-from-bracket text-xs"></i> Sign Out
           </button>
         </div>
+
+        ${user?.removedByLeader && user?.removedTeamCode ? `
+          <div class="surface-card border-amber-200 bg-amber-50/70 p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div class="text-xs text-amber-900">
+              <strong>Notice:</strong> You were previously removed from team <span class="font-mono font-semibold">${escapeHtml(user.removedTeamCode)}</span>. You can send a rejoin request to the Worship Leader or join/create another team below.
+            </div>
+            <button onclick="window.appActions.submitRejoinRequest('${escapeHtml(user.removedTeamCode)}')" class="btn btn-primary btn-sm shrink-0">
+              Request to Rejoin ${escapeHtml(user.removedTeamCode)}
+            </button>
+          </div>
+        ` : ""}
 
         <!-- Two-Column Onboarding Options -->
         <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -537,7 +694,7 @@ function renderTeamSetupView() {
                   class="form-input uppercase tracking-widest font-mono text-center text-base font-semibold"
                 />
               </div>
-              <button type="submit" class="w-full btn btn-indigo py-2.5">
+              <button id="join-team-btn" type="submit" class="w-full btn btn-indigo py-2.5">
                 Join Worship Team
               </button>
             </form>
@@ -564,7 +721,7 @@ function renderTeamSetupView() {
                   class="form-input"
                 />
               </div>
-              <button type="submit" class="w-full btn btn-primary py-2.5">
+              <button id="create-team-btn" type="submit" class="w-full btn btn-primary py-2.5">
                 Create Workspace
               </button>
             </form>
@@ -580,8 +737,12 @@ function renderDashboardShell() {
   const { currentUser, currentTeam, activeTab, substitutions, rejoinRequests } = state;
   const isLeader = hasLeaderPrivileges(currentUser);
   const pendingActionCount = isLeader
-    ? substitutions.filter((s) => s.status === "Pending").length + rejoinRequests.filter((r) => r.status === "Pending").length
+    ? substitutions.filter((s) => s.status === "Pending" || s.status === "Substitute Accepted").length +
+      rejoinRequests.filter((r) => r.status === "Pending").length
     : 0;
+  const teamDisplayName = currentTeam?.teamName || currentUser?.teamName || "Workspace";
+  const teamCode = currentTeam?.teamCode || currentUser?.teamCode || "------";
+  const userDisplayName = currentUser?.fullName || currentUser?.name || "Member";
 
   const navItems = [
     { id: "home", label: "Dashboard", icon: "fa-solid fa-table-columns" },
@@ -610,7 +771,7 @@ function renderDashboardShell() {
             <img src="/assets/logo.png" alt="Synced N" class="w-7 h-7 rounded object-contain shrink-0" />
             <div class="truncate">
               <div class="text-sm font-semibold text-slate-900 leading-none">Synced N</div>
-              <div class="text-[11px] text-slate-500 truncate mt-0.5">${escapeHtml(currentTeam?.name || "Workspace")}</div>
+              <div class="text-[11px] text-slate-500 truncate mt-0.5">${escapeHtml(teamDisplayName)}</div>
             </div>
           </div>
         </div>
@@ -650,7 +811,7 @@ function renderDashboardShell() {
           <div class="flex items-center justify-between px-2 py-1.5 bg-white border border-slate-200 rounded-md">
             <div>
               <div class="text-[10px] uppercase tracking-wider text-slate-400 font-semibold">Team Code</div>
-              <div class="font-mono text-xs font-semibold text-slate-800 tracking-widest">${escapeHtml(currentTeam?.teamCode || "------")}</div>
+              <div class="font-mono text-xs font-semibold text-slate-800 tracking-widest">${escapeHtml(teamCode)}</div>
             </div>
             <button onclick="window.appActions.copyTeamCode()" class="btn btn-ghost btn-sm text-xs" title="Copy Invite Code">
               <i class="fa-regular fa-copy"></i>
@@ -661,7 +822,7 @@ function renderDashboardShell() {
             <button onclick="window.appActions.switchTab('profile')" class="flex items-center gap-2.5 min-w-0 text-left flex-1 hover:opacity-80 transition">
               ${getAvatarHtml(currentUser, "w-8 h-8", "text-xs")}
               <div class="min-w-0 flex-1">
-                <div class="text-xs font-semibold text-slate-900 truncate">${escapeHtml(currentUser.name || "Member")}</div>
+                <div class="text-xs font-semibold text-slate-900 truncate">${escapeHtml(userDisplayName)}</div>
                 <div class="text-[11px] text-slate-500 truncate">${escapeHtml(currentUser.ministryRole || "Member")}</div>
               </div>
             </button>
@@ -677,8 +838,8 @@ function renderDashboardShell() {
         <div class="flex items-center gap-2.5 min-w-0">
           <img src="/assets/logo.png" alt="Synced N" class="w-7 h-7 rounded object-contain shrink-0" />
           <div class="truncate">
-            <div class="text-sm font-semibold text-slate-900 leading-none truncate">${escapeHtml(currentTeam?.name || "Synced N")}</div>
-            <div class="text-[10px] text-slate-500 font-mono">Code: ${escapeHtml(currentTeam?.teamCode || "------")}</div>
+            <div class="text-sm font-semibold text-slate-900 leading-none truncate">${escapeHtml(teamDisplayName)}</div>
+            <div class="text-[10px] text-slate-500 font-mono">Code: ${escapeHtml(teamCode)}</div>
           </div>
         </div>
         <div class="flex items-center gap-2">
@@ -751,14 +912,15 @@ window.appActions = {
       await signInWithEmailAndPassword(auth, email, password);
       showToast("Signed in to Synced N.", "success");
     } catch (err) {
-      // Fallback check for custom PBKDF2 hash stored in Firestore (matching AuthRepository.kt)
+      // Fallback check for custom PBKDF2 hash stored in Firestore
       try {
         const q = query(collection(db, "users"), where("email", "==", email));
         const snap = await getDocs(q);
         if (!snap.empty) {
           const userDoc = snap.docs[0].data();
-          if (userDoc.password) {
-            const matches = await verifyPasswordPbkdf2(password, userDoc.password);
+          const storedHash = userDoc.resetPassword || userDoc.password;
+          if (storedHash) {
+            const matches = await verifyPasswordPbkdf2(password, storedHash);
             if (matches) {
               await sendPasswordResetEmail(auth, email);
               showToast("Password verified. Please check your email link to synchronize Firebase Auth.", "info");
@@ -780,12 +942,12 @@ window.appActions = {
 
   async handleRegister(e) {
     e.preventDefault();
-    const name = document.getElementById("reg-name")?.value.trim() || "";
+    const fullName = document.getElementById("reg-name")?.value.trim() || "";
     const email = document.getElementById("reg-email")?.value.trim() || "";
     const ministryRole = document.getElementById("reg-role")?.value || "Member";
     const password = document.getElementById("reg-password")?.value || "";
 
-    if (name.length < 2) return showToast("Enter your full name.", "error");
+    if (fullName.length < 2) return showToast("Enter your full name.", "error");
     const emailErr = validateEmailForAuth(email);
     if (emailErr) return showToast(emailErr, "error");
 
@@ -802,16 +964,18 @@ window.appActions = {
       const cred = await createUserWithEmailAndPassword(auth, email, password);
       const hashedPassword = await hashPasswordPbkdf2(password);
       const isLeaderRole = ministryRole === "Worship Leader";
-      await setDoc(doc(db, "users", cred.user.uid), {
+      await saveCleanUserProfile(cred.user.uid, {
         uid: cred.user.uid,
-        name,
+        fullName,
+        username: fullName.split(/\s+/)[0] || "Member",
         email,
-        password: hashedPassword,
+        resetPassword: hashedPassword,
         role: isLeaderRole ? "Leader" : "Member",
         ministryRole,
-        teamId: "",
-        profilePictureUrl: "",
-        unavailableDates: []
+        teamCode: "",
+        teamName: "",
+        photoUri: "",
+        unavailableRanges: []
       });
       showToast("Account created.", "success");
     } catch (err) {
@@ -854,54 +1018,103 @@ window.appActions = {
     showToast("Signed out.", "info");
   },
 
-  // --- Team Onboarding ---
+  // --- Team Onboarding (100% compliant with /teams/{teamCode} & /users/{uid} rules) ---
   async handleCreateTeam(e) {
     e.preventDefault();
-    const name = document.getElementById("create-team-name")?.value.trim() || "";
-    if (name.length < 2) return showToast("Enter a valid ministry team name.", "error");
+    const teamName = document.getElementById("create-team-name")?.value.trim() || "";
+    if (teamName.length < 2) return showToast("Enter a valid ministry team name.", "error");
+
+    const btn = document.getElementById("create-team-btn");
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = "Creating Workspace...";
+    }
 
     try {
       let teamCode = generateTeamCode();
-      const existing = await getDocs(query(collection(db, "teams"), where("teamCode", "==", teamCode)));
-      if (!existing.empty) teamCode = generateTeamCode();
+      const existingSnap = await getDoc(doc(db, "teams", teamCode));
+      if (existingSnap.exists()) {
+        teamCode = generateTeamCode();
+      }
 
-      const teamRef = doc(collection(db, "teams"));
       const uid = state.currentUser.uid;
-      await setDoc(teamRef, {
-        id: teamRef.id,
-        name,
+      const leaderName = state.currentUser.fullName || state.currentUser.name || "Worship Leader";
+
+      await saveCleanTeamDoc(teamCode, {
         teamCode,
-        leaderId: uid,
-        members: [uid],
-        removedMembers: []
+        teamName,
+        leaderUid: uid,
+        leaderName,
+        leaderEmail: state.currentUser.email || "",
+        roles: DEFAULT_MINISTRY_ROLES,
+        removedMembers: [],
+        isDeleted: false,
+        status: "active"
       });
 
-      await updateDoc(doc(db, "users", uid), {
-        teamId: teamRef.id,
+      await saveCleanUserProfile(uid, {
+        teamCode,
+        teamName,
         role: "Leader",
-        ministryRole: "Worship Leader"
+        ministryRole: "Worship Leader",
+        removedByLeader: false,
+        removedTeamCode: "",
+        joinedAt: Date.now()
       });
 
-      showToast(`Created team "${name}" (${teamCode}).`, "success");
+      showToast(`Created team "${teamName}" (Invite Code: ${teamCode}).`, "success");
     } catch (err) {
+      console.error("Create team error:", err);
       showToast(err.message || "Failed to create team.", "error");
+    } finally {
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = "Create Workspace";
+      }
     }
   },
 
   async handleJoinTeam(e) {
     e.preventDefault();
     const code = (document.getElementById("join-team-code")?.value || "").trim().toUpperCase();
-    if (code.length !== 6) return showToast("Enter a valid 6-character team invite code.", "error");
+    if (!/^[A-Z0-9]{6}$/.test(code)) {
+      return showToast("Enter a valid 6-character alphanumeric invite code.", "error");
+    }
+
+    const btn = document.getElementById("join-team-btn");
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = "Joining Team...";
+    }
 
     try {
-      const snap = await getDocs(query(collection(db, "teams"), where("teamCode", "==", code)));
-      if (snap.empty) return showToast("No ministry team found with that invite code.", "error");
+      const teamSnap = await getDoc(doc(db, "teams", code));
+      let teamData = teamSnap.exists() ? teamSnap.data() : null;
 
-      const teamDoc = snap.docs[0];
-      const teamData = teamDoc.data();
+      // Fallback: check if any users already belong to this teamCode (for teams created offline on mobile)
+      if (!teamData) {
+        const memberCheck = await getDocs(query(collection(db, "users"), where("teamCode", "==", code)));
+        if (!memberCheck.empty) {
+          const firstMember = memberCheck.docs[0].data();
+          teamData = {
+            teamCode: code,
+            teamName: firstMember.teamName || `Team ${code}`,
+            leaderUid: "",
+            removedMembers: []
+          };
+        }
+      }
+
+      if (!teamData || teamData.isDeleted === true || teamData.status === "deleted") {
+        return showToast("No active ministry team found with that invite code.", "error");
+      }
+
       const uid = state.currentUser.uid;
+      const wasRemoved =
+        (state.currentUser.removedByLeader && state.currentUser.removedTeamCode === code) ||
+        (Array.isArray(teamData.removedMembers) && teamData.removedMembers.includes(uid));
 
-      if ((teamData.removedMembers || []).includes(uid)) {
+      if (wasRemoved) {
         openModal(`
           <div class="space-y-4">
             <div class="flex items-center gap-2.5 text-amber-700">
@@ -909,11 +1122,11 @@ window.appActions = {
               <h3 class="text-base font-semibold text-slate-900">Rejoin Approval Required</h3>
             </div>
             <p class="text-xs text-slate-600 leading-relaxed">
-              You previously left or were removed from <strong>${escapeHtml(teamData.name)}</strong>. Would you like to send a rejoin request to the Worship Leader?
+              You were previously removed from <strong>${escapeHtml(teamData.teamName || code)}</strong>. Would you like to send a rejoin request to the Worship Leader?
             </p>
             <div class="flex justify-end gap-2 pt-2">
               <button onclick="window.appActions.closeModal()" class="btn btn-secondary">Cancel</button>
-              <button onclick="window.appActions.submitRejoinRequest('${escapeHtml(teamDoc.id)}', '${escapeHtml(teamData.name)}')" class="btn btn-primary">
+              <button onclick="window.appActions.submitRejoinRequest('${escapeHtml(code)}')" class="btn btn-primary">
                 Send Rejoin Request
               </button>
             </div>
@@ -922,32 +1135,50 @@ window.appActions = {
         return;
       }
 
-      await updateDoc(doc(db, "teams", teamDoc.id), {
-        members: arrayUnion(uid)
+      const isDesignatedLeader = teamData.leaderUid === uid;
+      const currentMinistry = state.currentUser.ministryRole || "Member";
+      const nextMinistry = (!isDesignatedLeader && isWorshipLeader(currentMinistry, state.currentUser.role))
+        ? "Member"
+        : currentMinistry;
+
+      await saveCleanUserProfile(uid, {
+        teamCode: code,
+        teamName: teamData.teamName || `Team ${code}`,
+        role: isDesignatedLeader ? "Leader" : "Member",
+        ministryRole: isDesignatedLeader ? "Worship Leader" : nextMinistry,
+        removedByLeader: false,
+        removedTeamCode: "",
+        joinedAt: Date.now()
       });
 
-      const downgradeLeader = isWorshipLeader(state.currentUser.ministryRole, state.currentUser.role) && teamData.leaderId !== uid;
-      await updateDoc(doc(db, "users", uid), {
-        teamId: teamDoc.id,
-        role: downgradeLeader ? "Member" : (state.currentUser.role || "Member"),
-        ministryRole: downgradeLeader ? "Member" : (state.currentUser.ministryRole || "Member")
-      });
-
-      showToast(`Joined ${teamData.name}.`, "success");
+      showToast(`Joined ${teamData.teamName || code}.`, "success");
     } catch (err) {
+      console.error("Join team error:", err);
       showToast(err.message || "Could not join team.", "error");
+    } finally {
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = "Join Worship Team";
+      }
     }
   },
 
-  async submitRejoinRequest(teamId, teamName) {
+  async submitRejoinRequest(teamCode) {
+    const code = String(teamCode || "").trim().toUpperCase();
+    if (!code) return;
     try {
-      await addDoc(collection(db, "rejoin_requests"), {
-        teamId,
-        teamName,
-        userId: state.currentUser.uid,
-        userName: state.currentUser.name || "Member",
+      const reqRef = doc(collection(db, "teams", code, "rejoin_requests"));
+      const now = Date.now();
+      await setDoc(reqRef, {
+        id: reqRef.id,
+        teamCode: code,
+        userUid: state.currentUser.uid,
+        userName: state.currentUser.fullName || state.currentUser.name || "Member",
+        userEmail: state.currentUser.email || "",
+        reason: "Requested to rejoin via Synced N Web",
         status: "Pending",
-        timestamp: Date.now()
+        createdAt: now,
+        updatedAt: now
       });
       closeModal();
       showToast("Rejoin request sent to the Worship Leader.", "success");
@@ -957,13 +1188,14 @@ window.appActions = {
   },
 
   copyTeamCode() {
-    const code = state.currentTeam?.teamCode;
+    const code = state.currentTeam?.teamCode || state.currentUser?.teamCode;
     if (!code) return;
     navigator.clipboard.writeText(code);
     showToast(`Copied invite code: ${code}`, "success");
   },
 
   openEditTeamNameModal() {
+    const currentName = state.currentTeam?.teamName || state.currentUser?.teamName || "";
     openModal(`
       <div class="space-y-4">
         <div class="flex items-center justify-between pb-3 border-b border-slate-200">
@@ -973,7 +1205,7 @@ window.appActions = {
         <form onsubmit="window.appActions.saveTeamName(event)" class="space-y-4">
           <div>
             <label class="form-label">Team Name</label>
-            <input id="edit-team-name-input" type="text" required maxlength="60" value="${escapeHtml(state.currentTeam?.name || "")}" class="form-input" />
+            <input id="edit-team-name-input" type="text" required maxlength="60" value="${escapeHtml(currentName)}" class="form-input" />
           </div>
           <div class="flex justify-end gap-2 pt-2">
             <button type="button" onclick="window.appActions.closeModal()" class="btn btn-secondary">Cancel</button>
@@ -987,13 +1219,15 @@ window.appActions = {
   async saveTeamName(e) {
     e.preventDefault();
     const newName = document.getElementById("edit-team-name-input")?.value.trim() || "";
-    if (newName.length < 2 || !state.currentTeam) return;
-    await updateDoc(doc(db, "teams", state.currentTeam.id), { name: newName });
+    const code = state.currentTeam?.teamCode || state.currentUser?.teamCode;
+    if (newName.length < 2 || !code) return;
+    await saveCleanTeamDoc(code, { teamName: newName });
+    await saveCleanUserProfile(state.currentUser.uid, { teamName: newName });
     closeModal();
     showToast("Team name updated.", "success");
   },
 
-  // --- Announcements ---
+  // --- Announcements (/teams/{teamCode}/announcements/{announcementId}) ---
   openAnnouncementModal() {
     openModal(`
       <div class="space-y-4">
@@ -1010,6 +1244,10 @@ window.appActions = {
             <label class="form-label">Message Details</label>
             <textarea id="ann-content" rows="4" required maxlength="1200" placeholder="Share schedule reminders, dress code, or song updates..." class="form-textarea"></textarea>
           </div>
+          <label class="flex items-center gap-2 text-xs font-medium text-slate-700 cursor-pointer">
+            <input id="ann-urgent" type="checkbox" class="rounded border-slate-300 text-indigo-600" />
+            <span>Mark as Urgent Notice</span>
+          </label>
           <div class="flex justify-end gap-2 pt-2">
             <button type="button" onclick="window.appActions.closeModal()" class="btn btn-secondary">Cancel</button>
             <button type="submit" class="btn btn-primary">Publish Update</button>
@@ -1022,32 +1260,38 @@ window.appActions = {
   async saveAnnouncement(e) {
     e.preventDefault();
     const title = document.getElementById("ann-title")?.value.trim() || "";
-    const content = document.getElementById("ann-content")?.value.trim() || "";
-    if (!title || !content || !state.currentTeam) return;
+    const message = document.getElementById("ann-content")?.value.trim() || "";
+    const urgent = Boolean(document.getElementById("ann-urgent")?.checked);
+    const code = state.currentTeam?.teamCode || state.currentUser?.teamCode;
+    if (!title || !message || !code) return;
 
-    const ref = doc(collection(db, "announcements"));
+    const now = Date.now();
+    const ref = doc(collection(db, "teams", code, "announcements"));
     await setDoc(ref, {
       id: ref.id,
-      teamId: state.currentTeam.id,
-      title,
-      content,
-      authorId: state.currentUser.uid,
-      authorName: state.currentUser.name || "Leader",
-      timestamp: Date.now()
+      teamCode: code,
+      title: title.slice(0, 120),
+      message: message.slice(0, 2000),
+      urgent,
+      author: (state.currentUser.fullName || state.currentUser.name || "Leader").slice(0, 100),
+      createdBy: state.currentUser.uid,
+      createdAt: now,
+      updatedAt: now
     });
     closeModal();
     showToast("Announcement posted.", "success");
   },
 
   async deleteAnnouncement(id) {
-    if (!confirm("Delete this announcement?")) return;
-    await deleteDoc(doc(db, "announcements", id));
+    const code = state.currentTeam?.teamCode || state.currentUser?.teamCode;
+    if (!code || !confirm("Delete this announcement?")) return;
+    await deleteDoc(doc(db, "teams", code, "announcements", id));
     showToast("Announcement removed.", "info");
   },
 
-  // --- Member Unavailability ---
+  // --- Member Unavailability (saved on /users/{uid}.unavailableRanges) ---
   openAvailabilityModal() {
-    const ranges = state.currentUser?.unavailableDates || [];
+    const ranges = state.currentUser?.unavailableRanges || [];
     openModal(`
       <div class="space-y-5">
         <div class="flex items-center justify-between pb-3 border-b border-slate-200">
@@ -1110,49 +1354,57 @@ window.appActions = {
     if (!startDate) return;
     if (endDate < startDate) return showToast("End date cannot be earlier than start date.", "error");
 
-    const current = [...(state.currentUser.unavailableDates || [])];
+    const current = [...(state.currentUser.unavailableRanges || [])];
     current.push({
       id: "unavail_" + Date.now(),
       startDate,
       endDate,
-      reason
+      reason,
+      createdAt: Date.now()
     });
-    await updateDoc(doc(db, "users", state.currentUser.uid), { unavailableDates: current });
+    await saveCleanUserProfile(state.currentUser.uid, { unavailableRanges: current });
     showToast("Availability updated.", "success");
     this.openAvailabilityModal();
   },
 
   async removeUnavailableRange(rangeId) {
-    const current = (state.currentUser.unavailableDates || []).filter((r) => r.id !== rangeId);
-    await updateDoc(doc(db, "users", state.currentUser.uid), { unavailableDates: current });
+    const current = (state.currentUser.unavailableRanges || []).filter((r) => r.id !== rangeId);
+    await saveCleanUserProfile(state.currentUser.uid, { unavailableRanges: current });
     showToast("Removed unavailable date range.", "info");
     this.openAvailabilityModal();
   },
 
-  // --- Service Schedule & Lineup Modal ---
+  // --- Service Schedule & Lineup Modal (/teams/{teamCode}/services/{serviceId}) ---
   openServiceModal(serviceId = null) {
     const existing = serviceId ? state.services.find((s) => s.id === serviceId) : null;
     const assignedMap = {};
-    (existing?.assignedMembers || []).forEach((m) => {
-      assignedMap[m.userId] = m.role;
+    (existing?.assignments || []).forEach((m) => {
+      assignedMap[m.uid] = m.role;
     });
-    const currentSetlist = new Set(existing?.setlist || []);
+    const currentSetlist = new Set(
+      (existing?.songs || []).map((s) => (typeof s === "string" ? s : s.title))
+    );
+    const rehearsal = existing?.rehearsal || {};
 
     openModal(`
       <div class="space-y-5">
         <div class="flex items-center justify-between pb-3 border-b border-slate-200">
           <div>
             <h3 class="text-base font-semibold text-slate-900">${existing ? "Edit Worship Service & Lineup" : "Schedule Worship Service"}</h3>
-            <p class="text-xs text-slate-500">Set service times, rehearsal dates, assigned members, and song lineup.</p>
+            <p class="text-xs text-slate-500">Set service times, venue, rehearsal dates, assigned members, and song lineup.</p>
           </div>
           <button onclick="window.appActions.closeModal()" class="text-slate-400 hover:text-slate-600"><i class="fa-solid fa-xmark"></i></button>
         </div>
 
         <form onsubmit="window.appActions.saveService(event, '${existing ? escapeHtml(existing.id) : ""}')" class="space-y-4">
           <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
-            <div class="sm:col-span-2">
+            <div>
               <label class="form-label">Service Title</label>
-              <input id="srv-name" type="text" required maxlength="80" value="${escapeHtml(existing?.name || "")}" placeholder="e.g. Sunday Morning Worship Service" class="form-input" />
+              <input id="srv-name" type="text" required maxlength="80" value="${escapeHtml(existing?.title || "")}" placeholder="e.g. Sunday Morning Worship" class="form-input" />
+            </div>
+            <div>
+              <label class="form-label">Venue / Location</label>
+              <input id="srv-venue" type="text" required maxlength="80" value="${escapeHtml(existing?.venue || "Main Sanctuary")}" placeholder="Main Sanctuary" class="form-input" />
             </div>
             <div>
               <label class="form-label">Status</label>
@@ -1163,22 +1415,26 @@ window.appActions = {
             </div>
           </div>
 
-          <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          <div class="grid grid-cols-2 sm:grid-cols-5 gap-3">
             <div>
               <label class="form-label">Service Date</label>
               <input id="srv-date" type="date" required value="${escapeHtml(existing?.date || "")}" class="form-input" />
             </div>
             <div>
-              <label class="form-label">Service Time</label>
-              <input id="srv-time" type="time" value="${escapeHtml(existing?.time || "09:00")}" class="form-input" />
+              <label class="form-label">Start Time</label>
+              <input id="srv-time" type="time" value="${escapeHtml(existing?.start || "09:00")}" class="form-input" />
+            </div>
+            <div>
+              <label class="form-label">End Time</label>
+              <input id="srv-end-time" type="time" value="${escapeHtml(existing?.end || "11:00")}" class="form-input" />
             </div>
             <div>
               <label class="form-label">Rehearsal Date</label>
-              <input id="srv-reh-date" type="date" value="${escapeHtml(existing?.rehearsalDate || "")}" class="form-input" />
+              <input id="srv-reh-date" type="date" value="${escapeHtml(rehearsal.date || "")}" class="form-input" />
             </div>
             <div>
               <label class="form-label">Rehearsal Time</label>
-              <input id="srv-reh-time" type="time" value="${escapeHtml(existing?.rehearsalTime || "")}" class="form-input" />
+              <input id="srv-reh-time" type="time" value="${escapeHtml(rehearsal.start || "")}" class="form-input" />
             </div>
           </div>
 
@@ -1189,11 +1445,12 @@ window.appActions = {
               ${state.teamMembers.map((m) => {
                 const checked = Boolean(assignedMap[m.uid]);
                 const roleVal = assignedMap[m.uid] || m.ministryRole || "Member";
+                const mName = m.fullName || m.name || "Member";
                 return `
                   <div class="flex items-center justify-between gap-2 bg-white px-2.5 py-1.5 rounded border border-slate-200 text-xs">
                     <label class="flex items-center gap-2 truncate cursor-pointer flex-1">
-                      <input type="checkbox" class="srv-member-check rounded border-slate-300 text-indigo-600" data-uid="${escapeHtml(m.uid)}" data-name="${escapeHtml(m.name)}" ${checked ? "checked" : ""} />
-                      <span class="truncate font-medium text-slate-800">${escapeHtml(m.name)}</span>
+                      <input type="checkbox" class="srv-member-check rounded border-slate-300 text-indigo-600" data-uid="${escapeHtml(m.uid)}" data-name="${escapeHtml(mName)}" data-email="${escapeHtml(m.email || "")}" ${checked ? "checked" : ""} />
+                      <span class="truncate font-medium text-slate-800">${escapeHtml(mName)}</span>
                     </label>
                     <input type="text" class="srv-member-role w-28 bg-slate-50 border border-slate-200 rounded px-2 py-0.5 text-[11px] text-slate-700" data-uid="${escapeHtml(m.uid)}" value="${escapeHtml(roleVal)}" />
                   </div>
@@ -1220,13 +1477,13 @@ window.appActions = {
 
           <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
-              <label class="form-label">Service Notes / Attire / Instructions</label>
-              <input id="srv-notes" type="text" maxlength="240" value="${escapeHtml(existing?.notes || "")}" placeholder="e.g. Call time 7:30 AM, neutral attire" class="form-input" />
+              <label class="form-label">Rehearsal & Service Notes</label>
+              <input id="srv-notes" type="text" maxlength="240" value="${escapeHtml(rehearsal.notes || "")}" placeholder="e.g. Call time 7:30 AM, neutral attire" class="form-input" />
             </div>
             <div>
               <label class="form-label">Event Banner Image (Optional)</label>
               <div class="flex items-center gap-2">
-                <input id="srv-image-url" type="text" value="${escapeHtml(existing?.imageUrl || "")}" placeholder="https://..." class="form-input flex-1 text-xs" />
+                <input id="srv-image-url" type="text" value="${escapeHtml(existing?.coverImageUrl || "")}" placeholder="https://..." class="form-input flex-1 text-xs" />
                 <label class="btn btn-secondary btn-sm cursor-pointer shrink-0">
                   <i class="fa-solid fa-cloud-arrow-up"></i> Upload
                   <input type="file" accept="image/*" class="hidden" onchange="window.appActions.uploadServiceCover(this)" />
@@ -1262,58 +1519,84 @@ window.appActions = {
 
   async saveService(e, existingId = "") {
     e.preventDefault();
-    if (!state.currentTeam) return;
+    const code = state.currentTeam?.teamCode || state.currentUser?.teamCode;
+    if (!code) return;
 
-    const name = document.getElementById("srv-name")?.value.trim() || "Worship Service";
-    const status = document.getElementById("srv-status")?.value || "Published";
-    const date = document.getElementById("srv-date")?.value || "";
-    const time = document.getElementById("srv-time")?.value || "";
+    const existing = existingId ? state.services.find((s) => s.id === existingId) : null;
+    const title = (document.getElementById("srv-name")?.value.trim() || "Worship Service").slice(0, 100);
+    const venue = (document.getElementById("srv-venue")?.value.trim() || "Main Sanctuary").slice(0, 100);
+    const status = document.getElementById("srv-status")?.value === "Draft" ? "Draft" : "Published";
+    const date = (document.getElementById("srv-date")?.value || "").slice(0, 20);
+    const start = (document.getElementById("srv-time")?.value || "09:00").slice(0, 10);
+    const end = (document.getElementById("srv-end-time")?.value || "11:00").slice(0, 10);
     const rehearsalDate = document.getElementById("srv-reh-date")?.value || "";
     const rehearsalTime = document.getElementById("srv-reh-time")?.value || "";
     const notes = document.getElementById("srv-notes")?.value.trim() || "";
-    const imageUrl = document.getElementById("srv-image-url")?.value.trim() || "";
+    const coverImageUrl = (document.getElementById("srv-image-url")?.value.trim() || "").slice(0, 1000);
 
-    const assignedMembers = [];
+    const assignments = [];
     document.querySelectorAll(".srv-member-check:checked").forEach((chk) => {
-      const uid = chk.getAttribute("data-uid");
-      const userName = chk.getAttribute("data-name");
+      const uid = chk.getAttribute("data-uid") || "";
+      const name = chk.getAttribute("data-name") || "";
+      const email = chk.getAttribute("data-email") || "";
       const roleInput = document.querySelector(`.srv-member-role[data-uid="${uid}"]`);
       const role = roleInput?.value.trim() || "Member";
-      assignedMembers.push({ userId: uid, userName, role });
+      assignments.push({ uid, email, name, role });
     });
 
-    const setlist = [];
+    const songs = [];
     document.querySelectorAll(".srv-song-check:checked").forEach((chk) => {
-      setlist.push(chk.value);
+      const songTitle = chk.value;
+      const libSong = state.songs.find((s) => s.title === songTitle);
+      songs.push({
+        title: songTitle,
+        artist: libSong?.artist || "",
+        key: libSong?.key || "C",
+        bpm: Number(libSong?.bpm) || 74
+      });
     });
 
-    const ref = existingId ? doc(db, "services", existingId) : doc(collection(db, "services"));
-    await setDoc(ref, {
+    const ref = existingId
+      ? doc(db, "teams", code, "services", existingId)
+      : doc(collection(db, "teams", code, "services"));
+
+    const payload = {
       id: ref.id,
-      teamId: state.currentTeam.id,
-      name,
-      status,
+      teamCode: code,
+      title,
       date,
-      time,
-      rehearsalDate,
-      rehearsalTime,
-      notes,
-      imageUrl,
-      assignedMembers,
-      setlist
-    });
+      start,
+      end,
+      venue,
+      status,
+      coverImageUrl,
+      assignments: assignments.slice(0, 50),
+      rehearsal: {
+        date: rehearsalDate,
+        start: rehearsalTime,
+        end: "",
+        venue,
+        notes
+      },
+      songs: songs.slice(0, 50),
+      createdBy: existing?.createdBy || state.currentUser.uid,
+      createdAt: existing?.createdAt !== undefined ? existing.createdAt : Date.now(),
+      updatedAt: Date.now()
+    };
 
+    await setDoc(ref, payload);
     closeModal();
     showToast(existingId ? "Service schedule updated." : "New service scheduled.", "success");
   },
 
   async deleteService(serviceId) {
-    if (!confirm("Delete this worship service schedule?")) return;
-    await deleteDoc(doc(db, "services", serviceId));
+    const code = state.currentTeam?.teamCode || state.currentUser?.teamCode;
+    if (!code || !confirm("Delete this worship service schedule?")) return;
+    await deleteDoc(doc(db, "teams", code, "services", serviceId));
     showToast("Service deleted.", "info");
   },
 
-  // --- Substitution Requests ---
+  // --- Substitution Requests (/teams/{teamCode}/substitutions/{substitutionId}) ---
   openSubstitutionModal(serviceId) {
     const srv = state.services.find((s) => s.id === serviceId);
     if (!srv) return;
@@ -1324,32 +1607,38 @@ window.appActions = {
         <div class="flex items-center justify-between pb-3 border-b border-slate-200">
           <div>
             <h3 class="text-base font-semibold text-slate-900">Request a Lineup Substitute</h3>
-            <p class="text-xs text-slate-500">${escapeHtml(srv.name)} (${escapeHtml(srv.date)})</p>
+            <p class="text-xs text-slate-500">${escapeHtml(srv.title)} (${escapeHtml(srv.date)})</p>
           </div>
           <button onclick="window.appActions.closeModal()" class="text-slate-400 hover:text-slate-600"><i class="fa-solid fa-xmark"></i></button>
         </div>
 
-        <form onsubmit="window.appActions.submitSubstitutionRequest(event, '${escapeHtml(srv.id)}')" class="space-y-4">
-          <div>
-            <label class="form-label">Suggested Replacement Member (Optional)</label>
-            <select id="sub-suggested-user" class="form-select">
-              <option value="">Any available team member</option>
-              ${otherMembers.map((m) => `
-                <option value="${escapeHtml(m.uid)}" data-name="${escapeHtml(m.name)}">
-                  ${escapeHtml(m.name)} (${escapeHtml(m.ministryRole || "Member")})
-                </option>
-              `).join("")}
-            </select>
-          </div>
-          <div>
-            <label class="form-label">Reason for Request</label>
-            <textarea id="sub-reason" rows="3" required maxlength="300" placeholder="Explain your schedule conflict..." class="form-textarea"></textarea>
-          </div>
-          <div class="flex justify-end gap-2 pt-2">
-            <button type="button" onclick="window.appActions.closeModal()" class="btn btn-secondary">Cancel</button>
-            <button type="submit" class="btn btn-primary">Submit Request</button>
-          </div>
-        </form>
+        ${otherMembers.length === 0 ? `
+          <p class="text-xs text-slate-600">Invite at least one other member to your team before requesting a substitute.</p>
+        ` : `
+          <form onsubmit="window.appActions.submitSubstitutionRequest(event, '${escapeHtml(srv.id)}')" class="space-y-4">
+            <div>
+              <label class="form-label">Proposed Replacement Teammate</label>
+              <select id="sub-suggested-user" required class="form-select">
+                ${otherMembers.map((m) => {
+                  const mName = m.fullName || m.name || "Member";
+                  return `
+                    <option value="${escapeHtml(m.uid)}" data-name="${escapeHtml(mName)}">
+                      ${escapeHtml(mName)} (${escapeHtml(m.ministryRole || "Member")})
+                    </option>
+                  `;
+                }).join("")}
+              </select>
+            </div>
+            <div>
+              <label class="form-label">Reason for Request</label>
+              <textarea id="sub-reason" rows="3" required maxlength="300" placeholder="Explain your schedule conflict..." class="form-textarea"></textarea>
+            </div>
+            <div class="flex justify-end gap-2 pt-2">
+              <button type="button" onclick="window.appActions.closeModal()" class="btn btn-secondary">Cancel</button>
+              <button type="submit" class="btn btn-primary">Submit Request</button>
+            </div>
+          </form>
+        `}
       </div>
     `);
   },
@@ -1357,26 +1646,37 @@ window.appActions = {
   async submitSubstitutionRequest(e, serviceId) {
     e.preventDefault();
     const srv = state.services.find((s) => s.id === serviceId);
-    if (!srv || !state.currentTeam) return;
+    const code = state.currentTeam?.teamCode || state.currentUser?.teamCode;
+    if (!srv || !code) return;
 
     const sel = document.getElementById("sub-suggested-user");
-    const suggestedSubstituteUserId = sel?.value || "";
-    const suggestedSubstituteUserName = sel?.selectedOptions?.[0]?.getAttribute("data-name") || "";
-    const reason = document.getElementById("sub-reason")?.value.trim() || "";
+    const substituteUid = sel?.value || "";
+    const substituteName = sel?.selectedOptions?.[0]?.getAttribute("data-name") || "Teammate";
+    const reason = (document.getElementById("sub-reason")?.value.trim() || "Schedule conflict").slice(0, 500);
+    if (!substituteUid) return showToast("Select a proposed substitute teammate.", "error");
 
-    const ref = doc(collection(db, "substitutions"));
+    const mySlot = (srv.assignments || []).find((a) => a.uid === state.currentUser.uid);
+    const role = mySlot?.role || state.currentUser.ministryRole || "Member";
+
+    const now = Date.now();
+    const ref = doc(collection(db, "teams", code, "substitutions"));
     await setDoc(ref, {
       id: ref.id,
-      teamId: state.currentTeam.id,
+      teamCode: code,
       serviceId: srv.id,
-      serviceName: `${srv.name} (${srv.date})`,
-      requestingUserId: state.currentUser.uid,
-      requestingUserName: state.currentUser.name || "Member",
-      suggestedSubstituteUserId,
-      suggestedSubstituteUserName,
+      serviceTitle: (srv.title || "Worship Service").slice(0, 120),
+      serviceDate: (srv.date || "").slice(0, 50),
+      requesterUid: state.currentUser.uid,
+      requesterName: (state.currentUser.fullName || state.currentUser.name || "Member").slice(0, 100),
+      role: role.slice(0, 50),
+      substituteUid,
+      substituteName: substituteName.slice(0, 100),
       reason,
+      type: "Exclusion",
       status: "Pending",
-      timestamp: Date.now()
+      createdBy: state.currentUser.uid,
+      createdAt: now,
+      updatedAt: now
     });
 
     closeModal();
@@ -1384,38 +1684,45 @@ window.appActions = {
   },
 
   async respondSubstitution(subId, newStatus) {
+    const code = state.currentTeam?.teamCode || state.currentUser?.teamCode;
     const sub = state.substitutions.find((s) => s.id === subId);
-    if (!sub) return;
+    if (!sub || !code) return;
 
-    await updateDoc(doc(db, "substitutions", subId), { status: newStatus });
+    const subRef = doc(db, "teams", code, "substitutions", subId);
+    await setDoc(subRef, {
+      ...sub,
+      status: newStatus,
+      updatedAt: Date.now()
+    });
 
-    // If approved and a replacement member was suggested, automatically swap in service lineup
+    // If approved, automatically swap in the service lineup
     if (newStatus === "Approved" && sub.serviceId) {
       const srv = state.services.find((s) => s.id === sub.serviceId);
-      if (srv && Array.isArray(srv.assignedMembers)) {
-        const updated = srv.assignedMembers
-          .map((slot) => {
-            if (slot.userId === sub.requestingUserId) {
-              if (sub.suggestedSubstituteUserId) {
-                return {
-                  userId: sub.suggestedSubstituteUserId,
-                  userName: sub.suggestedSubstituteUserName || "Substitute",
-                  role: slot.role
-                };
-              }
-              return null;
-            }
-            return slot;
-          })
-          .filter(Boolean);
-        await updateDoc(doc(db, "services", srv.id), { assignedMembers: updated });
+      if (srv && Array.isArray(srv.assignments)) {
+        const subMember = state.teamMembers.find((m) => m.uid === sub.substituteUid);
+        const updatedAssignments = srv.assignments.map((slot) => {
+          if (slot.uid === sub.requesterUid) {
+            return {
+              uid: sub.substituteUid,
+              email: subMember?.email || "",
+              name: sub.substituteName || subMember?.fullName || "Substitute",
+              role: slot.role
+            };
+          }
+          return slot;
+        });
+        await setDoc(doc(db, "teams", code, "services", srv.id), {
+          ...srv,
+          assignments: updatedAssignments,
+          updatedAt: Date.now()
+        });
       }
     }
 
     showToast(`Substitution request ${newStatus.toLowerCase()}.`, "success");
   },
 
-  // --- Song Library & Interactive Stage Chord Studio ---
+  // --- Song Library & Interactive Stage Chord Studio (/teams/{teamCode}/songs/{songId}) ---
   setSongSearch(q) {
     state.songSearchQuery = q;
     renderApp();
@@ -1447,7 +1754,7 @@ window.appActions = {
       state.stageModal.scrollTimer = null;
     }
     metronome.stop();
-    metronome.setBpm(song.tempo || 74);
+    metronome.setBpm(song.bpm || 74);
 
     this.renderStageModalContent();
   },
@@ -1459,8 +1766,8 @@ window.appActions = {
     const { semitones, lyricsOnly, fontSize, autoScrollSpeed } = state.stageModal;
     const originalKey = song.key || "C";
     const activeKey = transposeSingleNote(originalKey, semitones);
-    const ytId = extractYoutubeVideoId(song.youtubeUrl);
-    const formattedHtml = renderFormattedChordSheet(song.chordSheet, song.lyrics, semitones, lyricsOnly);
+    const ytId = extractYoutubeVideoId(song.referenceUrl);
+    const formattedHtml = renderFormattedChordSheet(song.sheet, song.lyrics, semitones, lyricsOnly);
 
     openModal(`
       <div class="space-y-4">
@@ -1469,7 +1776,7 @@ window.appActions = {
           <div>
             <div class="flex flex-wrap items-center gap-2">
               <span class="badge badge-indigo font-mono">Key: ${escapeHtml(activeKey)}${semitones !== 0 ? ` (${semitones > 0 ? "+" : ""}${semitones} from ${escapeHtml(originalKey)})` : ""}</span>
-              ${song.tempo ? `<span class="badge badge-neutral font-mono">${escapeHtml(song.tempo)} BPM</span>` : ""}
+              ${song.bpm ? `<span class="badge badge-neutral font-mono">${escapeHtml(song.bpm)} BPM</span>` : ""}
             </div>
             <h2 class="text-lg font-semibold text-slate-900 mt-1">${escapeHtml(song.title || "Untitled Song")}</h2>
             <p class="text-xs text-slate-500">${escapeHtml(song.artist || "Unknown Artist")}</p>
@@ -1513,7 +1820,7 @@ window.appActions = {
             </div>
             <button onclick="window.appActions.toggleMetronome()" class="btn btn-secondary btn-sm">
               <span id="metronome-beat-dot" class="w-2.5 h-2.5 rounded-full bg-slate-300"></span>
-              <span class="font-mono">${escapeHtml(song.tempo || "74")} BPM</span>
+              <span class="font-mono">${escapeHtml(song.bpm || "74")} BPM</span>
             </button>
           </div>
         </div>
@@ -1536,7 +1843,7 @@ window.appActions = {
                   allowfullscreen
                 ></iframe>
               </div>
-              <a href="${escapeHtml(song.youtubeUrl)}" target="_blank" rel="noopener" class="w-full btn btn-secondary btn-sm">
+              <a href="${escapeHtml(song.referenceUrl)}" target="_blank" rel="noopener" class="w-full btn btn-secondary btn-sm">
                 <i class="fa-brands fa-youtube text-rose-600"></i> Open on YouTube
               </a>
             </div>
@@ -1616,17 +1923,17 @@ window.appActions = {
             </div>
             <div>
               <label class="form-label">Tempo (BPM)</label>
-              <input id="song-tempo" type="number" min="30" max="240" value="${escapeHtml(existing?.tempo || "72")}" class="form-input font-mono" />
+              <input id="song-tempo" type="number" min="30" max="240" value="${escapeHtml(existing?.bpm || "72")}" class="form-input font-mono" />
             </div>
             <div class="col-span-2 sm:col-span-1">
               <label class="form-label">YouTube Reference Link</label>
-              <input id="song-yt" type="url" value="${escapeHtml(existing?.youtubeUrl || "")}" placeholder="https://youtube.com/watch?v=..." class="form-input" />
+              <input id="song-yt" type="url" value="${escapeHtml(existing?.referenceUrl || "")}" placeholder="https://youtube.com/watch?v=..." class="form-input" />
             </div>
           </div>
 
           <div>
             <label class="form-label">Chord Sheet & Lyrics</label>
-            <textarea id="song-chords" rows="11" placeholder="[Verse 1]\nG                 C\nI love You Lord, Oh Your mercy never fails me..." class="form-textarea font-mono text-xs leading-relaxed">${escapeHtml(existing?.chordSheet || existing?.lyrics || "")}</textarea>
+            <textarea id="song-chords" rows="11" placeholder="[Verse 1]\nG                 C\nI love You Lord, Oh Your mercy never fails me..." class="form-textarea font-mono text-xs leading-relaxed">${escapeHtml(existing?.sheet || existing?.lyrics || "")}</textarea>
           </div>
 
           <div class="flex justify-end gap-2 pt-2 border-t border-slate-200">
@@ -1640,25 +1947,34 @@ window.appActions = {
 
   async saveSong(e, existingId = "") {
     e.preventDefault();
-    if (!state.currentTeam) return;
-    const title = document.getElementById("song-title")?.value.trim() || "";
-    const artist = document.getElementById("song-artist")?.value.trim() || "";
-    const key = document.getElementById("song-key")?.value || "C";
-    const tempo = String(document.getElementById("song-tempo")?.value || "").trim();
-    const youtubeUrl = document.getElementById("song-yt")?.value.trim() || "";
-    const chordSheet = document.getElementById("song-chords")?.value || "";
+    const code = state.currentTeam?.teamCode || state.currentUser?.teamCode;
+    if (!code) return;
 
-    const ref = existingId ? doc(db, "songs", existingId) : doc(collection(db, "songs"));
+    const existing = existingId ? state.songs.find((s) => s.id === existingId) : null;
+    const title = (document.getElementById("song-title")?.value.trim() || "").slice(0, 120);
+    const artist = (document.getElementById("song-artist")?.value.trim() || "").slice(0, 100);
+    const key = (document.getElementById("song-key")?.value || "C").slice(0, 10);
+    const bpm = parseInt(document.getElementById("song-tempo")?.value || "74", 10) || 74;
+    const referenceUrl = (document.getElementById("song-yt")?.value.trim() || "");
+    const sheet = (document.getElementById("song-chords")?.value || "").slice(0, 20000);
+
+    const ref = existingId
+      ? doc(db, "teams", code, "songs", existingId)
+      : doc(collection(db, "teams", code, "songs"));
+
     await setDoc(ref, {
       id: ref.id,
-      teamId: state.currentTeam.id,
+      teamCode: code,
       title,
       artist,
       key,
-      tempo,
-      youtubeUrl,
-      chordSheet,
-      lyrics: chordSheet
+      bpm,
+      sheet,
+      lyrics: sheet,
+      referenceUrl,
+      createdBy: existing?.createdBy || state.currentUser.uid,
+      createdAt: existing?.createdAt !== undefined ? existing.createdAt : Date.now(),
+      updatedAt: Date.now()
     });
 
     closeModal();
@@ -1666,15 +1982,16 @@ window.appActions = {
   },
 
   async deleteSong(songId) {
-    if (!confirm("Delete this song from the library?")) return;
-    await deleteDoc(doc(db, "songs", songId));
+    const code = state.currentTeam?.teamCode || state.currentUser?.teamCode;
+    if (!code || !confirm("Delete this song from the library?")) return;
+    await deleteDoc(doc(db, "teams", code, "songs", songId));
     showToast("Song deleted.", "info");
   },
 
   // --- Roster & Leadership Actions ---
   async assignMemberRole(memberUid, newMinistryRole) {
     const isSubLeader = newMinistryRole === "Substitute Leader";
-    await updateDoc(doc(db, "users", memberUid), {
+    await saveCleanUserProfile(memberUid, {
       ministryRole: newMinistryRole,
       role: isSubLeader ? "Leader" : "Member"
     });
@@ -1682,37 +1999,45 @@ window.appActions = {
   },
 
   async removeMemberFromTeam(memberUid, memberName) {
-    if (!confirm(`Remove ${memberName} from the team workspace?`)) return;
-    if (!state.currentTeam) return;
+    const code = state.currentTeam?.teamCode || state.currentUser?.teamCode;
+    if (!code || !confirm(`Remove ${memberName} from the team workspace?`)) return;
 
-    await updateDoc(doc(db, "teams", state.currentTeam.id), {
-      members: arrayRemove(memberUid),
-      removedMembers: arrayUnion(memberUid)
-    });
-    await updateDoc(doc(db, "users", memberUid), {
-      teamId: "",
+    const currentRemoved = Array.isArray(state.currentTeam?.removedMembers)
+      ? [...state.currentTeam.removedMembers]
+      : [];
+    if (!currentRemoved.includes(memberUid)) currentRemoved.push(memberUid);
+
+    await saveCleanTeamDoc(code, { removedMembers: currentRemoved });
+    await saveCleanUserProfile(memberUid, {
+      teamCode: "",
+      teamName: "",
       role: "Member",
-      ministryRole: "Member"
+      ministryRole: "Member",
+      removedByLeader: true,
+      removedTeamCode: code
     });
     showToast(`${memberName} was removed from the team.`, "info");
   },
 
   async handleRejoinRequest(requestId, approve) {
+    const code = state.currentTeam?.teamCode || state.currentUser?.teamCode;
     const req = state.rejoinRequests.find((r) => r.id === requestId);
-    if (!req || !state.currentTeam) return;
+    if (!req || !code) return;
 
     if (approve) {
-      await updateDoc(doc(db, "teams", state.currentTeam.id), {
-        removedMembers: arrayRemove(req.userId),
-        members: arrayUnion(req.userId)
-      });
-      await updateDoc(doc(db, "users", req.userId), {
-        teamId: state.currentTeam.id,
+      const currentRemoved = (state.currentTeam?.removedMembers || []).filter((id) => id !== req.userUid);
+      await saveCleanTeamDoc(code, { removedMembers: currentRemoved });
+      await saveCleanUserProfile(req.userUid, {
+        teamCode: code,
+        teamName: state.currentTeam?.teamName || "",
         role: "Member",
-        ministryRole: "Member"
+        ministryRole: "Member",
+        removedByLeader: false,
+        removedTeamCode: "",
+        joinedAt: Date.now()
       });
     }
-    await deleteDoc(doc(db, "rejoin_requests", requestId));
+    await deleteDoc(doc(db, "teams", code, "rejoin_requests", requestId));
     showToast(approve ? `${req.userName} rejoined the team.` : "Rejoin request declined.", "success");
   },
 
@@ -1734,7 +2059,10 @@ window.appActions = {
             <div>
               <label class="form-label">New Primary Worship Leader</label>
               <select id="transfer-leader-uid" class="form-select">
-                ${candidates.map((c) => `<option value="${escapeHtml(c.uid)}">${escapeHtml(c.name)} (${escapeHtml(c.ministryRole || "Member")})</option>`).join("")}
+                ${candidates.map((c) => {
+                  const cName = c.fullName || c.name || "Member";
+                  return `<option value="${escapeHtml(c.uid)}" data-name="${escapeHtml(cName)}" data-email="${escapeHtml(c.email || "")}">${escapeHtml(cName)} (${escapeHtml(c.ministryRole || "Member")})</option>`;
+                }).join("")}
               </select>
             </div>
             <div class="flex justify-end gap-2 pt-2">
@@ -1749,17 +2077,25 @@ window.appActions = {
 
   async confirmTransferLeadership(e) {
     e.preventDefault();
-    const targetUid = document.getElementById("transfer-leader-uid")?.value;
-    if (!targetUid || !state.currentTeam) return;
+    const sel = document.getElementById("transfer-leader-uid");
+    const targetUid = sel?.value;
+    const targetName = sel?.selectedOptions?.[0]?.getAttribute("data-name") || "Worship Leader";
+    const targetEmail = sel?.selectedOptions?.[0]?.getAttribute("data-email") || "";
+    const code = state.currentTeam?.teamCode || state.currentUser?.teamCode;
+    if (!targetUid || !code) return;
 
-    await updateDoc(doc(db, "teams", state.currentTeam.id), { leaderId: targetUid });
-    await updateDoc(doc(db, "users", targetUid), { role: "Leader", ministryRole: "Worship Leader" });
-    await updateDoc(doc(db, "users", state.currentUser.uid), { role: "Member", ministryRole: "Member" });
+    await saveCleanTeamDoc(code, {
+      leaderUid: targetUid,
+      leaderName: targetName,
+      leaderEmail: targetEmail
+    });
+    await saveCleanUserProfile(targetUid, { role: "Leader", ministryRole: "Worship Leader" });
+    await saveCleanUserProfile(state.currentUser.uid, { role: "Member", ministryRole: "Member" });
     closeModal();
     showToast("Leadership transferred.", "success");
   },
 
-  // --- Team Chat Actions ---
+  // --- Team Chat Actions (/teams/{teamCode}/messages/{messageId}) ---
   setChatReply(msgId) {
     const msg = state.messages.find((m) => m.id === msgId);
     if (!msg) return;
@@ -1791,14 +2127,17 @@ window.appActions = {
   async sendChatMessage(e) {
     e.preventDefault();
     const input = document.getElementById("chat-message-input");
-    const text = (input?.value || "").trim();
-    if (!text || !state.currentTeam) return;
+    const text = (input?.value || "").trim().slice(0, 2000);
+    const code = state.currentTeam?.teamCode || state.currentUser?.teamCode;
+    if (!text || !code) return;
 
     if (state.chatEditingMessage) {
-      const msgId = state.chatEditingMessage.id;
+      const existingMsg = state.chatEditingMessage;
       state.chatEditingMessage = null;
-      await updateDoc(doc(db, "messages", msgId), {
+      await setDoc(doc(db, "teams", code, "messages", existingMsg.id), {
+        ...existingMsg,
         text,
+        isEdited: true,
         editedAt: Date.now()
       });
       return;
@@ -1808,47 +2147,52 @@ window.appActions = {
     state.chatReplyTarget = null;
     if (input) input.value = "";
 
-    const ref = doc(collection(db, "messages"));
+    const ref = doc(collection(db, "teams", code, "messages"));
     await setDoc(ref, {
       id: ref.id,
-      teamId: state.currentTeam.id,
-      senderId: state.currentUser.uid,
-      senderName: state.currentUser.name || "Member",
-      senderAvatarUrl: state.currentUser.profilePictureUrl || "",
-      senderRole: state.currentUser.ministryRole || "Member",
+      teamCode: code,
+      senderUid: state.currentUser.uid,
+      senderName: (state.currentUser.fullName || state.currentUser.name || "Member").slice(0, 100),
+      senderPhotoUri: (state.currentUser.photoUri || "").slice(0, 500),
+      senderRole: (state.currentUser.ministryRole || "Member").slice(0, 50),
       text,
-      imageUrl: "",
-      replyToMessageId: reply ? reply.id : "",
-      replyToSenderName: reply ? reply.senderName : "",
+      mediaUrl: "",
+      replyToId: reply ? reply.id : "",
+      replyToSender: reply ? (reply.senderName || "Member") : "",
       replyToText: reply ? (reply.text || "Photo") : "",
+      timestamp: Date.now(),
+      isEdited: false,
       editedAt: 0,
-      isUnsent: false,
-      timestamp: Date.now()
+      isDeleted: false,
+      deletedAt: 0
     });
   },
 
   async sendChatPhoto(inputEl) {
     const file = inputEl.files?.[0];
-    if (!file || !state.currentTeam) return;
+    const code = state.currentTeam?.teamCode || state.currentUser?.teamCode;
+    if (!file || !code) return;
     try {
       showToast("Uploading photo to chat...", "info");
-      const imageUrl = await uploadImageToCloudinary(file);
-      const ref = doc(collection(db, "messages"));
+      const mediaUrl = await uploadImageToCloudinary(file);
+      const ref = doc(collection(db, "teams", code, "messages"));
       await setDoc(ref, {
         id: ref.id,
-        teamId: state.currentTeam.id,
-        senderId: state.currentUser.uid,
-        senderName: state.currentUser.name || "Member",
-        senderAvatarUrl: state.currentUser.profilePictureUrl || "",
-        senderRole: state.currentUser.ministryRole || "Member",
+        teamCode: code,
+        senderUid: state.currentUser.uid,
+        senderName: (state.currentUser.fullName || state.currentUser.name || "Member").slice(0, 100),
+        senderPhotoUri: (state.currentUser.photoUri || "").slice(0, 500),
+        senderRole: (state.currentUser.ministryRole || "Member").slice(0, 50),
         text: "",
-        imageUrl,
-        replyToMessageId: "",
-        replyToSenderName: "",
+        mediaUrl: mediaUrl.slice(0, 500),
+        replyToId: "",
+        replyToSender: "",
         replyToText: "",
+        timestamp: Date.now(),
+        isEdited: false,
         editedAt: 0,
-        isUnsent: false,
-        timestamp: Date.now()
+        isDeleted: false,
+        deletedAt: 0
       });
       showToast("Photo sent.", "success");
     } catch (err) {
@@ -1857,10 +2201,15 @@ window.appActions = {
   },
 
   async retractChatMessage(msgId) {
-    await updateDoc(doc(db, "messages", msgId), {
+    const code = state.currentTeam?.teamCode || state.currentUser?.teamCode;
+    const existing = state.messages.find((m) => m.id === msgId);
+    if (!code || !existing) return;
+    await setDoc(doc(db, "teams", code, "messages", msgId), {
+      ...existing,
       text: "",
-      imageUrl: "",
-      isUnsent: true
+      mediaUrl: "",
+      isDeleted: true,
+      deletedAt: Date.now()
     });
   },
 
@@ -1871,7 +2220,7 @@ window.appActions = {
     try {
       showToast("Uploading profile picture...", "info");
       const url = await uploadImageToCloudinary(file);
-      await updateDoc(doc(db, "users", state.currentUser.uid), { profilePictureUrl: url });
+      await saveCleanUserProfile(state.currentUser.uid, { photoUri: url });
       showToast("Profile photo updated.", "success");
     } catch (err) {
       showToast(err.message || "Avatar upload failed.", "error");
@@ -1880,33 +2229,35 @@ window.appActions = {
 
   async saveProfileChanges(e) {
     e.preventDefault();
-    const name = document.getElementById("profile-name-input")?.value.trim() || "";
+    const fullName = document.getElementById("profile-name-input")?.value.trim() || "";
+    const phone = document.getElementById("profile-phone-input")?.value.trim() || "";
     const roleSelect = document.getElementById("profile-role-select");
-    if (name.length < 2) return showToast("Enter a valid name.", "error");
+    if (fullName.length < 2) return showToast("Enter a valid name.", "error");
 
-    const updates = { name };
+    const updates = {
+      fullName,
+      username: fullName.split(/\s+/)[0] || "Member",
+      phone
+    };
     if (roleSelect && !roleSelect.disabled) {
       updates.ministryRole = roleSelect.value;
     }
-    await updateDoc(doc(db, "users", state.currentUser.uid), updates);
+    await saveCleanUserProfile(state.currentUser.uid, updates);
     showToast("Profile updated.", "success");
   },
 
   async leaveCurrentTeam() {
-    if (!state.currentTeam) return;
-    const isPrimary = state.currentTeam.leaderId === state.currentUser.uid;
+    const code = state.currentTeam?.teamCode || state.currentUser?.teamCode;
+    if (!code) return;
+    const isPrimary = state.currentTeam?.leaderUid === state.currentUser.uid || isWorshipLeader(state.currentUser.ministryRole, state.currentUser.role);
     if (isPrimary && state.teamMembers.length > 1) {
       return showToast("Transfer Worship Leadership to another member before leaving the team.", "warning");
     }
-    if (!confirm(`Leave ${state.currentTeam.name}?`)) return;
+    if (!confirm(`Leave ${state.currentTeam?.teamName || code}?`)) return;
 
-    const teamId = state.currentTeam.id;
-    const uid = state.currentUser.uid;
-    await updateDoc(doc(db, "teams", teamId), {
-      members: arrayRemove(uid)
-    });
-    await updateDoc(doc(db, "users", uid), {
-      teamId: "",
+    await saveCleanUserProfile(state.currentUser.uid, {
+      teamCode: "",
+      teamName: "",
       role: "Member",
       ministryRole: "Member"
     });

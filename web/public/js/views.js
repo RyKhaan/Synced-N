@@ -5,13 +5,13 @@ import {
   hasLeaderPrivileges,
   formatFriendlyDate,
   formatFriendlyTime,
-  formatRelativeTime,
-  getYoutubeThumbnailUrl
+  formatRelativeTime
 } from "./utils.js";
 import { DEFAULT_MINISTRY_ROLES } from "./config.js";
 
 export function getAvatarHtml(user, sizeClass = "w-9 h-9", textSize = "text-xs") {
-  const name = (user && user.name) ? user.name : "Member";
+  const name = user?.fullName || user?.name || user?.username || "Member";
+  const photo = user?.photoUri || user?.profilePictureUrl || "";
   const initials = name
     .split(/\s+/)
     .filter(Boolean)
@@ -19,8 +19,8 @@ export function getAvatarHtml(user, sizeClass = "w-9 h-9", textSize = "text-xs")
     .map((p) => p[0].toUpperCase())
     .join("") || "M";
 
-  if (user && user.profilePictureUrl && user.profilePictureUrl.trim()) {
-    return `<img src="${escapeHtml(user.profilePictureUrl)}" alt="${escapeHtml(name)}" class="${sizeClass} rounded-full object-cover border border-slate-200 shrink-0 bg-slate-100" />`;
+  if (photo && photo.trim()) {
+    return `<img src="${escapeHtml(photo)}" alt="${escapeHtml(name)}" class="${sizeClass} rounded-full object-cover border border-slate-200 shrink-0 bg-slate-100" />`;
   }
   return `
     <div class="${sizeClass} rounded-full bg-slate-100 border border-slate-200 flex items-center justify-center font-semibold ${textSize} text-slate-700 shrink-0">
@@ -47,10 +47,12 @@ export function renderHomeView(state) {
   const { currentUser, currentTeam, teamMembers, services, announcements, songs, substitutions, rejoinRequests } = state;
   const isLeader = hasLeaderPrivileges(currentUser);
   const myAssignedServices = services.filter((s) =>
-    (s.assignedMembers || []).some((m) => m.userId === currentUser.uid)
+    (s.assignments || []).some((m) => m.uid === currentUser.uid)
   );
-  const pendingSubs = substitutions.filter((s) => s.status === "Pending");
+  const pendingSubs = substitutions.filter((s) => s.status === "Pending" || s.status === "Substitute Accepted");
   const pendingRejoins = rejoinRequests.filter((r) => r.status === "Pending");
+  const teamDisplayName = currentTeam?.teamName || currentUser?.teamName || "Worship Ministry Team";
+  const teamCode = currentTeam?.teamCode || currentUser?.teamCode || "------";
 
   return `
     <div class="space-y-6 animate-fade-in">
@@ -64,7 +66,7 @@ export function renderHomeView(state) {
           </div>
           <div class="flex items-center gap-2.5">
             <h1 class="text-xl sm:text-2xl font-semibold text-slate-900 tracking-tight">
-              ${escapeHtml(currentTeam?.name || "Worship Ministry Team")}
+              ${escapeHtml(teamDisplayName)}
             </h1>
             ${isLeader ? `
               <button onclick="window.appActions.openEditTeamNameModal()" class="btn btn-ghost btn-sm text-slate-500" title="Rename Team">
@@ -73,8 +75,8 @@ export function renderHomeView(state) {
             ` : ""}
           </div>
           <p class="text-xs text-slate-500">
-            Signed in as <span class="font-medium text-slate-700">${escapeHtml(currentUser.name || "Member")}</span>
-            &middot; Schedule, lineup assignments, and chord sheets are synced in real time.
+            Signed in as <span class="font-medium text-slate-700">${escapeHtml(currentUser.fullName || currentUser.name || "Member")}</span>
+            &middot; Schedule, lineup assignments, and chord sheets are synced in real time with the mobile app.
           </p>
         </div>
 
@@ -83,7 +85,7 @@ export function renderHomeView(state) {
           <div class="flex items-center gap-2.5 bg-slate-50 border border-slate-200 rounded-md px-3 py-1.5">
             <div>
               <div class="text-[10px] uppercase tracking-wider text-slate-400 font-semibold leading-none">Invite Code</div>
-              <div class="font-mono text-sm font-semibold text-slate-800 tracking-widest mt-0.5">${escapeHtml(currentTeam?.teamCode || "------")}</div>
+              <div class="font-mono text-sm font-semibold text-slate-800 tracking-widest mt-0.5">${escapeHtml(teamCode)}</div>
             </div>
             <button onclick="window.appActions.copyTeamCode()" class="btn btn-secondary btn-sm" title="Copy Team Code">
               <i class="fa-regular fa-copy text-xs"></i> Copy
@@ -196,15 +198,15 @@ export function renderHomeView(state) {
                   <div class="p-3.5 flex flex-col gap-2">
                     <div class="flex items-start justify-between gap-2">
                       <div>
-                        <span class="text-xs font-semibold text-slate-900">${escapeHtml(sub.requestingUserName || "Member")}</span>
-                        <span class="text-xs text-slate-500"> requested a substitute for </span>
-                        <span class="text-xs font-medium text-slate-800">${escapeHtml(sub.serviceName || "Service")}</span>
+                        <span class="text-xs font-semibold text-slate-900">${escapeHtml(sub.requesterName || "Member")}</span>
+                        <span class="text-xs text-slate-500"> requested a substitute (${escapeHtml(sub.role || "Member")}) for </span>
+                        <span class="text-xs font-medium text-slate-800">${escapeHtml(sub.serviceTitle || "Service")}</span>
                       </div>
                       <span class="badge badge-amber">Sub Request</span>
                     </div>
                     <p class="text-xs text-slate-600 bg-slate-50 px-2.5 py-1.5 rounded border border-slate-200">
                       "${escapeHtml(sub.reason || "Schedule conflict")}"
-                      ${sub.suggestedSubstituteUserName ? ` &middot; Suggested: <strong class="text-slate-800">${escapeHtml(sub.suggestedSubstituteUserName)}</strong>` : ""}
+                      ${sub.substituteName ? ` &middot; Proposed Sub: <strong class="text-slate-800">${escapeHtml(sub.substituteName)}</strong>` : ""}
                     </p>
                     <div class="flex items-center gap-2 pt-0.5">
                       <button onclick="window.appActions.respondSubstitution('${escapeHtml(sub.id)}', 'Approved')" class="btn btn-primary btn-sm">
@@ -256,9 +258,12 @@ export function renderHomeView(state) {
                 ${announcements.map((ann) => `
                   <div class="p-4 space-y-1.5">
                     <div class="flex items-start justify-between gap-2">
-                      <h3 class="text-sm font-semibold text-slate-900">${escapeHtml(ann.title || "Announcement")}</h3>
+                      <div class="flex items-center gap-2">
+                        ${ann.urgent ? `<span class="badge badge-rose">Urgent</span>` : ""}
+                        <h3 class="text-sm font-semibold text-slate-900">${escapeHtml(ann.title || "Announcement")}</h3>
+                      </div>
                       <div class="flex items-center gap-2 shrink-0">
-                        <span class="text-[11px] text-slate-400">${formatRelativeTime(ann.timestamp)}</span>
+                        <span class="text-[11px] text-slate-400">${formatRelativeTime(ann.createdAt)}</span>
                         ${isLeader ? `
                           <button onclick="window.appActions.deleteAnnouncement('${escapeHtml(ann.id)}')" class="text-slate-400 hover:text-rose-600 text-xs p-1" title="Delete Announcement">
                             <i class="fa-regular fa-trash-can"></i>
@@ -266,9 +271,9 @@ export function renderHomeView(state) {
                         ` : ""}
                       </div>
                     </div>
-                    <p class="text-xs text-slate-600 leading-relaxed whitespace-pre-line">${escapeHtml(ann.content || "")}</p>
+                    <p class="text-xs text-slate-600 leading-relaxed whitespace-pre-line">${escapeHtml(ann.message || "")}</p>
                     <div class="pt-1 text-[11px] text-slate-400">
-                      Posted by <span class="font-medium text-slate-600">${escapeHtml(ann.authorName || "Leader")}</span>
+                      Posted by <span class="font-medium text-slate-600">${escapeHtml(ann.author || "Leader")}</span>
                     </div>
                   </div>
                 `).join("")}
@@ -283,19 +288,20 @@ export function renderHomeView(state) {
 
 export function renderServiceCardHtml(srv, state, isLeader) {
   const { currentUser } = state;
-  const assigned = srv.assignedMembers || [];
-  const setlist = srv.setlist || [];
-  const mySlot = assigned.find((m) => m.userId === currentUser.uid);
+  const assigned = srv.assignments || [];
+  const setlist = srv.songs || [];
+  const rehearsal = srv.rehearsal || {};
+  const mySlot = assigned.find((m) => m.uid === currentUser.uid);
   const status = srv.status || "Published";
 
   // Check if any assigned member has an unavailability conflict on srv.date
   const conflicts = [];
   if (srv.date) {
     for (const slot of assigned) {
-      const memberObj = (state.teamMembers || []).find((u) => u.uid === slot.userId);
-      if (memberObj && Array.isArray(memberObj.unavailableDates)) {
-        const hasConflict = memberObj.unavailableDates.some((r) => srv.date >= r.startDate && srv.date <= r.endDate);
-        if (hasConflict) conflicts.push(slot.userName || memberObj.name);
+      const memberObj = (state.teamMembers || []).find((u) => u.uid === slot.uid);
+      const ranges = memberObj?.unavailableRanges || [];
+      if (ranges.some((r) => srv.date >= r.startDate && srv.date <= r.endDate)) {
+        conflicts.push(slot.name || memberObj?.fullName || "Member");
       }
     }
   }
@@ -305,8 +311,8 @@ export function renderServiceCardHtml(srv, state, isLeader) {
       <!-- Top Service Header -->
       <div class="p-4 sm:p-5 border-b border-slate-100 flex flex-col sm:flex-row sm:items-start justify-between gap-3">
         <div class="flex items-start gap-3.5">
-          ${srv.imageUrl ? `
-            <img src="${escapeHtml(srv.imageUrl)}" alt="${escapeHtml(srv.name)}" class="w-12 h-12 rounded-md object-cover border border-slate-200 shrink-0" />
+          ${srv.coverImageUrl ? `
+            <img src="${escapeHtml(srv.coverImageUrl)}" alt="${escapeHtml(srv.title)}" class="w-12 h-12 rounded-md object-cover border border-slate-200 shrink-0" />
           ` : `
             <div class="w-12 h-12 rounded-md bg-slate-50 border border-slate-200 flex flex-col items-center justify-center shrink-0 text-slate-700">
               <i class="fa-regular fa-calendar-days text-sm text-indigo-600"></i>
@@ -326,13 +332,14 @@ export function renderServiceCardHtml(srv, state, isLeader) {
                 </span>
               ` : ""}
             </div>
-            <h3 class="text-base font-semibold text-slate-900">${escapeHtml(srv.name || "Worship Service")}</h3>
+            <h3 class="text-base font-semibold text-slate-900">${escapeHtml(srv.title || "Worship Service")}</h3>
             <div class="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-slate-500">
               <span><i class="fa-regular fa-calendar mr-1 text-slate-400"></i>${formatFriendlyDate(srv.date)}</span>
-              ${srv.time ? `<span><i class="fa-regular fa-clock mr-1 text-slate-400"></i>${formatFriendlyTime(srv.time)}</span>` : ""}
-              ${srv.rehearsalDate ? `
+              ${srv.start ? `<span><i class="fa-regular fa-clock mr-1 text-slate-400"></i>${formatFriendlyTime(srv.start)}${srv.end ? ` - ${formatFriendlyTime(srv.end)}` : ""}</span>` : ""}
+              ${srv.venue ? `<span><i class="fa-solid fa-location-dot mr-1 text-slate-400"></i>${escapeHtml(srv.venue)}</span>` : ""}
+              ${rehearsal.date ? `
                 <span class="text-amber-700 font-medium">
-                  <i class="fa-solid fa-drum mr-1"></i>Rehearsal: ${formatFriendlyDate(srv.rehearsalDate)} ${formatFriendlyTime(srv.rehearsalTime)}
+                  <i class="fa-solid fa-drum mr-1"></i>Rehearsal: ${formatFriendlyDate(rehearsal.date)} ${formatFriendlyTime(rehearsal.start || "")}
                 </span>
               ` : ""}
             </div>
@@ -356,9 +363,9 @@ export function renderServiceCardHtml(srv, state, isLeader) {
         </div>
       </div>
 
-      ${srv.notes ? `
+      ${rehearsal.notes ? `
         <div class="px-4 sm:px-5 py-2.5 bg-slate-50 border-b border-slate-100 text-xs text-slate-600">
-          <span class="font-semibold text-slate-700 mr-1">Notes:</span> ${escapeHtml(srv.notes)}
+          <span class="font-semibold text-slate-700 mr-1">Notes:</span> ${escapeHtml(rehearsal.notes)}
         </div>
       ` : ""}
 
@@ -376,17 +383,17 @@ export function renderServiceCardHtml(srv, state, isLeader) {
           ` : `
             <div class="divide-y divide-slate-200/70">
               ${assigned.map((slot) => {
-                const isMe = slot.userId === currentUser.uid;
-                const memberObj = (state.teamMembers || []).find((u) => u.uid === slot.userId);
-                const isConflict = srv.date && memberObj && Array.isArray(memberObj.unavailableDates) &&
-                  memberObj.unavailableDates.some((r) => srv.date >= r.startDate && srv.date <= r.endDate);
+                const isMe = slot.uid === currentUser.uid;
+                const memberObj = (state.teamMembers || []).find((u) => u.uid === slot.uid);
+                const isConflict = srv.date && memberObj && Array.isArray(memberObj.unavailableRanges) &&
+                  memberObj.unavailableRanges.some((r) => srv.date >= r.startDate && srv.date <= r.endDate);
                 return `
                   <div class="py-1.5 flex items-center justify-between gap-2 text-xs">
                     <span class="text-slate-500 font-medium">${escapeHtml(slot.role || "Member")}</span>
                     <div class="flex items-center gap-1.5">
                       ${isConflict ? `<i class="fa-solid fa-triangle-exclamation text-rose-600 text-[11px]" title="Marked unavailable on this date"></i>` : ""}
                       <span class="font-semibold ${isMe ? "text-indigo-700" : "text-slate-800"}">
-                        ${escapeHtml(slot.userName || "Unassigned")}${isMe ? " (You)" : ""}
+                        ${escapeHtml(slot.name || "Unassigned")}${isMe ? " (You)" : ""}
                       </span>
                     </div>
                   </div>
@@ -407,10 +414,12 @@ export function renderServiceCardHtml(srv, state, isLeader) {
             <p class="text-xs text-slate-400 italic py-2">No songs added to setlist yet.</p>
           ` : `
             <div class="divide-y divide-slate-200/70">
-              ${setlist.map((songTitle, idx) => {
+              ${setlist.map((songItem, idx) => {
+                const songTitle = typeof songItem === "string" ? songItem : (songItem.title || "Untitled");
                 const matchedSong = (state.songs || []).find(
                   (s) => (s.title || "").trim().toLowerCase() === String(songTitle).trim().toLowerCase()
                 );
+                const displayKey = matchedSong?.key || songItem?.key || "";
                 return `
                   <button onclick="window.appActions.openSongByTitle('${escapeHtml(songTitle)}')"
                     class="w-full text-left py-1.5 flex items-center justify-between gap-2 text-xs hover:bg-slate-100/80 px-1.5 -mx-1.5 rounded transition group">
@@ -418,7 +427,7 @@ export function renderServiceCardHtml(srv, state, isLeader) {
                       <span class="text-slate-400 font-mono mr-1.5">${idx + 1}.</span>${escapeHtml(songTitle)}
                     </span>
                     <div class="flex items-center gap-1.5 shrink-0">
-                      ${matchedSong?.key ? `<span class="badge badge-indigo font-mono text-[10px]">${escapeHtml(matchedSong.key)}</span>` : ""}
+                      ${displayKey ? `<span class="badge badge-indigo font-mono text-[10px]">${escapeHtml(displayKey)}</span>` : ""}
                       <i class="fa-solid fa-arrow-up-right-from-square text-[10px] text-slate-400 group-hover:text-indigo-600"></i>
                     </div>
                   </button>
@@ -435,7 +444,7 @@ export function renderServiceCardHtml(srv, state, isLeader) {
 export function renderScheduleView(state) {
   const { currentUser, services, substitutions, teamMembers } = state;
   const isLeader = hasLeaderPrivileges(currentUser);
-  const myUnavailability = currentUser?.unavailableDates || [];
+  const myUnavailability = currentUser?.unavailableRanges || [];
 
   return `
     <div class="space-y-6 animate-fade-in">
@@ -492,25 +501,25 @@ export function renderScheduleView(state) {
                 <div class="divide-y divide-slate-100 -my-2">
                   ${substitutions.slice(0, 8).map((sub) => {
                     const badgeClass =
-                      sub.status === "Approved"
+                      sub.status === "Approved" || sub.status === "Accepted"
                         ? "badge-emerald"
-                        : sub.status === "Declined"
+                        : sub.status === "Declined" || sub.status === "Cancelled"
                         ? "badge-rose"
                         : "badge-amber";
                     return `
                       <div class="py-3 space-y-1.5">
                         <div class="flex items-center justify-between gap-2">
-                          <span class="text-xs font-semibold text-slate-900">${escapeHtml(sub.requestingUserName || "Member")}</span>
+                          <span class="text-xs font-semibold text-slate-900">${escapeHtml(sub.requesterName || "Member")}</span>
                           <span class="badge ${badgeClass}">${escapeHtml(sub.status || "Pending")}</span>
                         </div>
                         <div class="text-xs text-slate-600">
-                          Service: <strong class="text-slate-800">${escapeHtml(sub.serviceName || "Service")}</strong>
+                          Service: <strong class="text-slate-800">${escapeHtml(sub.serviceTitle || "Service")}</strong>
                         </div>
                         <div class="text-xs text-slate-500 italic">"${escapeHtml(sub.reason || "")}"</div>
-                        ${sub.suggestedSubstituteUserName ? `
-                          <div class="text-[11px] text-indigo-700 font-medium">Suggested Sub: ${escapeHtml(sub.suggestedSubstituteUserName)}</div>
+                        ${sub.substituteName ? `
+                          <div class="text-[11px] text-indigo-700 font-medium">Proposed Sub: ${escapeHtml(sub.substituteName)}</div>
                         ` : ""}
-                        ${isLeader && sub.status === "Pending" ? `
+                        ${isLeader && (sub.status === "Pending" || sub.status === "Substitute Accepted") ? `
                           <div class="flex items-center gap-2 pt-1">
                             <button onclick="window.appActions.respondSubstitution('${escapeHtml(sub.id)}', 'Approved')" class="btn btn-primary btn-sm">Approve</button>
                             <button onclick="window.appActions.respondSubstitution('${escapeHtml(sub.id)}', 'Declined')" class="btn btn-danger btn-sm">Decline</button>
@@ -533,7 +542,7 @@ export function renderScheduleView(state) {
               </button>
             </div>
             <div class="p-4">
-              ${teamMembers.filter((m) => (m.unavailableDates || []).length > 0).length === 0 ? `
+              ${teamMembers.filter((m) => (m.unavailableRanges || []).length > 0).length === 0 ? `
                 <div class="flex items-center gap-2 text-xs text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-md px-3 py-2">
                   <i class="fa-solid fa-circle-check"></i>
                   <span>All members are currently marked available.</span>
@@ -541,15 +550,15 @@ export function renderScheduleView(state) {
               ` : `
                 <div class="divide-y divide-slate-100 -my-2">
                   ${teamMembers
-                    .filter((m) => (m.unavailableDates || []).length > 0)
+                    .filter((m) => (m.unavailableRanges || []).length > 0)
                     .map((m) => `
                       <div class="py-2.5 space-y-1.5">
                         <div class="flex items-center justify-between">
-                          <span class="text-xs font-semibold text-slate-800">${escapeHtml(m.name)}</span>
+                          <span class="text-xs font-semibold text-slate-800">${escapeHtml(m.fullName || m.name || "Member")}</span>
                           <span class="text-[11px] text-slate-400">${escapeHtml(m.ministryRole || "Member")}</span>
                         </div>
                         <div class="flex flex-wrap gap-1">
-                          ${(m.unavailableDates || []).map((r) => `
+                          ${(m.unavailableRanges || []).map((r) => `
                             <span class="badge badge-rose text-[10px]">
                               ${escapeHtml(r.startDate)}${r.endDate && r.endDate !== r.startDate ? ` to ${escapeHtml(r.endDate)}` : ""}
                               ${r.reason ? ` (${escapeHtml(r.reason)})` : ""}
@@ -580,7 +589,7 @@ export function renderSongsView(state) {
       (s.artist || "").toLowerCase().includes(query) ||
       (s.key || "").toLowerCase().includes(query) ||
       (s.lyrics || "").toLowerCase().includes(query) ||
-      (s.chordSheet || "").toLowerCase().includes(query)
+      (s.sheet || "").toLowerCase().includes(query)
     );
   });
 
@@ -651,8 +660,8 @@ export function renderSongsView(state) {
               </thead>
               <tbody>
                 ${filteredSongs.map((song) => {
-                  const hasChords = Boolean((song.chordSheet && song.chordSheet.trim()) || (song.lyrics && song.lyrics.trim()));
-                  const hasYt = Boolean(song.youtubeUrl && song.youtubeUrl.trim());
+                  const hasChords = Boolean((song.sheet && song.sheet.trim()) || (song.lyrics && song.lyrics.trim()));
+                  const hasYt = Boolean(song.referenceUrl && song.referenceUrl.trim());
                   return `
                     <tr class="cursor-pointer" onclick="window.appActions.openSongStageModal('${escapeHtml(song.id)}')">
                       <td>
@@ -663,7 +672,7 @@ export function renderSongsView(state) {
                         <span class="badge badge-indigo font-mono">${escapeHtml(song.key || "C")}</span>
                       </td>
                       <td>
-                        ${song.tempo ? `<span class="text-xs font-mono text-slate-700">${escapeHtml(song.tempo)} BPM</span>` : `<span class="text-xs text-slate-400">&mdash;</span>`}
+                        ${song.bpm ? `<span class="text-xs font-mono text-slate-700">${escapeHtml(song.bpm)} BPM</span>` : `<span class="text-xs text-slate-400">&mdash;</span>`}
                       </td>
                       <td>
                         ${hasChords
@@ -704,9 +713,10 @@ export function renderSongsView(state) {
 
 export function renderRosterView(state) {
   const { currentUser, currentTeam, teamMembers, rejoinRequests } = state;
-  const isPrimaryLeader = isWorshipLeader(currentUser.ministryRole, currentUser.role) || currentTeam?.leaderId === currentUser.uid;
+  const isPrimaryLeader = isWorshipLeader(currentUser.ministryRole, currentUser.role) || currentTeam?.leaderUid === currentUser.uid;
   const isLeader = hasLeaderPrivileges(currentUser);
   const pendingRejoins = rejoinRequests.filter((r) => r.status === "Pending");
+  const teamCode = currentTeam?.teamCode || currentUser?.teamCode || "------";
 
   return `
     <div class="space-y-6 animate-fade-in">
@@ -719,7 +729,7 @@ export function renderRosterView(state) {
         <div class="flex flex-wrap items-center gap-2">
           <button onclick="window.appActions.copyTeamCode()" class="btn btn-secondary">
             <i class="fa-solid fa-key text-slate-500 text-xs"></i>
-            Invite Code: <span class="font-mono font-semibold text-slate-900">${escapeHtml(currentTeam?.teamCode || "------")}</span>
+            Invite Code: <span class="font-mono font-semibold text-slate-900">${escapeHtml(teamCode)}</span>
           </button>
           ${isPrimaryLeader ? `
             <button onclick="window.appActions.openTransferLeadershipModal()" class="btn btn-secondary">
@@ -767,8 +777,9 @@ export function renderRosterView(state) {
             <tbody>
               ${teamMembers.map((member) => {
                 const isMe = member.uid === currentUser.uid;
-                const memberIsPrimaryLeader = isWorshipLeader(member.ministryRole, member.role) || currentTeam?.leaderId === member.uid;
-                const unavailCount = (member.unavailableDates || []).length;
+                const memberIsPrimaryLeader = isWorshipLeader(member.ministryRole, member.role) || currentTeam?.leaderUid === member.uid;
+                const unavailCount = (member.unavailableRanges || []).length;
+                const displayName = member.fullName || member.name || member.username || "Member";
 
                 return `
                   <tr>
@@ -777,7 +788,7 @@ export function renderRosterView(state) {
                         ${getAvatarHtml(member, "w-9 h-9", "text-xs")}
                         <div class="min-w-0">
                           <div class="font-semibold text-slate-900 truncate">
-                            ${escapeHtml(member.name || "Member")}
+                            ${escapeHtml(displayName)}
                             ${isMe ? `<span class="text-xs font-normal text-slate-400 ml-1">(You)</span>` : ""}
                           </div>
                           <div class="text-xs text-slate-500 truncate">${escapeHtml(member.email || "")}</div>
@@ -806,7 +817,7 @@ export function renderRosterView(state) {
                               `).join("")}
                             </select>
                             ${!isMe ? `
-                              <button onclick="window.appActions.removeMemberFromTeam('${escapeHtml(member.uid)}', '${escapeHtml(member.name)}')"
+                              <button onclick="window.appActions.removeMemberFromTeam('${escapeHtml(member.uid)}', '${escapeHtml(displayName)}')"
                                 class="btn btn-danger btn-sm" title="Remove from Team">
                                 <i class="fa-solid fa-user-minus text-[11px]"></i>
                               </button>
@@ -860,12 +871,12 @@ export function renderChatView(state) {
             <p class="text-xs text-slate-400 mt-0.5">Start a conversation with your worship team.</p>
           </div>
         ` : messages.map((msg) => {
-          const isMe = msg.senderId === currentUser.uid;
-          const isUnsent = Boolean(msg.isUnsent);
+          const isMe = msg.senderUid === currentUser.uid;
+          const isDeleted = Boolean(msg.isDeleted);
 
           return `
             <div class="flex items-start gap-2.5 ${isMe ? "flex-row-reverse" : ""}">
-              ${getAvatarHtml({ name: msg.senderName, profilePictureUrl: msg.senderAvatarUrl }, "w-7 h-7", "text-[10px]")}
+              ${getAvatarHtml({ fullName: msg.senderName, photoUri: msg.senderPhotoUri }, "w-7 h-7", "text-[10px]")}
               <div class="max-w-[78%] sm:max-w-[65%] flex flex-col ${isMe ? "items-end" : "items-start"}">
                 <div class="flex items-center gap-1.5 mb-1 px-0.5">
                   <span class="text-[11px] font-semibold text-slate-700">${escapeHtml(isMe ? "You" : (msg.senderName || "Member"))}</span>
@@ -874,29 +885,29 @@ export function renderChatView(state) {
                 </div>
 
                 <div class="group relative rounded-lg px-3.5 py-2.5 text-xs leading-relaxed ${
-                  isUnsent
+                  isDeleted
                     ? "bg-slate-100 border border-slate-200 text-slate-400 italic"
                     : isMe
                     ? "bg-slate-900 text-white"
                     : "bg-white border border-slate-200 text-slate-800 shadow-2xs"
                 }">
-                  ${!isUnsent && msg.replyToMessageId ? `
+                  ${!isDeleted && msg.replyToId ? `
                     <div class="mb-2 pl-2.5 py-1 border-l-2 ${isMe ? "border-indigo-400 bg-white/10 text-slate-200" : "border-indigo-600 bg-slate-50 text-slate-600"} rounded-r text-[11px]">
-                      <div class="font-semibold">${escapeHtml(msg.replyToSenderName || "Member")}</div>
+                      <div class="font-semibold">${escapeHtml(msg.replyToSender || "Member")}</div>
                       <div class="truncate opacity-90">${escapeHtml(msg.replyToText || "Photo")}</div>
                     </div>
                   ` : ""}
 
-                  ${!isUnsent && msg.imageUrl ? `
-                    <a href="${escapeHtml(msg.imageUrl)}" target="_blank" rel="noopener" class="block mb-2">
-                      <img src="${escapeHtml(msg.imageUrl)}" alt="Attachment" class="max-h-60 rounded border border-slate-200 object-cover" />
+                  ${!isDeleted && msg.mediaUrl ? `
+                    <a href="${escapeHtml(msg.mediaUrl)}" target="_blank" rel="noopener" class="block mb-2">
+                      <img src="${escapeHtml(msg.mediaUrl)}" alt="Attachment" class="max-h-60 rounded border border-slate-200 object-cover" />
                     </a>
                   ` : ""}
 
-                  <div class="whitespace-pre-wrap break-words">${isUnsent ? "This message was unsent." : escapeHtml(msg.text || "")}</div>
-                  ${!isUnsent && msg.editedAt ? `<div class="text-[10px] opacity-65 mt-1">(edited)</div>` : ""}
+                  <div class="whitespace-pre-wrap break-words">${isDeleted ? "This message was unsent." : escapeHtml(msg.text || "")}</div>
+                  ${!isDeleted && msg.isEdited ? `<div class="text-[10px] opacity-65 mt-1">(edited)</div>` : ""}
 
-                  ${!isUnsent ? `
+                  ${!isDeleted ? `
                     <div class="hidden group-hover:flex items-center gap-1 absolute -top-3 ${isMe ? "left-2" : "right-2"} bg-white border border-slate-200 rounded shadow-xs px-1.5 py-0.5 text-slate-600">
                       <button onclick="window.appActions.setChatReply('${escapeHtml(msg.id)}')" class="hover:text-indigo-600 p-1 text-[10px]" title="Reply">
                         <i class="fa-solid fa-reply"></i>
@@ -967,7 +978,9 @@ export function renderChatView(state) {
 
 export function renderProfileView(state) {
   const { currentUser, currentTeam } = state;
-  const isPrimaryLeader = isWorshipLeader(currentUser.ministryRole, currentUser.role) || currentTeam?.leaderId === currentUser.uid;
+  const isPrimaryLeader = isWorshipLeader(currentUser.ministryRole, currentUser.role) || currentTeam?.leaderUid === currentUser.uid;
+  const displayName = currentUser.fullName || currentUser.name || "Member";
+  const teamDisplayName = currentTeam?.teamName || currentUser?.teamName || "None";
 
   return `
     <div class="max-w-2xl mx-auto space-y-6 animate-fade-in">
@@ -988,23 +1001,36 @@ export function renderProfileView(state) {
             </label>
           </div>
           <div class="space-y-1">
-            <h2 class="text-base font-semibold text-slate-900">${escapeHtml(currentUser.name || "Member")}</h2>
+            <h2 class="text-base font-semibold text-slate-900">${escapeHtml(displayName)}</h2>
             <p class="text-xs text-slate-500">${escapeHtml(currentUser.email || "")}</p>
             <div class="pt-1">${getRoleBadgeHtml(currentUser)}</div>
           </div>
         </div>
 
         <form onsubmit="window.appActions.saveProfileChanges(event)" class="space-y-4">
-          <div>
-            <label class="form-label">Full Name</label>
-            <input
-              id="profile-name-input"
-              type="text"
-              required
-              maxlength="60"
-              value="${escapeHtml(currentUser.name || "")}"
-              class="form-input"
-            />
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label class="form-label">Full Name</label>
+              <input
+                id="profile-name-input"
+                type="text"
+                required
+                maxlength="60"
+                value="${escapeHtml(displayName)}"
+                class="form-input"
+              />
+            </div>
+            <div>
+              <label class="form-label">Phone Number (Optional)</label>
+              <input
+                id="profile-phone-input"
+                type="text"
+                maxlength="25"
+                value="${escapeHtml(currentUser.phone || "")}"
+                placeholder="+63 9XX XXX XXXX"
+                class="form-input"
+              />
+            </div>
           </div>
 
           <div>
@@ -1035,7 +1061,7 @@ export function renderProfileView(state) {
       <div class="surface-card p-6 space-y-4">
         <div>
           <h3 class="text-sm font-semibold text-slate-900">Workspace & Session</h3>
-          <p class="text-xs text-slate-500 mt-0.5">Current team: <strong class="text-slate-800">${escapeHtml(currentTeam?.name || "None")}</strong></p>
+          <p class="text-xs text-slate-500 mt-0.5">Current team: <strong class="text-slate-800">${escapeHtml(teamDisplayName)}</strong></p>
         </div>
         <div class="flex flex-wrap items-center gap-3 pt-1">
           <button onclick="window.appActions.leaveCurrentTeam()" class="btn btn-danger">
