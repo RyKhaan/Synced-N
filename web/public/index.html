@@ -61,9 +61,27 @@
     };
   </script>
 
-  <link rel="stylesheet" href="/css/styles.css" />
+  <link rel="stylesheet" href="/css/styles.css?v=20261106_v6" />
 </head>
 <body class="antialiased selection:bg-[#F5D0FE] selection:text-[#500568]">
+  <!-- Error & Diagnostic Boundary for Mobile Browsers -->
+  <script>
+    window.addEventListener("error", function (e) {
+      console.warn("Global mobile script error caught:", e.message);
+      var app = document.getElementById("app");
+      if (app && app.innerHTML.indexOf("Loading Synced N workspace...") !== -1) {
+        var box = document.getElementById("mobile-load-err");
+        if (!box) {
+          box = document.createElement("div");
+          box.id = "mobile-load-err";
+          box.className = "mt-4 p-3 max-w-xs mx-auto rounded-xl bg-purple-50/90 border border-purple-200 text-[#10113F] text-xs text-center";
+          box.innerHTML = '<p class="font-bold mb-1">Loading took longer than expected</p><button onclick="localStorage.clear(); sessionStorage.clear(); location.reload(true);" class="mt-1 px-4 py-2 rounded-xl bg-[#500568] text-white text-xs font-bold shadow-md">Tap to Refresh App</button>';
+          app.querySelector(".app-bg")?.appendChild(box);
+        }
+      }
+    });
+  </script>
+
   <!-- Main Application Mount Point -->
   <div id="app" class="min-h-screen flex flex-col">
     <!-- Initial Loading State -->
@@ -84,7 +102,24 @@
   <!-- Global Modal Container -->
   <div id="modal-root" class="fixed inset-0 z-[95] hidden items-center justify-center p-3 sm:p-4 bg-[#080720]/65 backdrop-blur-[2px] overflow-y-auto"></div>
 
+  <!-- Mobile Failsafe: Ensures loading screen never remains if connection is interrupted -->
+  <script>
+    setTimeout(function() {
+      var app = document.getElementById("app");
+      if (app && app.innerHTML.indexOf("Loading Synced N workspace...") !== -1) {
+        var box = document.getElementById("mobile-load-err");
+        if (!box) {
+          box = document.createElement("div");
+          box.id = "mobile-load-err";
+          box.className = "mt-4 flex flex-col items-center gap-2";
+          box.innerHTML = '<p class="text-xs text-slate-500">Taking longer than usual...</p><button onclick="localStorage.clear(); sessionStorage.clear(); location.reload(true);" class="px-4 py-2 rounded-xl bg-[#500568] text-white text-xs font-bold shadow-md">Refresh Synced N</button>';
+          app.querySelector(".app-bg")?.appendChild(box);
+        }
+      }
+    }, 2800);
+  </script>
+
   <!-- Main Application Entry Module -->
-  <script type="module" src="/js/app.js"></script>
+  <script type="module" src="/js/app.js?v=20261106_v6"></script>
 </body>
 </html>

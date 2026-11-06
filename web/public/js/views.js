@@ -1639,28 +1639,37 @@ export function renderSongsView(state) {
             return `
               <div
                 onclick="window.appActions.openSongStageModal('${escapeHtml(song.id)}')"
-                class="surface-card surface-card-interactive p-3.5 flex items-center justify-between gap-3 cursor-pointer group"
+                class="surface-card surface-card-interactive p-3.5 cursor-pointer group"
               >
-                <div class="flex items-center gap-3 min-w-0 flex-1">
-                  ${getSongCoverHtml(song, "w-24 h-14")}
-                  <div class="min-w-0 flex-1">
-                    <div class="font-bold text-sm text-[#10113F] truncate group-hover:text-[#500568]">${escapeHtml(song.title || "Untitled Song")}</div>
-                    <div class="text-xs text-slate-500 truncate">${escapeHtml(song.artist || "Unknown Artist")}</div>
-                    <div class="flex flex-wrap items-center gap-1.5 mt-1.5">
-                      <span class="badge badge-purple font-mono text-[10px]">Key: ${escapeHtml(song.key || "C")}</span>
-                      ${song.bpm ? `<span class="badge badge-neutral font-mono text-[10px]">${escapeHtml(formatBpmDisplay(song.bpm))} BPM</span>` : ""}
-                      ${hasChords ? `<span class="badge badge-emerald text-[10px]">Chords</span>` : ""}
+                <div class="flex items-center justify-between gap-3">
+                  <div class="flex items-center gap-3 min-w-0 flex-1">
+                    ${getSongCoverHtml(song, "w-20 h-14 shrink-0")}
+                    <div class="min-w-0 flex-1">
+                      <div class="font-bold text-sm text-[#10113F] truncate group-hover:text-[#500568]">${escapeHtml(song.title || "Untitled Song")}</div>
+                      <div class="text-xs text-slate-500 truncate mt-0.5">${escapeHtml(song.artist || "Unknown Artist")}</div>
+                      <div class="flex flex-wrap items-center gap-1.5 mt-1.5">
+                        <span class="badge badge-purple font-mono text-[10px]">Key: ${escapeHtml(song.key || "C")}</span>
+                        ${song.bpm ? `<span class="badge badge-neutral font-mono text-[10px]">${escapeHtml(formatBpmDisplay(song.bpm))} BPM</span>` : ""}
+                        ${hasChords ? `<span class="badge badge-emerald text-[10px]"><i class="fa-solid fa-guitar text-[9px] mr-1"></i>Chords</span>` : ""}
+                      </div>
                     </div>
                   </div>
-                </div>
-                <div class="flex items-center gap-1 shrink-0" onclick="event.stopPropagation()">
-                  ${isLeader ? `
-                    <button onclick="window.appActions.openSongEditorModal('${escapeHtml(song.id)}')" class="btn btn-ghost btn-sm text-slate-500" title="Edit Song">
-                      <i class="fa-solid fa-pen text-xs"></i>
+                  <div class="flex items-center gap-1 shrink-0" onclick="event.stopPropagation()">
+                    ${isLeader ? `
+                      <button onclick="window.appActions.openSongEditorModal('${escapeHtml(song.id)}')" class="btn btn-ghost btn-sm text-slate-500" title="Edit Song">
+                        <i class="fa-solid fa-pen text-xs"></i>
+                      </button>
+                    ` : ""}
+                    <button onclick="window.appActions.openSongStageModal('${escapeHtml(song.id)}')" class="w-8 h-8 rounded-lg bg-[#F5F5F8] text-[#10113F] flex items-center justify-center">
+                      <i class="fa-solid fa-chevron-right text-xs"></i>
                     </button>
-                  ` : ""}
-                  <button onclick="window.appActions.openSongStageModal('${escapeHtml(song.id)}')" class="w-8 h-8 rounded-lg bg-[#F5F5F8] text-[#10113F] flex items-center justify-center">
-                    <i class="fa-solid fa-chevron-right text-xs"></i>
+                  </div>
+                </div>
+
+                <div class="mt-2.5 pt-2 border-t border-slate-100 flex items-center justify-between">
+                  <button type="button" onclick="window.appActions.openSongStageModal('${escapeHtml(song.id)}')" class="btn btn-primary btn-sm text-xs py-1.5 px-3 w-full flex items-center justify-center gap-1.5">
+                    <i class="fa-solid fa-guitar text-[11px]"></i>
+                    <span>Open Chords &amp; Stage View</span>
                   </button>
                 </div>
               </div>
@@ -1881,7 +1890,7 @@ export function renderChatView(state) {
         </button>
       </div>
 
-      <div class="surface-card relative flex flex-col h-[calc(100vh-12.5rem)] md:h-[calc(100vh-7.5rem)] min-h-[460px] overflow-hidden">
+      <div class="surface-card relative flex flex-col h-[calc(100dvh-13rem)] md:h-[calc(100vh-7.5rem)] min-h-[350px] overflow-hidden">
         <!-- Chat Header -->
         <div class="px-5 py-3.5 border-b border-slate-200 flex items-center justify-between bg-white">
           <div class="flex items-center gap-2.5">
@@ -1920,28 +1929,61 @@ export function renderChatView(state) {
           ` : messages.map((msg) => {
             const isMe = msg.senderUid === currentUser.uid;
             const isDeleted = Boolean(msg.isDeleted);
+            const targetMsg = msg.replyToId ? messages.find((m) => m.id === msg.replyToId) : null;
+            const isTargetDeleted = targetMsg ? Boolean(targetMsg.isDeleted) : false;
+            const replySender = isTargetDeleted ? "" : (targetMsg?.senderName || msg.replyToSender || "Member");
+            const replySnippet = isTargetDeleted
+              ? "Original message unavailable"
+              : (targetMsg ? (targetMsg.text || (targetMsg.mediaUrl ? "Photo" : "Message")) : (msg.replyToText || "Original message unavailable"));
 
             return `
-              <div class="flex items-start gap-2.5 ${isMe ? "flex-row-reverse" : ""}">
-                ${getAvatarHtml({ fullName: msg.senderName, photoUri: msg.senderPhotoUri }, "w-7 h-7", "text-[10px]")}
-                <div class="max-w-[82%] sm:max-w-[65%] flex flex-col ${isMe ? "items-end" : "items-start"}">
+              <div
+                id="chat-row-${escapeHtml(msg.id)}"
+                data-msg-id="${escapeHtml(msg.id)}"
+                class="chat-msg-row relative flex items-start gap-2.5 ${isMe ? "flex-row-reverse" : ""} group select-none"
+              >
+                ${getAvatarHtml({ fullName: msg.senderName, photoUri: msg.senderPhotoUri }, "w-7 h-7 shrink-0", "text-[10px]")}
+
+                <div class="max-w-[84%] sm:max-w-[65%] flex flex-col ${isMe ? "items-end" : "items-start"}">
                   <div class="flex items-center gap-1.5 mb-1 px-0.5">
                     <span class="text-[11px] font-bold text-[#10113F]">${escapeHtml(isMe ? "You" : (msg.senderName || "Member"))}</span>
                     ${msg.senderRole ? `<span class="text-[10px] text-[#500568] font-medium">&middot; ${escapeHtml(msg.senderRole)}</span>` : ""}
                     <span class="text-[10px] text-slate-400">${formatRelativeTime(msg.timestamp)}</span>
                   </div>
 
-                  <div class="group relative rounded-2xl px-3.5 py-2.5 text-xs leading-relaxed ${
-                    isDeleted
-                      ? "bg-slate-100 border border-slate-200 text-slate-400 italic"
-                      : isMe
-                      ? "bg-[#500568] text-white shadow-xs"
-                      : "bg-white border border-slate-200 text-[#10113F] shadow-2xs"
-                  }">
+                  <!-- Relative Bubble Anchor: houses the bubble and its swipe-to-reply icon right beside it -->
+                  <div class="relative w-full flex ${isMe ? "justify-end" : "justify-start"} items-center">
+                    <!-- Chat Message Bubble (Supports horizontal swipe gesture & jump highlight) -->
+                    <div class="chat-msg-bubble relative rounded-2xl px-3.5 py-2.5 text-xs leading-relaxed transition-transform duration-75 max-w-full ${
+                      isDeleted
+                        ? "bg-slate-100 border border-slate-200 text-slate-400 italic"
+                        : isMe
+                        ? "bg-[#500568] text-white shadow-xs"
+                        : "bg-white border border-slate-200 text-[#10113F] shadow-2xs"
+                    }">
+                    <!-- Clickable Quoted Reply Preview -->
                     ${!isDeleted && msg.replyToId ? `
-                      <div class="mb-2 pl-2.5 py-1 border-l-2 ${isMe ? "border-[#F5D0FE] bg-white/15 text-white" : "border-[#500568] bg-[#FAF5FF] text-slate-600"} rounded-r text-[11px]">
-                        <div class="font-bold">${escapeHtml(msg.replyToSender || "Member")}</div>
-                        <div class="truncate opacity-90">${escapeHtml(msg.replyToText || "Photo")}</div>
+                      <div
+                        role="button"
+                        tabindex="0"
+                        onclick="window.appActions.jumpToChatMessage('${escapeHtml(msg.replyToId)}')"
+                        class="mb-2 pl-2.5 pr-2 py-1.5 border-l-3 ${
+                          isMe
+                            ? "border-[#F5D0FE] bg-white/15 text-white hover:bg-white/20"
+                            : "border-[#500568] bg-[#FAF5FF] text-slate-700 hover:bg-[#F5E8FF]"
+                        } rounded-r text-[11px] cursor-pointer active:opacity-75 transition select-none flex items-center justify-between gap-2"
+                        title="Click to jump to original message"
+                      >
+                        <div class="min-w-0 flex-1">
+                          <div class="font-bold flex items-center gap-1">
+                            <i class="fa-solid fa-reply text-[9px] opacity-75"></i>
+                            <span>${escapeHtml(replySender)}</span>
+                          </div>
+                          <div class="truncate opacity-90 text-[10.5px] ${isTargetDeleted ? "italic opacity-70" : ""}">
+                            ${escapeHtml(replySnippet)}
+                          </div>
+                        </div>
+                        <i class="fa-solid fa-arrow-turn-up -rotate-90 text-[9px] opacity-60 shrink-0"></i>
                       </div>
                     ` : ""}
 
@@ -1959,9 +2001,10 @@ export function renderChatView(state) {
                     <div class="whitespace-pre-wrap break-words">${isDeleted ? "This message was unsent." : escapeHtml(msg.text || "")}</div>
                     ${!isDeleted && msg.isEdited ? `<div class="text-[10px] opacity-70 mt-1">(edited)</div>` : ""}
 
+                    <!-- Desktop Quick Actions Hover Bar -->
                     ${!isDeleted ? `
-                      <div class="hidden group-hover:flex items-center gap-1 absolute -top-3 ${isMe ? "left-2" : "right-2"} bg-white border border-slate-200 rounded-lg shadow-xs px-1.5 py-0.5 text-slate-600">
-                        <button onclick="window.appActions.setChatReply('${escapeHtml(msg.id)}')" class="hover:text-[#500568] p-1 text-[10px]" title="Reply">
+                      <div class="hidden group-hover:flex items-center gap-1 absolute -top-3 ${isMe ? "left-2" : "right-2"} bg-white border border-slate-200 rounded-lg shadow-xs px-1.5 py-0.5 text-slate-600 z-10">
+                        <button onclick="window.appActions.setChatReply('${escapeHtml(msg.id)}')" class="hover:text-[#500568] p-1 text-[10px]" title="Reply (or swipe left on touch)">
                           <i class="fa-solid fa-reply"></i>
                         </button>
                         ${isMe ? `
@@ -1975,8 +2018,14 @@ export function renderChatView(state) {
                       </div>
                     ` : ""}
                   </div>
+
+                  <!-- Swipe-to-Reply Visual Icon Indicator (Appears right behind the bubble on swipe) -->
+                  <div class="chat-swipe-indicator absolute -right-8 top-1/2 -translate-y-1/2 w-7 h-7 rounded-full bg-slate-200 text-slate-600 flex items-center justify-center shadow-xs pointer-events-none opacity-0">
+                    <i class="fa-solid fa-reply text-[11px]"></i>
+                  </div>
                 </div>
               </div>
+            </div>
             `;
           }).join("")}
           <div id="chat-messages-bottom-anchor" class="h-px w-full"></div>

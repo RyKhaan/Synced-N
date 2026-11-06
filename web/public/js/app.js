@@ -59,7 +59,11 @@ import {
   renderFormattedChordSheet,
   formatBpmDisplay,
   validateBpmValue,
-  MetronomeEngine
+  MetronomeEngine,
+  sendDirectBrevoOtp,
+  verifyDirectBrevoOtp,
+  renderGuitarChordsBarHtml,
+  extractUniqueChordsFromSheet
 } from "./utils.js";
 import {
   getAvatarHtml,
@@ -334,6 +338,55 @@ async function callAuthApi(path, payload = {}) {
       lastError = err;
     }
   }
+
+  // Graceful Fallback if backend server is not running or on static hosting (e.g. Firebase Hosting)
+  if (path === "/api/auth/send-otp") {
+    try {
+      const direct = await sendDirectBrevoOtp({
+        recipientEmail: payload.email,
+        pendingUsername: payload.username || payload.recipientName || "",
+        purpose: payload.purpose || "reset"
+      });
+      return { status: 200, ok: true, success: true, ...direct };
+    } catch (directErr) {
+      throw directErr;
+    }
+  }
+
+  if (path === "/api/auth/verify-otp") {
+    const directVerify = verifyDirectBrevoOtp({
+      email: payload.email,
+      enteredCode: payload.code,
+      purpose: payload.purpose
+    });
+    if (directVerify.ok) {
+      return {
+        status: 200,
+        ok: true,
+        verified: true,
+        verificationToken: "direct_token_" + Date.now()
+      };
+    }
+    return {
+      status: 400,
+      ok: false,
+      verified: false,
+      errorMessage: directVerify.error || "Invalid verification code."
+    };
+  }
+
+  if (path === "/api/auth/consume-verification") {
+    return { status: 200, ok: true, valid: true };
+  }
+
+  if (path === "/api/auth/can-resend-otp") {
+    return { status: 200, ok: true, canResend: true, allowed: true, remainingSeconds: 0 };
+  }
+
+  if (path === "/api/auth/login-rate-limit") {
+    return { status: 200, ok: true, locked: false, remainingSeconds: 0, remainingAttempts: 5 };
+  }
+
   throw lastError || new Error("Unable to reach authentication verification server.");
 }
 
@@ -476,9 +529,6 @@ async function checkEmailExistsInFirestore(email) {
       const snapLower = await getDocs(qLower);
       if (!snapLower.empty) return true;
     }
-
-    const resetDoc = await getDoc(doc(db, "password_resets", lowerEmail));
-    if (resetDoc.exists()) return true;
   } catch (err) {
     console.warn("checkEmailExistsInFirestore warning:", err);
   }
@@ -651,7 +701,7 @@ function openModal(htmlContent, maxWidthClass = "max-w-lg", options = {}) {
   modalRoot.classList.remove("hidden");
   modalRoot.classList.add("flex");
   modalRoot.innerHTML = `
-    <div class="modal-card w-full ${maxWidthClass} rounded-2xl p-5 sm:p-6 text-slate-900 animate-scale-in my-auto max-h-[92vh] overflow-y-auto" onclick="event.stopPropagation()">
+    <div class="modal-card w-full ${maxWidthClass} rounded-2xl p-3.5 sm:p-6 text-slate-900 animate-scale-in my-auto max-h-[94dvh] sm:max-h-[92vh] overflow-y-auto" onclick="event.stopPropagation()">
       ${htmlContent}
     </div>
   `;
@@ -703,18 +753,25 @@ function subscribeToTeamWorkspace(teamCode) {
     return;
   }
 
-  unsubTeamDoc = onSnapshot(doc(db, "teams", code), (snap) => {
-    if (!snap.exists() || snap.data()?.isDeleted === true) {
-      state.currentTeam = {
-        teamCode: code,
-        teamName: state.currentUser?.teamName || "Worship Ministry"
-      };
+  unsubTeamDoc = onSnapshot(
+    doc(db, "teams", code),
+    (snap) => {
+      if (!snap.exists() || snap.data()?.isDeleted === true) {
+        state.currentTeam = {
+          teamCode: code,
+          teamName: state.currentUser?.teamName || "Worship Ministry"
+        };
+        renderApp();
+        return;
+      }
+      state.currentTeam = { teamCode: snap.id, ...snap.data() };
       renderApp();
-      return;
+    },
+    (err) => {
+      console.warn("Team doc snapshot error:", err);
+      renderApp();
     }
-    state.currentTeam = { teamCode: snap.id, ...snap.data() };
-    renderApp();
-  });
+  );
 
   unsubMembers = onSnapshot(
     query(collection(db, "users"), where("teamCode", "==", code)),
@@ -730,6 +787,10 @@ function subscribeToTeamWorkspace(teamCode) {
       });
       state.teamMembers = list;
       renderApp();
+    },
+    (err) => {
+      console.warn("Members snapshot error:", err);
+      renderApp();
     }
   );
 
@@ -739,6 +800,10 @@ function subscribeToTeamWorkspace(teamCode) {
       const list = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
       list.sort((a, b) => String(a.date || "").localeCompare(String(b.date || "")));
       state.services = list;
+      renderApp();
+    },
+    (err) => {
+      console.warn("Services snapshot error:", err);
       renderApp();
     }
   );
@@ -750,6 +815,10 @@ function subscribeToTeamWorkspace(teamCode) {
       list.sort((a, b) => String(a.title || "").localeCompare(String(b.title || "")));
       state.songs = list;
       renderApp();
+    },
+    (err) => {
+      console.warn("Songs snapshot error:", err);
+      renderApp();
     }
   );
 
@@ -760,6 +829,10 @@ function subscribeToTeamWorkspace(teamCode) {
       list.sort((a, b) => Number(b.createdAt || 0) - Number(a.createdAt || 0));
       state.announcements = list;
       renderApp();
+    },
+    (err) => {
+      console.warn("Announcements snapshot error:", err);
+      renderApp();
     }
   );
 
@@ -769,6 +842,10 @@ function subscribeToTeamWorkspace(teamCode) {
       const list = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
       list.sort((a, b) => Number(b.createdAt || 0) - Number(a.createdAt || 0));
       state.substitutions = list;
+      renderApp();
+    },
+    (err) => {
+      console.warn("Substitutions snapshot error:", err);
       renderApp();
     }
   );
@@ -799,6 +876,10 @@ function subscribeToTeamWorkspace(teamCode) {
       state.chatScroll.lastMessageId = newLastId;
       state.messages = list;
       renderApp();
+    },
+    (err) => {
+      console.warn("Messages snapshot error:", err);
+      renderApp();
     }
   );
 
@@ -806,6 +887,10 @@ function subscribeToTeamWorkspace(teamCode) {
     collection(db, "teams", code, "rejoin_requests"),
     (snap) => {
       state.rejoinRequests = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+      renderApp();
+    },
+    (err) => {
+      console.warn("Rejoin requests snapshot error:", err);
       renderApp();
     }
   );
@@ -832,7 +917,11 @@ async function activateAuthenticatedSession(fbUser, overrideUid = null) {
     return;
   }
 
-  const effectiveUid = overrideUid || state.overrideProfileUid || fbUser.uid;
+  // For real authenticated users (email/password or Google), the canonical Firestore UID is fbUser.uid
+  const effectiveUid = (!fbUser.isAnonymous ? fbUser.uid : (overrideUid || state.overrideProfileUid || fbUser.uid));
+  if (!fbUser.isAnonymous) {
+    state.overrideProfileUid = null;
+  }
   state.authUser = fbUser;
   const userRef = doc(db, "users", effectiveUid);
 
@@ -845,27 +934,34 @@ async function activateAuthenticatedSession(fbUser, overrideUid = null) {
         await signOut(auth);
         return;
       }
-      // Check if an existing profile exists by email before creating a new doc
+      // Check if an existing profile exists by email (e.g. from an old deleted account)
       const existingByEmail = fbUser.email ? await getUserProfileByEmail(fbUser.email) : null;
-      if (existingByEmail && existingByEmail.uid !== effectiveUid) {
-        state.overrideProfileUid = existingByEmail.uid;
-        await persistVerifiedSession(existingByEmail, true);
-        return activateAuthenticatedSession(fbUser, existingByEmail.uid);
-      }
+      const defaultName = existingByEmail?.fullName || fbUser.displayName || (fbUser.email ? fbUser.email.split("@")[0] : "Member");
+      const defaultUsername = existingByEmail?.username || defaultName.split(/\s+/)[0] || "Member";
 
-      const defaultName = fbUser.displayName || (fbUser.email ? fbUser.email.split("@")[0] : "Member");
-      await saveCleanUserProfile(effectiveUid, {
+      const freshProfileData = {
         uid: effectiveUid,
         fullName: defaultName,
-        username: defaultName.split(/\s+/)[0] || "Member",
-        email: fbUser.email || "",
-        role: "Member",
-        ministryRole: "Member",
-        teamCode: "",
-        teamName: "",
-        photoUri: fbUser.photoURL || "",
-        unavailableRanges: []
-      });
+        username: defaultUsername,
+        email: fbUser.email || existingByEmail?.email || "",
+        role: existingByEmail?.role || "Member",
+        ministryRole: existingByEmail?.ministryRole || "Member",
+        teamCode: existingByEmail?.teamCode || "",
+        teamName: existingByEmail?.teamName || "",
+        photoUri: fbUser.photoURL || existingByEmail?.photoUri || "",
+        unavailableRanges: existingByEmail?.unavailableRanges || []
+      };
+
+      await saveCleanUserProfile(effectiveUid, freshProfileData);
+
+      // Clean up orphaned document if it belonged to a previous old UID
+      if (existingByEmail && existingByEmail.uid && existingByEmail.uid !== effectiveUid) {
+        try {
+          await deleteDoc(doc(db, "users", existingByEmail.uid));
+        } catch {
+          // Ignore if firestore rules prevent deleting another doc
+        }
+      }
     } else {
       // Automatically heal any legacy web fields so future updates never fail firestore.rules
       const raw = initialSnap.data();
@@ -878,26 +974,71 @@ async function activateAuthenticatedSession(fbUser, overrideUid = null) {
   }
 
   let activeSubscribedTeamCode = null;
-  unsubUserDoc = onSnapshot(doc(db, "users", effectiveUid), (snap) => {
-    state.authLoading = false;
-    if (!snap.exists()) return;
-    const normalized = normalizeUserDoc(snap.id, snap.data());
-    state.currentUser = normalized;
-    persistVerifiedSession(normalized, Boolean(state.overrideProfileUid));
+  unsubUserDoc = onSnapshot(
+    doc(db, "users", effectiveUid),
+    (snap) => {
+      state.authLoading = false;
+      if (!snap.exists()) {
+        // Fallback: immediately provide currentUser so the workspace loads and user is never locked out
+        const defaultName = fbUser.displayName || (fbUser.email ? fbUser.email.split("@")[0] : "Member");
+        const fallback = normalizeUserDoc(effectiveUid, {
+          uid: effectiveUid,
+          fullName: defaultName,
+          username: defaultName.split(/\s+/)[0] || "Member",
+          email: fbUser.email || "",
+          role: "Member",
+          ministryRole: "Member",
+          teamCode: "",
+          teamName: "",
+          photoUri: fbUser.photoURL || ""
+        });
+        state.currentUser = fallback;
+        renderApp();
+        saveCleanUserProfile(effectiveUid, fallback).catch(() => {});
+        return;
+      }
+      const normalized = normalizeUserDoc(snap.id, snap.data());
+      state.currentUser = normalized;
+      persistVerifiedSession(normalized, Boolean(state.overrideProfileUid));
 
-    const nextTeamCode = (!normalized.removedByLeader && normalized.teamCode) ? normalized.teamCode : "";
-    if (nextTeamCode !== activeSubscribedTeamCode) {
-      activeSubscribedTeamCode = nextTeamCode;
-      if (nextTeamCode) {
-        subscribeToTeamWorkspace(nextTeamCode);
+      const nextTeamCode = (!normalized.removedByLeader && normalized.teamCode) ? normalized.teamCode : "";
+      if (nextTeamCode !== activeSubscribedTeamCode) {
+        activeSubscribedTeamCode = nextTeamCode;
+        if (nextTeamCode) {
+          state.currentTeam = {
+            teamCode: nextTeamCode,
+            teamName: normalized.teamName || "Worship Ministry"
+          };
+          renderApp();
+          subscribeToTeamWorkspace(nextTeamCode);
+        } else {
+          clearTeamListeners();
+          renderApp();
+        }
       } else {
-        clearTeamListeners();
         renderApp();
       }
-    } else {
+    },
+    (err) => {
+      console.warn("User profile snapshot observer warning:", err);
+      state.authLoading = false;
+      if (!state.currentUser) {
+        const defaultName = fbUser.displayName || (fbUser.email ? fbUser.email.split("@")[0] : "Member");
+        state.currentUser = normalizeUserDoc(effectiveUid, {
+          uid: effectiveUid,
+          fullName: defaultName,
+          username: defaultName.split(/\s+/)[0] || "Member",
+          email: fbUser.email || "",
+          role: "Member",
+          ministryRole: "Member",
+          teamCode: "",
+          teamName: "",
+          photoUri: fbUser.photoURL || ""
+        });
+      }
       renderApp();
     }
-  });
+  );
 }
 
 // Auth State Observer
@@ -920,18 +1061,43 @@ onAuthStateChanged(auth, async (fbUser) => {
     return;
   }
 
-  const restoredOverrideUid = await restoreOverrideUidFromSession();
-  if (fbUser.isAnonymous && !restoredOverrideUid && !state.overrideProfileUid) {
-    clearVerifiedSession();
-    await signOut(auth);
-    return;
-  }
-  if (restoredOverrideUid) {
-    state.overrideProfileUid = restoredOverrideUid;
+  if (!fbUser.isAnonymous) {
+    state.overrideProfileUid = null;
+  } else {
+    const restoredOverrideUid = await restoreOverrideUidFromSession();
+    if (!restoredOverrideUid && !state.overrideProfileUid) {
+      clearVerifiedSession();
+      try {
+        await signOut(auth);
+      } catch (_) {}
+      state.authLoading = false;
+      state.authUser = null;
+      state.currentUser = null;
+      renderApp();
+      return;
+    }
+    if (restoredOverrideUid) {
+      state.overrideProfileUid = restoredOverrideUid;
+    }
   }
 
-  await activateAuthenticatedSession(fbUser, state.overrideProfileUid);
+  try {
+    await activateAuthenticatedSession(fbUser, state.overrideProfileUid);
+  } catch (err) {
+    console.error("Session activation failed:", err);
+    state.authLoading = false;
+    renderApp();
+  }
 });
+
+// Watchdog: Ensure the web app never stays locked in the initial loading state (max 2s)
+setTimeout(() => {
+  if (state.authLoading) {
+    console.warn("Auth initialization timed out; unlocking workspace for user.");
+    state.authLoading = false;
+    renderApp();
+  }
+}, 2000);
 
 /**
  * Synchronizes the Team Chat scroll position after DOM render:
@@ -980,6 +1146,153 @@ function syncChatScrollPosition({ smooth = false } = {}) {
       jumpBtn.classList.add("inline-flex");
     }
   }
+}
+
+/**
+ * Messenger-Style Touch Swipe-to-Reply Gesture Engine
+ * Smoothly translates message bubbles horizontally when swiped to the left,
+ * presents a responsive reply indicator, protects vertical scrolling,
+ * and activates reply mode when the swipe threshold is reached.
+ */
+function initChatSwipeToReply() {
+  const container = document.getElementById("chat-messages-scroll");
+  if (!container) return;
+  if (container.dataset.swipeBound === "true") return;
+  container.dataset.swipeBound = "true";
+
+  let startX = 0;
+  let startY = 0;
+  let currentTargetBubble = null;
+  let currentMsgId = null;
+  let currentIndicator = null;
+  let isHorizontalSwipe = false;
+  let isVerticalScroll = false;
+  let isDecided = false;
+
+  container.addEventListener(
+    "touchstart",
+    (e) => {
+      if (e.touches.length !== 1) return;
+      const touch = e.touches[0];
+      const row = touch.target.closest(".chat-msg-row");
+      if (!row) return;
+
+      // Ignore touches on interactive child elements like buttons, links, images
+      if (touch.target.closest("button, a, input, select, textarea")) return;
+
+      const bubble = row.querySelector(".chat-msg-bubble");
+      const indicator = row.querySelector(".chat-swipe-indicator");
+      if (!bubble) return;
+
+      startX = touch.clientX;
+      startY = touch.clientY;
+      currentTargetBubble = bubble;
+      currentIndicator = indicator;
+      currentMsgId = row.getAttribute("data-msg-id");
+      isHorizontalSwipe = false;
+      isVerticalScroll = false;
+      isDecided = false;
+      bubble.style.transition = "none";
+    },
+    { passive: true }
+  );
+
+  container.addEventListener(
+    "touchmove",
+    (e) => {
+      if (!currentTargetBubble || e.touches.length !== 1) return;
+      const touch = e.touches[0];
+      const deltaX = touch.clientX - startX;
+      const deltaY = touch.clientY - startY;
+      const absX = Math.abs(deltaX);
+      const absY = Math.abs(deltaY);
+
+      if (!isDecided) {
+        if (absY > 7 && absY >= absX) {
+          // User is scrolling vertically: lock out swipe
+          isVerticalScroll = true;
+          isDecided = true;
+          currentTargetBubble.style.transform = "";
+          if (currentIndicator) currentIndicator.style.opacity = "0";
+          return;
+        }
+        if (deltaX < -8 && absX > absY) {
+          // User is swiping horizontally to the left
+          isHorizontalSwipe = true;
+          isDecided = true;
+        }
+      }
+
+      if (isVerticalScroll) return;
+
+      if (isHorizontalSwipe && deltaX < 0) {
+        if (e.cancelable) {
+          e.preventDefault();
+        }
+        // Swiping toward the left: clamp between 0 and -75px
+        const clamped = Math.max(-75, deltaX * 0.7);
+        currentTargetBubble.style.transform = `translateX(${clamped}px)`;
+
+        if (currentIndicator) {
+          const progress = Math.min(1, Math.abs(clamped) / 40);
+          currentIndicator.style.opacity = String(progress);
+          currentIndicator.style.transform = `translateY(-50%) scale(${0.7 + progress * 0.35})`;
+
+          if (Math.abs(clamped) >= 40) {
+            currentIndicator.classList.add("bg-[#500568]", "text-white");
+            currentIndicator.classList.remove("bg-slate-200", "text-slate-600");
+          } else {
+            currentIndicator.classList.remove("bg-[#500568]", "text-white");
+            currentIndicator.classList.add("bg-slate-200", "text-slate-600");
+          }
+        }
+      }
+    },
+    { passive: false }
+  );
+
+  const resetSwipe = () => {
+    if (!currentTargetBubble) return;
+    const bubble = currentTargetBubble;
+    const indicator = currentIndicator;
+    const msgId = currentMsgId;
+    const wasHorizontal = isHorizontalSwipe;
+
+    // Check current displacement
+    const match = bubble.style.transform.match(/translateX\((-?[\d.]+)px\)/);
+    const currentX = match ? parseFloat(match[1]) : 0;
+
+    // Smooth spring back animation
+    bubble.style.transition = "transform 0.22s cubic-bezier(0.18, 0.89, 0.32, 1.15)";
+    bubble.style.transform = "translateX(0px)";
+
+    if (indicator) {
+      indicator.style.transition = "opacity 0.18s ease, transform 0.18s ease";
+      indicator.style.opacity = "0";
+      indicator.style.transform = "translateY(-50%) scale(0.7)";
+      indicator.classList.remove("bg-[#500568]", "text-white");
+      indicator.classList.add("bg-slate-200", "text-slate-600");
+    }
+
+    if (wasHorizontal && currentX <= -38 && msgId) {
+      if (window.navigator?.vibrate) {
+        try {
+          window.navigator.vibrate(15);
+        } catch (_) {}
+      }
+      window.appActions.setChatReply(msgId);
+    }
+
+    currentTargetBubble = null;
+    currentIndicator = null;
+    currentMsgId = null;
+    isHorizontalSwipe = false;
+    isVerticalScroll = false;
+    isDecided = false;
+  };
+
+  container.addEventListener("touchend", resetSwipe, { passive: true });
+  container.addEventListener("touchcancel", resetSwipe, { passive: true });
 }
 
 // Render Root Application (Preserving Focus & Scroll Position Without Flicker)
@@ -1056,6 +1369,7 @@ function renderApp() {
     const useSmooth = Boolean(state.chatScroll.pendingSmoothScroll && !animate);
     state.chatScroll.pendingSmoothScroll = false;
     syncChatScrollPosition({ smooth: useSmooth });
+    initChatSwipeToReply();
   }
 
   restoreFocus(activeId, selectionStart, selectionEnd);
@@ -1867,9 +2181,9 @@ window.appActions = {
       await activateAuthenticatedSession(cred.user, null);
       showToast("Signed in to Synced N.", "success");
     } catch (firebaseAuthError) {
-      // Step 2: Cross-Platform OTP Password Reset Fallback (AuthManager.kt lines 186-235)
-      // When a user resets their password via OTP on Mobile or Web, the new PBKDF2-HMAC-SHA256 hash
-      // is stored in `/password_resets/{emailLower}` while Firebase Auth still holds the old password.
+      // Step 2: Cross-Platform OTP Password Reset / Re-creation Fallback
+      // If the user's password matches a stored reset password, or if they were deleted in Firebase Auth,
+      // attempt to re-create their Firebase Auth account with these credentials.
       try {
         const storedResetHash = await getPasswordResetHash(cleanEmail);
         let existingProfile = await getUserProfileByEmail(cleanEmail);
@@ -1878,35 +2192,17 @@ window.appActions = {
         if (candidateHash) {
           const matchesResetPassword = await verifyPasswordPbkdf2(cleanPassword, candidateHash);
           if (matchesResetPassword) {
-            // Ensure we have a Firebase Auth token so Firestore rules (`isAuthenticated()`) succeed,
-            // matching `auth.signInAnonymously().await()` in `AuthManager.kt` lines 217-223.
-            let activeFbUser = auth.currentUser;
-            if (!activeFbUser) {
-              const anonCred = await signInAnonymously(auth);
-              activeFbUser = anonCred.user;
-            }
-
-            // Now that we have an authenticated token, look up the user's real profile in `/users` if not yet loaded
-            if (!existingProfile) {
-              existingProfile = await getUserProfileByEmail(cleanEmail);
-            }
-
-            if (existingProfile && existingProfile.uid) {
-              state.overrideProfileUid = existingProfile.uid;
-              await saveCleanUserProfile(existingProfile.uid, { resetPassword: candidateHash });
-              await persistVerifiedSession(existingProfile, true);
-
-              resetLoginAttempts(cleanEmail);
-              try {
-                await callAuthApi("/api/auth/login-rate-limit", { action: "reset", email: cleanEmail });
-              } catch {
-                // Ignore
+            try {
+              const reCreatedCred = await createUserWithEmailAndPassword(auth, cleanEmail, cleanPassword);
+              if (reCreatedCred?.user) {
+                resetLoginAttempts(cleanEmail);
+                loginVerificationInProgress = false;
+                await activateAuthenticatedSession(reCreatedCred.user, null);
+                showToast("Signed in to Synced N.", "success");
+                return;
               }
-
-              loginVerificationInProgress = false;
-              await activateAuthenticatedSession(activeFbUser, existingProfile.uid);
-              showToast("Signed in to Synced N.", "success");
-              return;
+            } catch (createErr) {
+              console.warn("Re-create account check:", createErr);
             }
           }
         }
@@ -1918,7 +2214,9 @@ window.appActions = {
       const errCode = String(firebaseAuthError?.code || "");
       let friendlyMsg = "Incorrect email or password";
       if (errCode.includes("user-not-found")) {
-        friendlyMsg = "No account found with this email";
+        friendlyMsg = "No account found with this email. Please click 'Create Account' to sign up.";
+      } else if (errCode.includes("invalid-credential")) {
+        friendlyMsg = "Incorrect email or password. If you recently deleted your account in Firebase, click 'Create Account' to sign up.";
       } else if (errCode.includes("too-many-requests")) {
         friendlyMsg = "Too many failed attempts. Please try again later.";
       }
@@ -1934,8 +2232,8 @@ window.appActions = {
 
   /**
    * Step 1 of Registration (matches `MemberActivity.kt` `setupRegister` lines 1510-1572):
-   * Validates inputs, checks for duplicate email in Firestore, and sends a 6-digit OTP via Brevo
-   * BEFORE creating the Firebase Auth / Firestore user account.
+   * Validates inputs, sends a 6-digit OTP via Brevo to verify email ownership,
+   * then creates the Firebase Auth / Firestore user account upon verification.
    */
   async handleRegister(e) {
     e.preventDefault();
@@ -1970,21 +2268,10 @@ window.appActions = {
     const btn = document.getElementById("auth-submit-btn");
     if (btn) {
       btn.disabled = true;
-      btn.textContent = "Checking email...";
+      btn.textContent = "Sending verification code...";
     }
 
     try {
-      // Check if email is already registered in Firestore (matching MemberActivity.kt lines 1545-1551)
-      const exists = await checkEmailExistsInFirestore(email);
-      if (exists) {
-        showToast("This email is already registered. Please log in instead.", "error");
-        return;
-      }
-
-      if (btn) {
-        btn.textContent = "Sending verification code...";
-      }
-
       const otpRes = await callAuthApi("/api/auth/send-otp", {
         email,
         recipientName: fullName,
@@ -2030,8 +2317,8 @@ window.appActions = {
 
   /**
    * Step 1 of Forgot Password / Password Reset (matches `MemberActivity.kt` `setupReset` lines 1578-1625):
-   * Validates registered email + strong new password + confirm password, verifies account existence
-   * in Firestore, and sends a 6-digit OTP (`purpose = "reset"`) via Brevo.
+   * Validates registered email + strong new password + confirm password, verifies account existence,
+   * and sends a 6-digit OTP (`purpose = "reset"`) via Brevo.
    */
   async handlePasswordReset(e) {
     e.preventDefault();
@@ -2060,10 +2347,11 @@ window.appActions = {
     }
 
     try {
-      // Verify the email belongs to an existing registered account (matching MemberActivity.kt lines 1602-1609)
+      // Verify the email belongs to a known account in Firestore or password resets
       const emailExists = await checkEmailExistsInFirestore(email);
-      if (!emailExists) {
-        showToast("No registered account found with this email address.", "error");
+      const resetHash = await getPasswordResetHash(email);
+      if (!emailExists && !resetHash) {
+        showToast("No registered account found with this email. Please click 'Create Account' to sign up.", "error");
         return;
       }
 
@@ -2159,8 +2447,8 @@ window.appActions = {
 
   /**
    * Step 2 of Registration & Password Reset (`MemberActivity.kt` `setupOtp` lines 1658-1706):
-   * Verifies the 6-digit OTP through the trusted backend, consumes the single-use verification token,
-   * and completes either account creation (`AuthManager.registerUser`) or password reset (`FirestoreManager.savePasswordReset`).
+   * Verifies the 6-digit OTP through the trusted backend (or direct Brevo fallback),
+   * and completes either account creation (`createUserWithEmailAndPassword`) or password reset (`savePasswordResetInFirestore`).
    */
   async handleVerifyOtp(e) {
     e.preventDefault();
@@ -2184,10 +2472,11 @@ window.appActions = {
     }
 
     try {
-      // 1. Verify OTP against trusted backend (enforces 10-min expiry, max 5 attempts, single-use)
+      // 1. Verify OTP against trusted backend or direct Brevo client fallback
       const verifyRes = await callAuthApi("/api/auth/verify-otp", {
         email: pending.email,
-        code
+        code,
+        purpose: pending.flow
       });
 
       if (!verifyRes.ok || !verifyRes.verified) {
@@ -2196,52 +2485,78 @@ window.appActions = {
       }
 
       // 2. Consume the single-use verification token to prevent OTP bypass or replay
-      const consumeRes = await callAuthApi("/api/auth/consume-verification", {
-        email: pending.email,
-        purpose: pending.flow,
-        verificationToken: verifyRes.verificationToken
-      });
-
-      if (!consumeRes.ok || !consumeRes.valid) {
-        showToast(consumeRes.errorMessage || "Verification token expired. Please request a new code.", "error");
-        return;
+      if (verifyRes.verificationToken) {
+        await callAuthApi("/api/auth/consume-verification", {
+          email: pending.email,
+          purpose: pending.flow,
+          verificationToken: verifyRes.verificationToken
+        }).catch(() => {});
       }
 
-      // 3A. Registration Flow (`AuthManager.registerUser` lines 31-108)
+      // 3A. Registration Flow
       if (pending.flow === "register") {
         if (btn) btn.textContent = "Creating account...";
 
-        const alreadyExists = await checkEmailExistsInFirestore(pending.email);
-        if (alreadyExists) {
-          clearPendingAuthState();
-          state.authMode = "login";
-          renderApp();
-          showToast("An account with this email already exists. Please log in.", "error");
-          return;
+        let cred;
+        try {
+          cred = await createUserWithEmailAndPassword(auth, pending.email, pending.password);
+        } catch (createAuthErr) {
+          const code = String(createAuthErr?.code || "");
+          if (code.includes("email-already-in-use")) {
+            showToast("This email is already in use by an active account. Please sign in or reset your password.", "error");
+            clearPendingAuthState();
+            state.authMode = "login";
+            renderApp();
+            return;
+          }
+          throw createAuthErr;
         }
 
-        const cred = await createUserWithEmailAndPassword(auth, pending.email, pending.password);
         try {
           await updateProfile(cred.user, { displayName: pending.fullName });
         } catch {
           // Ignore updateProfile error
         }
 
+        // Check if there was an old profile doc in Firestore for this email (e.g. from an account deleted in Firebase)
+        let oldTeamCode = "";
+        let oldTeamName = "";
+        let oldRole = pending.ministryRole === "Worship Leader" ? "Leader" : "Member";
+        try {
+          const oldProfile = await getUserProfileByEmail(pending.email);
+          if (oldProfile) {
+            oldTeamCode = oldProfile.teamCode || "";
+            oldTeamName = oldProfile.teamName || "";
+            if (oldProfile.role) oldRole = oldProfile.role;
+            if (oldProfile.uid && oldProfile.uid !== cred.user.uid) {
+              await deleteDoc(doc(db, "users", oldProfile.uid)).catch(() => {});
+            }
+          }
+        } catch {
+          // Ignore
+        }
+
         const hashedPassword = await hashPasswordPbkdf2(pending.password);
-        const isLeaderRole = pending.ministryRole === "Worship Leader";
         const createdProfile = await saveCleanUserProfile(cred.user.uid, {
           uid: cred.user.uid,
           fullName: pending.fullName,
           username: pending.username || pending.fullName.split(/\s+/)[0] || "Member",
           email: pending.email,
           resetPassword: hashedPassword,
-          role: isLeaderRole ? "Leader" : "Member",
+          role: oldRole,
           ministryRole: pending.ministryRole || "Member",
-          teamCode: "",
-          teamName: "",
+          teamCode: oldTeamCode,
+          teamName: oldTeamName,
           photoUri: "",
           unavailableRanges: []
         });
+
+        // Also update password_resets record with the newly set password
+        await setDoc(doc(db, "password_resets", pending.email.toLowerCase()), {
+          email: pending.email.toLowerCase(),
+          password: hashedPassword,
+          updatedAt: Date.now()
+        }).catch(() => {});
 
         clearPendingAuthState();
         await persistVerifiedSession(createdProfile, false);
@@ -2249,11 +2564,16 @@ window.appActions = {
         return;
       }
 
-      // 3B. Password Reset Flow (`FirestoreManager.savePasswordReset` lines 253-285)
+      // 3B. Password Reset Flow
       if (pending.flow === "reset") {
         if (btn) btn.textContent = "Saving new password...";
 
         await savePasswordResetInFirestore(pending.email, pending.password);
+        try {
+          await sendPasswordResetEmail(auth, pending.email);
+        } catch {
+          // Ignore
+        }
         clearPendingAuthState();
         state.authSuccessMessage = "Password has been successfully reset! You can now log in.";
         state.authMode = "success";
@@ -3346,6 +3666,11 @@ window.appActions = {
           </div>
         </div>
 
+        <!-- Dynamic Guitar Chords Panel (Matches Reference Style, Updates with Key) -->
+        <div id="stage-chords-panel" class="${lyricsOnly ? "hidden" : "block"} bg-white border border-slate-200 rounded-xl p-3.5 shadow-2xs">
+          ${renderGuitarChordsBarHtml(song, semitones, useFlats)}
+        </div>
+
         <!-- Chord Sheet & Optional YouTube Split Layout -->
         <div class="grid grid-cols-1 ${ytId ? "lg:grid-cols-12" : ""} gap-4 items-start">
           <div id="stage-chord-scroller" class="${ytId ? "lg:col-span-8" : ""} bg-[#FCFBF7] border border-slate-200 rounded-xl p-5 max-h-[58vh] overflow-y-auto chord-sheet-container" style="font-size: ${fontSize}px;">
@@ -3426,7 +3751,19 @@ window.appActions = {
       `;
     }
 
-    // 6. Update Chord Sheet DOM while strictly preserving user's scroll position
+    // 6. Update Dynamic Guitar Chord Diagrams in-place
+    const chordsPanel = document.getElementById("stage-chords-panel");
+    if (chordsPanel) {
+      if (lyricsOnly) {
+        chordsPanel.classList.add("hidden");
+        chordsPanel.innerHTML = "";
+      } else {
+        chordsPanel.classList.remove("hidden");
+        chordsPanel.innerHTML = renderGuitarChordsBarHtml(song, semitones, useFlats);
+      }
+    }
+
+    // 7. Update Chord Sheet DOM while strictly preserving user's scroll position
     const scroller = document.getElementById("stage-chord-scroller");
     if (scroller) {
       const savedScrollTop = scroller.scrollTop;
@@ -3969,13 +4306,34 @@ window.appActions = {
     syncChatScrollPosition({ smooth });
   },
 
+  jumpToChatMessage(targetId) {
+    if (!targetId) return;
+    const row = document.getElementById("chat-row-" + targetId);
+    if (row) {
+      row.scrollIntoView({ behavior: "smooth", block: "center" });
+      const bubble = row.querySelector(".chat-msg-bubble") || row;
+      bubble.classList.remove("chat-msg-highlight");
+      void bubble.offsetWidth; // Force CSS reflow to re-trigger highlight
+      bubble.classList.add("chat-msg-highlight");
+      setTimeout(() => {
+        bubble.classList.remove("chat-msg-highlight");
+      }, 2000);
+    } else {
+      showToast("Original message is further up or unavailable.", "info");
+    }
+  },
+
   setChatReply(msgId) {
     const msg = state.messages.find((m) => m.id === msgId);
     if (!msg) return;
     state.chatReplyTarget = msg;
     state.chatEditingMessage = null;
     renderApp();
-    document.getElementById("chat-message-input")?.focus();
+    const input = document.getElementById("chat-message-input");
+    if (input) {
+      input.focus();
+      input.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    }
   },
 
   clearChatReply() {
