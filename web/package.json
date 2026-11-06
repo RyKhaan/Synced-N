@@ -1,0 +1,10 @@
+{
+  "name": "synced-n-web",
+  "version": "1.0.0",
+  "description": "Responsive Web & PWA Companion for Synced-N: Church Music Ministry Schedule & Lineup Management System",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  }
+}
